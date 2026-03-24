@@ -1,0 +1,20 @@
+{
+    "Version": "2.1.0",
+    "UserId": 1,
+    "ExperimentType": "Standard",
+    "TestCases": [
+        "Test_ping"
+    ],
+    "UEs": [],
+    "Slice": null,
+    "NSs": [],
+    "ExclusiveExecution": false,
+    "Scenario": [],
+    "Automated": true,
+    "ReservationTime": null,
+    "Application": "TestPrueba",
+    "Parameters": {},
+    "Remote": null,
+    "RemoteDescriptor": null,
+    "Extra": {}
+}

@@ -1,0 +1,12 @@
+Version: 2
+Name: Test_ping
+Sequence:
+  - Order: 2
+    Task: Run.CliExecute
+    Config:
+      Parameters: "ping -c 4 192.168.199.3"
+      CWD: "."
+Standard: True
+Distributed: False
+Dashboard: {}
+KPIs: {}

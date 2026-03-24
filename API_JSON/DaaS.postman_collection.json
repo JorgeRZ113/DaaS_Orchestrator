@@ -1,0 +1,234 @@
+{
+  "info": {
+    "_postman_id": "c0d4f4e1-3e6a-4e06-a7fb-9b7c0f2c9c01",
+    "name": "DaaS Orchestrator - Fases TNLCM/ELCM",
+    "description": "🚀 FLUJO COMPLETO DaaS (Data as a Service) con dos fases:\n\n📍 FASE 1 - TNLCM (Trial Network Lifecycle Management):\n1. POST /executions/tnlcm → Despliega infraestructura de red\n2. GET /executions/{id} → Espera a que status=completed\n3. [MANUAL] Activa VPN WireGuard en tu máquina\n\n📍 FASE 2 - ELCM (Experiment Lifecycle Management):\n4. POST /executions/{id}/elcm → Ejecuta experimentos\n5. GET /executions/{id} → Consulta progreso (polling automático)\n6. [AUTO] Limpieza: destroy + purge TNLCM\n\n✅ El execution_id se guarda automáticamente en {{executionId}}\n⚠️  Asegúrate de activar VPN manualmente ANTES del paso 4",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "✅ Verifica que el servidor está activo\nRespuesta: 200 OK si todo funciona correctamente"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Executions",
+      "item": [
+        {
+          "name": "POST /executions (alias TNLCM)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "  const data = pm.response.json();",
+                  "  if (data.execution_id) pm.collectionVariables.set('executionId', data.execution_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo-manual\",\n    \"descriptor_path\": \"tn_descriptor_elcm.yaml\",\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"develop\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_path\": \"TestCase_ping.yml\",\n    \"testcase_paths\": [],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/executions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions"
+              ]
+            },
+            "description": "Alias compatible: inicia fase TNLCM."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /executions/tnlcm",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "  const data = pm.response.json();",
+                  "  if (data.execution_id) pm.collectionVariables.set('executionId', data.execution_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo-manual\",\n    \"descriptor_path\": \"tn_descriptor_elcm.yaml\",\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"develop\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_path\": \"TestCase_ping.yml\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/executions/tnlcm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "tnlcm"
+              ]
+            },
+            "description": "🚀 FASE 1: Despliega Trial Network (TN)\n\n📋 Pasos después de ejecutar:\n1. Copia execution_id de la respuesta\n2. Espera con GET /executions/{id} a que status=completed\n3. ⚠️ IMPORTANTE: Activa VPN WireGuard manualmente\n4. Recién entonces ejecuta POST /executions/{id}/elcm\n\n✅ Características:\n• execution_id = infrastructure.name (determinista)\n• Recuperación automática si /activate falla\n• Reporte en ./artifacts/{execution_id}/tnlcm_report_*.json\n• Timeout: 1 hora máximo\n\n⚡ Cambios automáticos en variables:\nExecutionId = respuesta.execution_id"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /executions/{execution_id}/elcm",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/elcm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "elcm"
+              ]
+            },
+            "description": "🔥 FASE 2: Ejecuta experimentos (ELCM)\n\n⚠️ REQUISITOS (crítico):\n✅ TNLCM debe estar completado (status=completed)\n✅ VPN WireGuard activada MANUALMENTE\n✅ Connectivity a Trial Network verificada\n\n📋 Qué hace automáticamente:\n1. Sube test cases a ELCM\n2. Lanza experimento con descriptor Exp_Desc.json\n3. Polling cada 10s hasta \"Finished\" (timeout 1h)\n4. Recoge logs de ejecución\n5. Manejo inteligente: Si logs no listos → Consulta TNLCM status\n6. Al finalizar: AUTO destroy + purge de TN (cleanup)\n\n📊 Resultado:\n• Logs guardados en ./artifacts/{id}/\n• Estados ELCM: Running → Finished → Completed\n• Si error: Status=failed, message con detalles\n\n❌ Error 400 Bad Request:\nSignifica execution_id no existe en memoria\n→ Crea nueva ejecución con POST /executions/tnlcm"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /executions/{execution_id}",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}"
+              ]
+            },
+            "description": "📊 Consulta estado de ejecución (TNLCM o ELCM)\n\n🔄 Estados posibles:\n• pending: Recibida pero no iniciada\n• validating: Validando descriptor\n• deploying: Creando infraestructura\n• completed: TNLCM listo (espera VPN manual)\n• running_experiment: ELCM en progreso\n• collecting: Recopilando logs\n• failed: Error en alguna fase\n\n💡 Úsalo para monitorear:\n1. Después de POST /executions/tnlcm → Espera status=completed\n2. Después de POST /executions/{id}/elcm → Espera status=completed"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /executions/{execution_id}/detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/detail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "detail"
+              ]
+            },
+            "description": "📋 Información detallada de la ejecución\n\nRetorna:\n• Status actual\n• Trial Network ID (tn_id)\n• ELCM Execution ID (si está en fase 2)\n• Artefactos generados (paths)\n• Mensajes de error (si aplica)\n• Timestamps de cada fase\n\nÚsalo para debugging o auditoría completa"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "apiKey",
+      "value": "changeme"
+    },
+    {
+      "key": "executionId",
+      "value": ""
+    }
+  ]
+}
