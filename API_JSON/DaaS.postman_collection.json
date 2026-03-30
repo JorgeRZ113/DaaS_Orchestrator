@@ -217,6 +217,36 @@
       ]
     },
     {
+      "name": "Config",
+      "item": [
+        {
+          "name": "POST /config/reload",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/config/reload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "config",
+                "reload"
+              ]
+            },
+            "description": "Recarga en caliente solo variables mutables del .env en la instancia actual del backend."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "Auth",
       "item": [
         {
