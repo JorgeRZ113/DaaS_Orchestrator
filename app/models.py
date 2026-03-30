@@ -92,10 +92,6 @@ class ExperimentConfig(BaseModel):
     name: str = Field(
         ..., description="Nombre local del experimento para asociarlo luego con experiment_id"
     )
-    testcase_path: Optional[str] = Field(
-        default=None,
-        description="Ruta o referencia al TestCase en ELCM",
-    )
     testcase_paths: List[str] = Field(
         default_factory=list,
         description="Lista de rutas/referencias de TestCases para ejecutar en orden",
@@ -106,15 +102,9 @@ class ExperimentConfig(BaseModel):
     )
 
 
-class ElcmExperimentDescriptor(BaseModel):
-    name: str
-    testcase_path: str
-    testcase_paths: List[str] = Field(default_factory=list)
-    ues_paths: List[str] = Field(default_factory=list)
-
 
 class RunExperimentRequest(BaseModel):
-    descriptor: ElcmExperimentDescriptor
+    descriptor: ExperimentConfig
 
 
 class DatasetRequest(BaseModel):
