@@ -1,10 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.config import settings
+from app.config import reload_mutable_settings, settings
 from app.models import DatasetDescriptor, ExecutionRecord, ExecutionResponse
 from app.orchestrator import create_tnlcm_execution, get_execution, start_elcm_phase
 
@@ -47,6 +48,27 @@ app = FastAPI(
 @app.get("/health", tags=["health"])
 async def health():
     return {"status": "ok", "env": settings.app_env}
+
+
+@app.post(
+    "/config/reload",
+    tags=["config"],
+    dependencies=[Depends(verify_api_key)],
+)
+async def post_reload_config():
+    """Recarga en caliente solo variables de configuracion mutables."""
+    try:
+        result = reload_mutable_settings()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    logging.getLogger().setLevel(settings.log_level)
+    logger.info("Configuracion recargada. Campos actualizados: %s", result["updated_fields"])
+    return {
+        "status": "reloaded",
+        "updated_fields": result["updated_fields"],
+        "non_reloadable_fields": result["non_reloadable_fields"],
+    }
 
 
 @app.post(
@@ -119,6 +141,33 @@ async def get_execution_detail(execution_id: str):
     if not record:
         raise HTTPException(status_code=404, detail="Ejecucion no encontrada")
     return record
+
+
+@app.post(
+    "/tnlcm/token/refresh",
+    tags=["auth"],
+    dependencies=[Depends(verify_api_key)],
+)
+def refresh_tnlcm_token():
+    """Genera token TNLCM con user/password de .env y lo guarda en .env."""
+    from app.tnlcm import login_tnlcm_and_persist_token
+
+    try:
+        token = login_tnlcm_and_persist_token()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        detail = f"TNLCM login failed: HTTP {exc.response.status_code}"
+        raise HTTPException(status_code=502, detail=detail)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not refresh TNLCM token: {exc}")
+
+    # Return only a safe preview, not the full token.
+    preview = f"{token[:12]}...{token[-6:]}" if len(token) > 20 else "[token-set]"
+    return {
+        "message": "TNLCM token refreshed and saved in .env",
+        "token_preview": preview,
+    }
 
 
 @app.exception_handler(Exception)
