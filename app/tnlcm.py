@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import yaml
 
 from app.config import settings
 from app.models import InfrastructureConfig
@@ -15,9 +14,13 @@ from app.models import InfrastructureConfig
 logger = logging.getLogger(__name__)
 
 
+# Token storage in memory (populated by login endpoint)
+_tnlcm_access_token: str | None = None
+_tnlcm_refresh_token: str | None = None
+
+
 class _ActivateNoSuchFileError(Exception):
     """Raised when TNLCM activate fails due to missing file on backend side."""
-
 
 def _log_http_response(service: str, response: httpx.Response) -> None:
     body = ""
@@ -47,9 +50,10 @@ def _log_http_response(service: str, response: httpx.Response) -> None:
 
 
 def _headers() -> dict[str, str]:
-    token = settings.tnlcm_token.strip()
+    """Build headers using in-memory token (from login) or fallback to .env token."""
+    token = _tnlcm_access_token or settings.tnlcm_token.strip()
     if not token:
-        raise ValueError("TNLCM_TOKEN is empty")
+        raise ValueError("TNLCM_TOKEN is not set. Use /tnlcm/token/refresh to login.")
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
@@ -60,6 +64,69 @@ def _json_headers() -> dict[str, str]:
     headers = _headers()
     headers["Content-Type"] = "application/json"
     return headers
+
+
+def login_tnlcm_and_persist_token() -> str:
+    """Login into TNLCM using env credentials and store access token in memory."""
+    global _tnlcm_access_token, _tnlcm_refresh_token
+
+    username = settings.tnlcm_user.strip()
+    password = settings.tnlcm_password.strip()
+
+    if not username or not password:
+        raise ValueError("TNLCM_USER/TNLCM_PASSWORD are required in .env")
+
+    paths = [
+        "/api/v1/user/login"
+    ]
+
+    with httpx.Client(timeout=settings.request_timeout) as client:
+        response_data: dict[str, Any] | None = None
+
+        for path in paths:
+            response = client.post(
+                f"{settings.tnlcm_url}{path}",
+                auth=(username, password),
+                headers={"Accept": "application/json"},
+            )
+
+            # Login response includes tokens, avoid logging body.
+            logger.info("TNLCM POST %s -> %s", response.request.url, response.status_code)
+
+            if response.status_code == 404:
+                continue
+
+            response.raise_for_status()
+            response_data = response.json()
+            break
+
+        if response_data is None:
+            raise RuntimeError("No valid TNLCM login endpoint found")
+
+    access_token = (
+        response_data.get("access_token")
+        or response_data.get("token")
+        or (response_data.get("data") or {}).get("access_token")
+    )
+
+    refresh_token = (
+        response_data.get("refresh_token")
+        or (response_data.get("data") or {}).get("refresh_token")
+    )
+
+    if access_token is None:
+        raise ValueError(f"TNLCM login did not return access_token: {response_data}")
+
+    token = str(access_token).strip()
+    if not token:
+        raise ValueError("TNLCM returned an empty access_token")
+
+    _tnlcm_access_token = token
+    if refresh_token:
+        _tnlcm_refresh_token = str(refresh_token).strip()
+
+    logger.info("TNLCM token refreshed and stored in memory")
+    return token
 
 
 def _is_no_such_file_error(response: httpx.Response | None) -> bool:
@@ -99,54 +166,30 @@ def _resolve_examples_path(path_or_name: str | None) -> str | None:
     return str((_examples_base_dir() / candidate).resolve())
 
 
-def _load_descriptor_value(descriptor: Any) -> Any:
-    if not isinstance(descriptor, str):
-        return descriptor
-
-    resolved = _resolve_examples_path(descriptor)
-    if not resolved:
-        return descriptor
-
-    path = Path(resolved)
-    if not path.exists() or not path.is_file():
-        return descriptor
-
-    text = path.read_text(encoding="utf-8")
-    suffix = path.suffix.lower()
-    if suffix == ".json":
-        return json.loads(text)
-    if suffix in {".yml", ".yaml"}:
-        return yaml.safe_load(text)
-    return text
-
-
 def _extract_tn_id(data: dict[str, Any]) -> str | None:
     return (
         data.get("tn_id")
-        or data.get("id")
-        or data.get("trial_network_id")
-        or (data.get("data") or {}).get("tn_id")
     )
 
 
-def _safe_json_response(response: httpx.Response) -> Any:
+def _extract_report_markdown(response: httpx.Response) -> str:
+    """Normalize TNLCM report/download response into raw markdown text."""
     try:
-        return response.json()
-    except Exception:
-        return response.text
-
-
-def summarize_trial_network_report(tn_id: str, report_payload: Any) -> dict[str, Any]:
-    """Extract key fields from TNLCM RAW report text and keep a generic fallback."""
-
-    def _extract_raw_text(payload: Any) -> str:
+        payload = response.json()
+        if isinstance(payload, dict):
+            report = payload.get("report")
+            if isinstance(report, str):
+                return report
         if isinstance(payload, str):
             return payload
-        if isinstance(payload, dict):
-            raw = payload.get("report")
-            if isinstance(raw, str):
-                return raw
-        return ""
+    except Exception:
+        pass
+
+    return response.text or ""
+
+
+def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
+    """Extract key fields from TNLCM raw markdown report."""
 
     def _extract_component_blocks(raw_text: str) -> dict[str, str]:
         # Split by level-1 markdown headers, ignoring anything inside fenced code blocks.
@@ -225,19 +268,19 @@ def summarize_trial_network_report(tn_id: str, report_payload: Any) -> dict[str,
             return None
         return match.group(1).strip()
 
-    raw_text = _extract_raw_text(report_payload)
+    raw_text = report_markdown or ""
     if not raw_text:
         return {
-            "tn_id": tn_id,
-            "items_found": 0,
-            "highlights": [],
+            "private_ssh_key": None,
+            "wireguard_client_config": None,
+            "opennebula_vnet_index": [],
+            "components": {},
+            "components_count": 0,
         }
 
     component_blocks = _extract_component_blocks(raw_text)
     components: dict[str, Any] = {}
     vnet_index: list[dict[str, Any]] = []
-    technitium_dns: dict[str, Any] | None = None
-
     for component_name, block in component_blocks.items():
         vnet_match = re.search(r"OpenNebula VNet ID\*\*:\s*`([^`]+)`", block, flags=re.IGNORECASE)
         opennebula_vnet_id = vnet_match.group(1).strip() if vnet_match else None
@@ -251,8 +294,6 @@ def summarize_trial_network_report(tn_id: str, report_payload: Any) -> dict[str,
         passwords = re.findall(r"\*\*(?:Password|password)\*\*:\s*`([^`]+)`", block)
 
         comp_data: dict[str, Any] = {
-            "opennebula_vnet_id": opennebula_vnet_id,
-            "network_interfaces": interfaces,
             "ips": ips,
             "ports": ports,
             "usernames": usernames,
@@ -262,8 +303,6 @@ def summarize_trial_network_report(tn_id: str, report_payload: Any) -> dict[str,
         technitium_data = _parse_technitium_dns(block)
         if technitium_data:
             comp_data["technitium_dns"] = technitium_data
-            if technitium_dns is None:
-                technitium_dns = technitium_data
 
         components[component_name] = comp_data
 
@@ -287,39 +326,13 @@ def summarize_trial_network_report(tn_id: str, report_payload: Any) -> dict[str,
     wireguard_client_config = wg_match.group(1).strip() if wg_match else None
 
     return {
-        "tn_id": tn_id,
         "private_ssh_key": private_key,
         "wireguard_client_config": wireguard_client_config,
-        "technitium_dns": technitium_dns,
         "opennebula_vnet_index": vnet_index,
         "components": components,
         "components_count": len(components),
     }
 
-
-def _legacy_payload_from_infra(infra: InfrastructureConfig) -> dict[str, Any]:
-    descriptor_ref = infra.parameters.get("descriptor") or _resolve_examples_path(infra.descriptor_path)
-    reference_type = infra.parameters.get("library_reference_type")
-    reference_value = infra.parameters.get("library_reference_value")
-    custom_tn_id = infra.parameters.get("tn_id") or infra.name
-
-    if not descriptor_ref:
-        raise ValueError(
-            "Missing descriptor: use infrastructure.descriptor_path or parameters['descriptor']"
-        )
-    if not reference_type or not reference_value:
-        raise ValueError(
-            "Missing library_reference_type/library_reference_value in infrastructure.parameters"
-        )
-
-    payload: dict[str, Any] = {
-        "descriptor": _load_descriptor_value(descriptor_ref),
-        "library_reference_type": reference_type,
-        "library_reference_value": reference_value,
-    }
-    if custom_tn_id:
-        payload["tn_id"] = custom_tn_id
-    return payload
 
 
 def _legacy_multipart_from_infra(
@@ -347,26 +360,12 @@ def _legacy_multipart_from_infra(
         data["tn_id"] = str(custom_tn_id)
 
     descriptor_path = Path(str(descriptor_ref))
-    if descriptor_path.exists() and descriptor_path.is_file():
-        suffix = descriptor_path.suffix.lower()
-        if suffix == ".json":
-            content_type = "application/json"
-        elif suffix in {".yml", ".yaml"}:
-            content_type = "application/x-yaml"
-        else:
-            content_type = "text/plain"
-        descriptor_name = descriptor_path.name
-        descriptor_bytes = descriptor_path.read_bytes()
-    else:
-        descriptor_value = _load_descriptor_value(descriptor_ref)
-        if isinstance(descriptor_value, (dict, list)):
-            descriptor_name = "descriptor.json"
-            descriptor_bytes = json.dumps(descriptor_value).encode("utf-8")
-            content_type = "application/json"
-        else:
-            descriptor_name = "descriptor.txt"
-            descriptor_bytes = str(descriptor_value).encode("utf-8")
-            content_type = "text/plain"
+    if not descriptor_path.exists() or not descriptor_path.is_file():
+        raise ValueError(f"TN descriptor file not found: {descriptor_ref}")
+
+    descriptor_name = descriptor_path.name
+    descriptor_bytes = descriptor_path.read_bytes()
+    content_type = "application/x-yaml"
 
     files = {
         "descriptor": (descriptor_name, descriptor_bytes, content_type),
@@ -381,6 +380,7 @@ async def deploy_trial_network(
     """Create TN and trigger activate. Returns tn_id."""
     async with httpx.AsyncClient(timeout=None) as client:
         create_data: dict[str, Any] | None = None
+        tn_id: str | None = None
 
         # Preferred endpoint from project steps
         try:
@@ -397,30 +397,47 @@ async def deploy_trial_network(
             create_data = response.json()
         except httpx.HTTPStatusError as exc:
             _log_http_response("TNLCM", exc.response)
-            # Backward compatible fallback with initial template endpoint
-            if exc.response.status_code != 404:
-                raise
-            fallback_payload = {
-                "name": infra.name,
-                "descriptor": _resolve_examples_path(infra.descriptor_path),
-                "parameters": infra.parameters,
-            }
-            response = await client.post(
-                f"{settings.tnlcm_url}/api/v1/trial-networks",
-                json=fallback_payload,
-                headers=_json_headers(),
-                timeout=None,
-            )
-            _log_http_response("TNLCM", response)
-            response.raise_for_status()
-            create_data = response.json()
+            
+            # If TN already exists in "activated" state, use it as-is
+            if exc.response.status_code == 400:
+                try:
+                    error_data = exc.response.json()
+                    error_msg = error_data.get("message", "").lower()
+                    if "current status: activated" in error_msg:
+                        logger.info(f"TN {infra.name} already exists in 'activated' state, skipping create/activate")
+                        tn_id = infra.name
+                except Exception:
+                    pass
+            
+            # If not the "already activated" case, try fallback
+            if tn_id is None:
+                if exc.response.status_code != 404:
+                    raise
+                fallback_payload = {
+                    "name": infra.name,
+                    "descriptor": _resolve_examples_path(infra.descriptor_path),
+                    "parameters": infra.parameters,
+                }
+                response = await client.post(
+                    f"{settings.tnlcm_url}/api/v1/trial-networks",
+                    json=fallback_payload,
+                    headers=_json_headers(),
+                    timeout=None,
+                )
+                _log_http_response("TNLCM", response)
+                response.raise_for_status()
+                create_data = response.json()
 
-        tn_id = _extract_tn_id(create_data or {})
+        if tn_id is None:
+            tn_id = _extract_tn_id(create_data or {})
+        
         if not tn_id:
             raise ValueError(f"TNLCM did not return a valid tn_id: {create_data}")
 
         # TNLCM necesita una pequeña ventana para registrar la TN antes de activar.
-        await asyncio.sleep(20)
+        # Skip if TN was already activated
+        if create_data is not None:
+            await asyncio.sleep(20)
 
         activate_payload: dict[str, Any] = {"tn_id": tn_id}
         jenkins_pipeline = infra.parameters.get("jenkins_deploy_pipeline")
@@ -510,70 +527,24 @@ async def deploy_trial_network(
         return tn_id
 
 
-async def download_trial_network_report(tn_id: str) -> dict[str, Any]:
-    """Download TNLCM deployment report after activation."""
+async def download_trial_network_report(tn_id: str) -> str:
+    """Download TNLCM deployment report after activation and return raw markdown."""
     async with httpx.AsyncClient(timeout=None) as client:
-        attempts = [
-            (
-                "GET",
-                f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/report/download",
-                {},
-            ),
-            (
-                "GET",
-                f"{settings.tnlcm_url}/api/v1/trial-network/report/download",
-                {"params": {"tn_id": tn_id}},
-            ),
-            (
-                "POST",
-                f"{settings.tnlcm_url}/api/v1/trial-network/report/download",
-                {"json": {"tn_id": tn_id}},
-            ),
-            (
-                "GET",
-                f"{settings.tnlcm_url}/api/v1/trial-network/{tn_id}/report/download",
-                {},
-            ),
-        ]
-
-        for method, url, extra in attempts:
-            try:
-                if method == "GET":
-                    response = await client.get(
-                        url,
-                        headers=_headers(),
-                        timeout=None,
-                        **extra,
-                    )
-                else:
-                    response = await client.post(
-                        url,
-                        headers=_json_headers(),
-                        timeout=None,
-                        **extra,
-                    )
-
-                _log_http_response("TNLCM", response)
-                response.raise_for_status()
-                return {
-                    "tn_id": tn_id,
-                    "content_type": response.headers.get("content-type", ""),
-                    "report": _safe_json_response(response),
-                }
-            except httpx.HTTPStatusError as exc:
-                _log_http_response("TNLCM", exc.response)
-                if exc.response.status_code == 404:
-                    continue
-                raise
-
-    raise RuntimeError(f"Could not download report for TN {tn_id}")
+        url = f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/report/download"
+        response = await client.get(
+            url,
+            headers=_headers(),
+            timeout=None,
+        )
+        _log_http_response("TNLCM", response)
+        response.raise_for_status()
+        return _extract_report_markdown(response)
 
 
 async def get_tn_status(tn_id: str) -> str:
     """Get Trial Network status (READY, FAILED, DEPLOYING, etc.)."""
     async with httpx.AsyncClient(timeout=None) as client:
         paths = [
-            f"/api/v1/trial-network/{tn_id}",
             f"/api/v1/trial-networks/{tn_id}",
         ]
 
@@ -626,3 +597,39 @@ async def destroy_trial_network(tn_id: str) -> None:
             _log_http_response("TNLCM", exc.response)
             if exc.response.status_code != 404:
                 logger.warning(f"Failed to purge TN {tn_id}: {exc}")
+
+
+def extract_elcm_url_from_report(report_summary: dict[str, Any]) -> str | None:
+    """
+    Extract ELCM backend URL from trial network report summary.
+    
+    Looks for ELCM component in the components dict and builds URL from IP and port.
+    Falls back to settings.elcm_url if not found in report.
+    
+    Returns: "http://ip:port" or None if not found
+    """
+    if not report_summary or not isinstance(report_summary, dict):
+        return None
+    
+    components = report_summary.get("components", {})
+    if not components:
+        return None
+    
+    # Look for ELCM component (could be "ELCM", "elcm", "ELCM Backend", etc.)
+    for component_name, component_data in components.items():
+        if "elcm" in component_name.lower() and "backend" in component_name.lower():
+            comp_dict = component_data
+            if isinstance(component_data, dict):
+                # Try to extract IP and port
+                ips = comp_dict.get("ips", [])
+                ports = comp_dict.get("ports", [])
+                
+                if ips and ports:
+                    ip = ips[0]  # Use first IP
+                    port = ports[0]  # Use first port (backend port)
+                    url = f"http://{ip}:{port}"
+                    logger.info(f"Extracted ELCM URL from report: {url}")
+                    return url
+    
+    return None
+
