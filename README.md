@@ -74,7 +74,7 @@ LOG_LEVEL=INFO
 | Archivo | Uso | Donde se referencia |
 |---|---|---|
 | `examples/tn_descriptor_elcm.yaml` | Descriptor TNLCM | `infrastructure.descriptor_path` en `POST /executions` o `POST /executions/tnlcm` |
-| `examples/TestCase_ping.yml` | Test case para ELCM | `experiment.testcase_path` / `experiment.testcase_paths` en `POST /executions` o `POST /executions/tnlcm` |
+| `examples/TestCase_ping.yml` | Test case para ELCM | `experiment.testcase_paths` en `POST /executions` o `POST /executions/tnlcm` |
 | `examples/Exp_Desc.json` | Descriptor base para `/experiment/run` interno de ELCM | Cargado automaticamente durante fase ELCM |
 
 Nota: En `Exp_Desc.json`, `TestCases` debe contener nombres logicos (ej. `Test_ping`), no rutas.
@@ -88,8 +88,10 @@ Header requerido para endpoints de ejecucion:
 | Metodo | Endpoint | Auth | Body | Para que sirve |
 |---|---|---|---|---|
 | `GET` | `/health` | No | No | Verificar servicio |
+| `POST` | `/config/reload` | Si | No | Recarga en caliente variables mutables de `.env` |
 | `POST` | `/executions` | Si | Si | Alias para iniciar TNLCM |
 | `POST` | `/executions/tnlcm` | Si | Si | Iniciar fase TNLCM |
+| `POST` | `/tnlcm/token/refresh` | Si | No | Hacer login TNLCM con `.env` y guardar `TNLCM_TOKEN` |
 | `POST` | `/executions/{execution_id}/elcm` | Si | No | Iniciar fase ELCM |
 | `GET` | `/executions/{execution_id}` | Si | No | Estado resumido |
 | `GET` | `/executions/{execution_id}/detail` | Si | No | Estado detallado + artefactos |
@@ -107,6 +109,19 @@ Header requerido para endpoints de ejecucion:
 ### `POST /executions/tnlcm`
 - Inicia despliegue TNLCM.
 - Devuelve `execution_id`, `status`, `message`.
+
+### `POST /config/reload`
+- Recarga sin reinicio solo configuracion mutable en memoria del proceso actual.
+- Requiere header `x-api-key`.
+- Valida tipos/rangos antes de aplicar cambios.
+- No recarga: `APP_HOST`, `APP_PORT`, `EXECUTIONS_FILE`, `ARTIFACTS_DIR`, `EXAMPLES_DIR`.
+
+### `POST /tnlcm/token/refresh`
+- Usa `TNLCM_USER` y `TNLCM_PASSWORD` de `.env` para hacer login en TNLCM.
+- Almacena `access_token` y `refresh_token` en memoria (módulo `tnlcm.py`).
+- Los tokens en memoria se usan automáticamente en los headers Bearer de todas las llamadas TNLCM.
+- Si no hay token en memoria, el sistema busca automáticamente `TNLCM_TOKEN` en `.env` como fallback.
+- No requiere body.
 
 ### `POST /executions/{execution_id}/elcm`
 - Inicia fase ELCM sobre una ejecucion existente.
@@ -138,8 +153,8 @@ Payload recomendado (con ejemplos de ficheros):
   },
   "experiment": {
     "name": "exp-demo",
-    "testcase_path": "TestCase_ping.yml",
     "testcase_paths": [
+      "TestCase_ping.yml"
     ],
     "ues_paths": []
   },
@@ -154,8 +169,22 @@ Payload recomendado (con ejemplos de ficheros):
 - Sin body.
 - Solo `execution_id` en path + header `x-api-key`.
 
+### Para `POST /tnlcm/token/refresh`
+
+- Sin body.
+- Solo header `x-api-key`.
+- Devuelve preview del token (no expone el token completo).
+- Los tokens obtenidos se guardan en memoria y se usan automáticamente en todas las llamadas TNLCM posteriores.
+
 ## Flujo de uso recomendado
 
+**Autenticacion TNLCM (opcional pero recomendado):**
+- `POST /tnlcm/token/refresh` con header `x-api-key`.
+  - Obtiene `access_token` de TNLCM y lo guarda en memoria.
+  - Los tokens en memoria tendrán prioridad en todas las llamadas TNLCM.
+  - Si NO ejecutas este endpoint, el sistema usará `TNLCM_TOKEN` del `.env` como fallback.
+
+**Flujo de ejecucion:**
 1. `POST /executions/tnlcm` con payload.
 2. `GET /executions/{execution_id}` hasta `COMPLETED`.
 3. Activar VPN manualmente.
@@ -174,6 +203,10 @@ Payload recomendado (con ejemplos de ficheros):
 | 2026-03 | Soporte de `ExecutionId` de ELCM (incluyendo entero) |
 | 2026-03 | Polling de estado ELCM cada 10s |
 | 2026-03 | Recuperacion automatica TNLCM ante error transitorio en `activate` |
+| 2026-03 | Endpoint `/tnlcm/token/refresh` para login TNLCM con credenciales `.env` |
+| 2026-03 | Tokens TNLCM almacenados en memoria (fallback a `.env` si no existe) |
+| 2026-03 | Si TN ya existe en estado "activated", se salta create y continua con activate |
+| 2026-03 | URL de ELCM extraída dinámicamente del reporte TNLCM (fallback a `.env`) |
 
 ## Uso con Postman
 

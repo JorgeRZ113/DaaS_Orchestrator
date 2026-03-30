@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c0d4f4e1-3e6a-4e06-a7fb-9b7c0f2c9c01",
     "name": "DaaS Orchestrator - Fases TNLCM/ELCM",
-    "description": "🚀 FLUJO COMPLETO DaaS (Data as a Service) con dos fases:\n\n📍 FASE 1 - TNLCM (Trial Network Lifecycle Management):\n1. POST /executions/tnlcm → Despliega infraestructura de red\n2. GET /executions/{id} → Espera a que status=completed\n3. [MANUAL] Activa VPN WireGuard en tu máquina\n\n📍 FASE 2 - ELCM (Experiment Lifecycle Management):\n4. POST /executions/{id}/elcm → Ejecuta experimentos\n5. GET /executions/{id} → Consulta progreso (polling automático)\n6. [AUTO] Limpieza: destroy + purge TNLCM\n\n✅ El execution_id se guarda automáticamente en {{executionId}}\n⚠️  Asegúrate de activar VPN manualmente ANTES del paso 4",
+    "description": "🚀 FLUJO COMPLETO DaaS (Data as a Service) con dos fases:\n\n🔐 Paso previo opcional (TNLCM):\n0. POST /tnlcm/token/refresh → obtiene access_token con TNLCM_USER/TNLCM_PASSWORD\n\n📍 FASE 1 - TNLCM (Trial Network Lifecycle Management):\n1. POST /executions/tnlcm → Despliega infraestructura de red\n2. GET /executions/{id} → Espera a que status=completed\n3. [MANUAL] Activa VPN WireGuard en tu máquina\n\n📍 FASE 2 - ELCM (Experiment Lifecycle Management):\n4. POST /executions/{id}/elcm → Ejecuta experimentos\n5. GET /executions/{id} → Consulta progreso\n6. [AUTO] Limpieza: destroy + purge TNLCM\n\n✅ El execution_id se guarda automáticamente en {{executionId}}\n⚠️  Asegúrate de activar VPN manualmente ANTES del paso 4",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -64,7 +64,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo-manual\",\n    \"descriptor_path\": \"tn_descriptor_elcm.yaml\",\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"develop\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_path\": \"TestCase_ping.yml\",\n    \"testcase_paths\": [],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  }\n}",
+              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo-manual\",\n    \"descriptor_path\": \"tn_descriptor_elcm.yaml\",\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"develop\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -116,7 +116,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo-manual\",\n    \"descriptor_path\": \"tn_descriptor_elcm.yaml\",\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"develop\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_path\": \"TestCase_ping.yml\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  }\n}",
+              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo-manual\",\n    \"descriptor_path\": \"tn_descriptor_elcm.yaml\",\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"develop\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -133,7 +133,7 @@
                 "tnlcm"
               ]
             },
-            "description": "🚀 FASE 1: Despliega Trial Network (TN)\n\n📋 Pasos después de ejecutar:\n1. Copia execution_id de la respuesta\n2. Espera con GET /executions/{id} a que status=completed\n3. ⚠️ IMPORTANTE: Activa VPN WireGuard manualmente\n4. Recién entonces ejecuta POST /executions/{id}/elcm\n\n✅ Características:\n• execution_id = infrastructure.name (determinista)\n• Recuperación automática si /activate falla\n• Reporte en ./artifacts/{execution_id}/tnlcm_report_*.json\n• Timeout: 1 hora máximo\n\n⚡ Cambios automáticos en variables:\nExecutionId = respuesta.execution_id"
+            "description": "🚀 FASE 1: Despliega Trial Network (TN)\n\n📋 Pasos después de ejecutar:\n1. Copia execution_id de la respuesta\n2. Espera con GET /executions/{id} a que status=completed\n3. ⚠️ IMPORTANTE: Activa VPN WireGuard manualmente\n4. Recién entonces ejecuta POST /executions/{id}/elcm\n\n✅ Características:\n• execution_id = infrastructure.name (determinista)\n• Recuperación automática si /activate falla\n• Reporte en ./artifacts/{execution_id}/tnlcm_report_raw.md\n• Resumen en ./artifacts/{execution_id}/template_tnlcm_report_summary.json\n• Timeout: 1 hora máximo\n\n⚡ Cambios automáticos en variables:\nExecutionId = respuesta.execution_id"
           },
           "response": []
         },
@@ -211,6 +211,37 @@
               ]
             },
             "description": "📋 Información detallada de la ejecución\n\nRetorna:\n• Status actual\n• Trial Network ID (tn_id)\n• ELCM Execution ID (si está en fase 2)\n• Artefactos generados (paths)\n• Mensajes de error (si aplica)\n• Timestamps de cada fase\n\nÚsalo para debugging o auditoría completa"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST /tnlcm/token/refresh",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tnlcm/token/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tnlcm",
+                "token",
+                "refresh"
+              ]
+            },
+            "description": "🔐 Refresca el token de TNLCM con TNLCM_USER/TNLCM_PASSWORD configurados en el backend.\n\nÚsalo cuando cambie el token o antes de lanzar TNLCM si no existe token válido.\n\nRespuesta esperada:\n- message\n- token_preview"
           },
           "response": []
         }
