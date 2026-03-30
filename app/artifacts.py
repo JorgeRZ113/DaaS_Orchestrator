@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import zipfile
 from datetime import datetime, timezone
 from typing import Any
 
@@ -32,66 +31,85 @@ async def build_artifacts(
     Build artifacts for the current dataset mode (logs only):
     - metadata.json
     - logs.json
-    - dataset-logs-<execution_id>-<timestamp>.zip
     """
     base_dir = os.path.join(settings.artifacts_dir, execution_id)
     _ensure_dir(base_dir)
 
+    # Signature compatibility: experiment_id is kept although metadata is now minimal.
+    _ = experiment_id
+
+    logs_payload = results.get("logs") if isinstance(results, dict) else results
+    if logs_payload is None:
+        logs_payload = results
+
+    testcases_count = 0
+    if isinstance(results, dict) and isinstance(results.get("testcases"), list):
+        testcases_count = len([tc for tc in results.get("testcases", []) if isinstance(tc, str) and tc])
+    elif isinstance(logs_payload, list):
+        seen_testcases: set[str] = set()
+        for entry in logs_payload:
+            if not isinstance(entry, dict):
+                continue
+
+            testcase = entry.get("testcase")
+            if isinstance(testcase, str) and testcase:
+                seen_testcases.add(testcase)
+
+        testcases_count = len(seen_testcases)
+
     metadata = {
-        "execution_id": execution_id,
         "tn_id": tn_id,
-        "experiment_id": experiment_id,
         "output": "logs",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "testcases_count": testcases_count,
     }
     metadata_path = os.path.join(base_dir, "metadata.json")
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
     logger.info(f"[{execution_id}] metadata.json generated")
 
-    logs_payload = results.get("logs") if isinstance(results, dict) else results
-    if logs_payload is None:
-        logs_payload = results
 
     logs_path = os.path.join(base_dir, "logs.json")
     with open(logs_path, "w", encoding="utf-8") as f:
         json.dump(logs_payload, f, indent=2)
     logger.info(f"[{execution_id}] logs.json generated")
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    zip_name = f"dataset-logs-{execution_id}-{timestamp}.zip"
-    zip_path = os.path.join(base_dir, zip_name)
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(metadata_path, "metadata.json")
-        zf.write(logs_path, "logs.json")
-    logger.info(f"[{execution_id}] {zip_name} generated")
-
-    return [metadata_path, logs_path, zip_path]
+    return [metadata_path, logs_path]
 
 
-async def build_tnlcm_report_artifacts(
+async def build_tnlcm_raw_report_artifact(
     execution_id: str,
-    tn_id: str,
-    report_payload: dict[str, Any],
-    report_summary: dict[str, Any],
-) -> list[str]:
-    """Persist TNLCM report files after activate phase."""
+    report_markdown: str,
+) -> str:
+    """Persist TNLCM raw report as markdown (.md)."""
     base_dir = os.path.join(settings.artifacts_dir, execution_id)
     _ensure_dir(base_dir)
 
-    report_path = os.path.join(base_dir, "tnlcm_report_raw.json")
+    report_path = os.path.join(base_dir, "tnlcm_report_raw.md")
     with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(_json_safe(report_payload), f, indent=2)
+        f.write(report_markdown or "")
+
+    logger.info(f"[{execution_id}] TNLCM raw markdown report generated")
+    return report_path
+
+
+async def build_tnlcm_summary_artifact(
+    execution_id: str,
+    tn_id: str,
+    report_summary: dict[str, Any],
+) -> str:
+    """Persist TNLCM parsed summary in template_tnlcm_report_summary.json."""
+    base_dir = os.path.join(settings.artifacts_dir, execution_id)
+    _ensure_dir(base_dir)
 
     summary_data = {
         "tn_id": tn_id,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
         "summary": _json_safe(report_summary),
     }
-    summary_path = os.path.join(base_dir, "tnlcm_report_summary.json")
+    summary_path = os.path.join(base_dir, "template_tnlcm_report_summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary_data, f, indent=2)
 
-    logger.info(f"[{execution_id}] TNLCM report artifacts generated")
-    return [report_path, summary_path]
+    logger.info(f"[{execution_id}] TNLCM summary report generated")
+    return summary_path
 

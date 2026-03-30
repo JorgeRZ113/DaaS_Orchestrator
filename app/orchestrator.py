@@ -21,7 +21,7 @@ def _save_executions_to_disk() -> None:
     """Guarda el estado de las ejecuciones a disco en JSON."""
     try:
         data = {
-            execution_id: record.dict()
+            execution_id: record.model_dump()
             for execution_id, record in executions.items()
         }
         with open(EXECUTIONS_FILE, 'w') as f:
@@ -60,16 +60,26 @@ def get_execution(execution_id: str) -> ExecutionRecord | None:
 
 def _update(execution_id: str, **kwargs) -> None:
     record = executions[execution_id]
+    old_status = record.status
     for key, value in kwargs.items():
         setattr(record, key, value)
+
+    new_status = record.status
+    if "status" in kwargs and new_status != old_status:
+        message = kwargs.get("message", record.message)
+        logger.debug(
+            "[%s] STATUS %s -> %s | %s",
+            execution_id,
+            old_status.value,
+            new_status.value,
+            message,
+        )
+
     _save_executions_to_disk()  # Guarda cambios inmediatamente
 
 
 def _get_testcases(descriptor: DatasetDescriptor) -> list[str]:
-    ordered: list[str] = []
-    if descriptor.experiment.testcase_path:
-        ordered.append(descriptor.experiment.testcase_path)
-    ordered.extend(descriptor.experiment.testcase_paths)
+    ordered = descriptor.experiment.testcase_paths
 
     unique: list[str] = []
     seen: set[str] = set()
@@ -83,10 +93,12 @@ def _get_testcases(descriptor: DatasetDescriptor) -> list[str]:
 
 async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> None:
     """Phase 1: validate + deploy TN. Leaves execution waiting for manual VPN step."""
-    from .artifacts import build_tnlcm_report_artifacts
+    from .artifacts import build_tnlcm_raw_report_artifact, build_tnlcm_summary_artifact
+    from .elcm import set_elcm_url
     from .tnlcm import (
         deploy_trial_network,
         download_trial_network_report,
+        extract_elcm_url_from_report,
         summarize_trial_network_report,
     )
 
@@ -102,14 +114,18 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         tn_id = await deploy_trial_network(descriptor.infrastructure)
 
         _update(execution_id, status=ExecutionState.collecting, message="Downloading TNLCM report")
-        report_payload = await download_trial_network_report(tn_id)
-        report_summary = summarize_trial_network_report(tn_id, report_payload)
-        report_artifacts = await build_tnlcm_report_artifacts(
-            execution_id,
-            tn_id,
-            report_payload,
-            report_summary,
-        )
+        report_markdown = await download_trial_network_report(tn_id)
+        raw_report_path = await build_tnlcm_raw_report_artifact(execution_id, report_markdown)
+        report_markdown_from_file = Path(raw_report_path).read_text(encoding="utf-8")
+        report_summary = summarize_trial_network_report(report_markdown_from_file)
+        summary_report_path = await build_tnlcm_summary_artifact(execution_id, tn_id, report_summary)
+        report_artifacts = [raw_report_path, summary_report_path]
+
+        # Extract ELCM URL from report if available
+        elcm_url = extract_elcm_url_from_report(report_summary)
+        if elcm_url:
+            set_elcm_url(elcm_url)
+            logger.info(f"[{execution_id}] ELCM URL extracted from report: {elcm_url}")
 
         _update(
             execution_id,
@@ -131,7 +147,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
 async def run_elcm_phase(execution_id: str) -> None:
     """Phase 2: run ELCM and always cleanup TN at the end."""
     from .artifacts import build_artifacts
-    from .elcm import collect_results, get_experiment_status, run_experiment
+    from .elcm import collect_results, get_experiment_status, run_experiment, upload_test_cases
     from .tnlcm import destroy_trial_network, get_tn_status
 
     record = executions[execution_id]
@@ -149,98 +165,79 @@ async def run_elcm_phase(execution_id: str) -> None:
         if not testcase_list:
             raise ValueError("At least one testcase is required")
 
-        success_states = {"PASS", "FAIL", "COMPLETED", "DONE"}
-        error_states = {"ERROR", "CANCEL", "FAILED"}
-
-        experiment_ids: list[str] = []
-        all_logs: list[dict] = []
-
         for index, testcase in enumerate(testcase_list, start=1):
             _update(
                 execution_id,
-                message=f"Running testcase {index}/{len(testcase_list)}: {testcase}",
+                message=f"Uploading testcase {index}/{len(testcase_list)}: {testcase}",
             )
-            # run_experiment returns the ELCM execution_id
-            elcm_execution_id = await run_experiment(
-                descriptor.experiment,
-                tn_id,
-                testcase_path_override=testcase,
-            )
-            experiment_ids.append(elcm_execution_id)
-            
-            # Store ELCM execution ID
-            _update(execution_id, elcm_execution_id=elcm_execution_id)
+            await upload_test_cases([testcase])
 
-            # Poll every 10 seconds until "Finished"
-            exp_done = False
-            timeout_seconds = 3600  # 1 hour timeout
-            elapsed = 0
-            
-            while elapsed < timeout_seconds:
-                exp_status = await get_experiment_status(elcm_execution_id)
-                logger.info(f"ELCM execution {elcm_execution_id} status: {exp_status}")
-                
-                # Check if execution is finished
-                if "Finished" in exp_status or exp_status.upper() in {"FINISHED", "COMPLETED", "DONE"}:
-                    exp_done = True
-                    break
-                
-                # Check for errors
-                if "Error" in exp_status or "FAILED" in exp_status.upper():
-                    raise RuntimeError(f"ELCM execution {elcm_execution_id} failed with status: {exp_status}")
-                
-                await asyncio.sleep(10)  # Wait 10 seconds before next poll
-                elapsed += 10
+        _update(execution_id, message="Launching Exp_Desc.json")
+        elcm_execution_id = await run_experiment(descriptor.experiment)
+        experiment_ids = [elcm_execution_id]
+        _update(execution_id, elcm_execution_id=elcm_execution_id)
 
-            if not exp_done:
-                raise TimeoutError(f"Timeout waiting for ELCM execution {elcm_execution_id} to finish")
+        # Poll every 10 seconds until "Finished"
+        exp_done = False
+        timeout_seconds = 3600  # 1 hour timeout
+        elapsed = 0
 
-            # Collect logs with transient error handling
-            _update(execution_id, status=ExecutionState.collecting, message="Collecting logs")
-            try:
-                testcase_logs = await collect_results(elcm_execution_id)
-            except Exception as logs_error:
-                # If logs error, check TN status before failing
-                logger.warning(f"Error collecting logs for {elcm_execution_id}: {logs_error}")
-                tn_status = await get_tn_status(tn_id)
-                logger.info(f"TN {tn_id} status after logs error: {tn_status}")
-                
-                # If TN is running, logs will be available later, return empty for now
-                if "RUNNING" in tn_status.upper() or "ACTIVE" in tn_status.upper():
-                    logger.info(f"TN still running, treating logs as pending")
-                    testcase_logs = {
-                        "testcase": testcase,
-                        "execution_id": elcm_execution_id,
-                        "result": {"message": "Logs not available yet"},
-                        "status": "logs_pending",
-                    }
-                else:
-                    # TN is in error state, re-raise the error
-                    raise
-            
-            all_logs.append(
-                {
-                    "testcase": testcase,
-                    "execution_id": elcm_execution_id,
-                    "result": testcase_logs,
+        while elapsed < timeout_seconds:
+            exp_status = await get_experiment_status(elcm_execution_id)
+            logger.info(f"ELCM execution {elcm_execution_id} status: {exp_status}")
+
+            # Check if execution is finished
+            if "Finished" in exp_status or exp_status.upper() in {"FINISHED", "COMPLETED", "DONE"}:
+                exp_done = True
+                break
+
+            # Check for errors
+            if "Error" in exp_status or "FAILED" in exp_status.upper():
+                raise RuntimeError(f"ELCM execution {elcm_execution_id} failed with status: {exp_status}")
+
+            await asyncio.sleep(10)  # Wait 10 seconds before next poll
+            elapsed += 10
+
+        if not exp_done:
+            raise TimeoutError(f"Timeout waiting for ELCM execution {elcm_execution_id} to finish")
+
+        # Collect logs with transient error handling
+        _update(execution_id, status=ExecutionState.collecting, message="Collecting logs")
+        try:
+            execution_logs = await collect_results(elcm_execution_id)
+        except Exception as logs_error:
+            # If logs error, check TN status before failing
+            logger.warning(f"Error collecting logs for {elcm_execution_id}: {logs_error}")
+            tn_status = await get_tn_status(tn_id)
+            logger.info(f"TN {tn_id} status after logs error: {tn_status}")
+
+            # If TN is running, logs will be available later, return empty for now
+            if "RUNNING" in tn_status.upper() or "ACTIVE" in tn_status.upper():
+                logger.info("TN still running, treating logs as pending")
+                execution_logs = {
+                    "output": "logs",
+                    "experiment_id": elcm_execution_id,
+                    "logs": {"message": "Logs not available yet"},
+                    "status": "logs_pending",
                 }
-            )
-            _update(execution_id, status=ExecutionState.running_experiment)
+            else:
+                # TN is in error state, re-raise the error
+                raise
 
-        first_experiment_id = experiment_ids[0]
         _update(
             execution_id,
-            experiment_id=first_experiment_id,
+            experiment_id=elcm_execution_id,
             experiment_ids=experiment_ids,
-            message="All testcases finished",
+            message="Experiment finished",
         )
 
         results = {
             "output": "logs",
             "experiment_ids": experiment_ids,
-            "logs": all_logs,
+            "testcases": testcase_list,
+            "logs": execution_logs,
         }
-        artifact_paths = await build_artifacts(execution_id, tn_id, first_experiment_id, results)
+        artifact_paths = await build_artifacts(execution_id, tn_id, elcm_execution_id, results)
         merged_artifacts = list(dict.fromkeys([*record.artifacts, *artifact_paths]))
         _update(
             execution_id,
@@ -270,6 +267,7 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
     )
     executions[execution_id] = record
     execution_descriptors[execution_id] = descriptor
+    logger.debug("[%s] STATUS NONE -> %s | %s", execution_id, record.status.value, record.message)
     _save_executions_to_disk()  # Guarda al crear
 
     asyncio.create_task(run_tnlcm_phase(execution_id, descriptor))
