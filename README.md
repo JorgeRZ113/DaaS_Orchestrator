@@ -11,7 +11,7 @@ Este servicio expone endpoints HTTP para crear ejecuciones, consultar su estado 
 
 ## Objetivo del proyecto
 
-- Automatizar el pipeline `TNLCM -> VPN manual -> ELCM`.
+- Automatizar el pipeline `TNLCM -> WireGuard -> ELCM`.
 - Mantener `execution_id` determinista y persistente.
 - Mejorar robustez con reintentos y recuperacion automatica.
 - Dejar trazabilidad de estados y artefactos.
@@ -125,7 +125,8 @@ Header requerido para endpoints de ejecucion:
 
 ### `POST /executions/{execution_id}/elcm`
 - Inicia fase ELCM sobre una ejecucion existente.
-- Requiere TNLCM completado y VPN manual activa.
+- Requiere TNLCM completado.
+- La VPN WireGuard se activa automaticamente al finalizar TNLCM y se desactiva en el cleanup de ELCM.
 
 ### `GET /executions/{execution_id}`
 - Devuelve estado resumido de ejecucion.
@@ -187,9 +188,21 @@ Payload recomendado (con ejemplos de ficheros):
 **Flujo de ejecucion:**
 1. `POST /executions/tnlcm` con payload.
 2. `GET /executions/{execution_id}` hasta `COMPLETED`.
-3. Activar VPN manualmente.
-4. `POST /executions/{execution_id}/elcm`.
-5. Consultar resultado con `GET /executions/{execution_id}` o `GET /executions/{execution_id}/detail`.
+3. El sistema descarga el reporte TNLCM y guarda la interfaz WireGuard en `ARTIFACTS_DIR/<execution_id>/<tn_id>.conf`.
+4. El sistema activa automaticamente el tunel WireGuard usando `tn_id` como nombre de tunel.
+5. `POST /executions/{execution_id}/elcm`.
+6. Consultar resultado con `GET /executions/{execution_id}` o `GET /executions/{execution_id}/detail`.
+7. En cleanup de ELCM se desactiva obligatoriamente el tunel WireGuard.
+
+## Automatizacion WireGuard
+
+- Implementacion en `app/utils/wireguard.py`.
+- Helper de sistema en `app/utils/wireguard_helper.py`.
+- El contenido de la VPN se toma del campo `wireguard_client_config` del reporte TNLCM, sin parseos extra.
+- El archivo de interfaz se guarda como `<tn_id>.conf`.
+- Linux: usa `wg-quick` y si la interfaz ya existe se actualiza (`down` + `up`).
+- Windows: usa `wireguard.exe` via helper; primero intenta sin elevacion y, si detecta permisos insuficientes, reintenta elevando el helper.
+- Campos de seguimiento en `GET /executions/{execution_id}/detail`: `vpn_interface`, `vpn_conf_path`, `vpn_status`, `vpn_error`.
 
 ## Changelog (formato compacto)
 
@@ -207,6 +220,8 @@ Payload recomendado (con ejemplos de ficheros):
 | 2026-03 | Tokens TNLCM almacenados en memoria (fallback a `.env` si no existe) |
 | 2026-03 | Si TN ya existe en estado "activated", se salta create y continua con activate |
 | 2026-03 | URL de ELCM extraída dinámicamente del reporte TNLCM (fallback a `.env`) |
+| 2026-04 | Automatizacion de WireGuard: `<tn_id>.conf`, activacion automatica tras TNLCM y desactivacion obligatoria en cleanup ELCM |
+| 2026-04 | Refactor de WireGuard a `app/utils` con helper dedicado `app/utils/wireguard_helper.py` |
 
 ## Uso con Postman
 

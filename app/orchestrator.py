@@ -92,7 +92,7 @@ def _get_testcases(descriptor: DatasetDescriptor) -> list[str]:
 
 
 async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> None:
-    """Phase 1: validate + deploy TN. Leaves execution waiting for manual VPN step."""
+    """Phase 1: validate + deploy TN, then activate the WireGuard tunnel automatically."""
     from .artifacts import build_tnlcm_raw_report_artifact, build_tnlcm_summary_artifact
     from .elcm import set_elcm_url
     from .tnlcm import (
@@ -101,6 +101,10 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         extract_elcm_url_from_report,
         summarize_trial_network_report,
     )
+    from .utils.wireguard import up_tunnel, write_tunnel_conf
+
+    tn_id: str | None = None
+    vpn_conf_path: str | None = None
 
     try:
         _update(execution_id, status=ExecutionState.validating, message="Validating descriptor")
@@ -121,6 +125,20 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         summary_report_path = await build_tnlcm_summary_artifact(execution_id, tn_id, report_summary)
         report_artifacts = [raw_report_path, summary_report_path]
 
+        wireguard_config = report_summary.get("wireguard_client_config")
+        if not isinstance(wireguard_config, str) or not wireguard_config.strip():
+            raise ValueError("TNLCM report does not include wireguard_client_config")
+        vpn_conf_path = write_tunnel_conf(execution_id, tn_id, wireguard_config)
+        _update(
+            execution_id,
+            vpn_interface=tn_id,
+            vpn_conf_path=vpn_conf_path,
+            vpn_status="CONFIG_WRITTEN",
+            vpn_error=None,
+        )
+        up_tunnel(tn_id, vpn_conf_path)
+        _update(execution_id, vpn_status="UP", message="TN ready and WireGuard tunnel active")
+
         # Extract ELCM URL from report if available
         elcm_url = extract_elcm_url_from_report(report_summary)
         if elcm_url:
@@ -132,16 +150,28 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             status=ExecutionState.completed,
             tn_id=tn_id,
             artifacts=report_artifacts,
-            message=(
-                "TN deployment request accepted. Activate WireGuard manually and continue with "
-                "POST /executions/{execution_id}/elcm"
-            ),
+            message="TN deployment completed with automatic WireGuard tunnel",
         )
-        logger.info(f"[{execution_id}] TN {tn_id} deployment/activate acknowledged. Waiting VPN step.")
+        logger.info(f"[{execution_id}] TN {tn_id} deployment completed with active WireGuard tunnel.")
 
     except Exception as exc:
         logger.error(f"[{execution_id}] TNLCM phase error: {exc}")
         _update(execution_id, status=ExecutionState.failed, error=str(exc), message=f"Error: {exc}")
+        if tn_id:
+            try:
+                if vpn_conf_path:
+                    from .utils.wireguard import down_tunnel
+
+                    down_tunnel(tn_id, vpn_conf_path)
+            except Exception as cleanup_error:
+                logger.warning(f"[{execution_id}] WireGuard cleanup after TNLCM failure failed: {cleanup_error}")
+
+            try:
+                from .tnlcm import destroy_trial_network
+
+                await destroy_trial_network(tn_id)
+            except Exception as cleanup_error:
+                logger.warning(f"[{execution_id}] TN cleanup after TNLCM failure failed: {cleanup_error}")
 
 
 async def run_elcm_phase(execution_id: str) -> None:
@@ -149,6 +179,7 @@ async def run_elcm_phase(execution_id: str) -> None:
     from .artifacts import build_artifacts
     from .elcm import collect_results, get_experiment_status, run_experiment, upload_test_cases
     from .tnlcm import destroy_trial_network, get_tn_status
+    from .utils.wireguard import down_tunnel
 
     record = executions[execution_id]
     descriptor = execution_descriptors[execution_id]
@@ -251,6 +282,16 @@ async def run_elcm_phase(execution_id: str) -> None:
         _update(execution_id, status=ExecutionState.failed, error=str(exc), message=f"Error: {exc}")
 
     finally:
+        vpn_interface = record.vpn_interface or tn_id
+        if vpn_interface:
+            try:
+                logger.info(f"[{execution_id}] Cleanup: deactivating WireGuard tunnel {vpn_interface}")
+                down_tunnel(vpn_interface, record.vpn_conf_path)
+                _update(execution_id, vpn_status="DOWN", vpn_error=None)
+            except Exception as vpn_error:
+                logger.error(f"[{execution_id}] WireGuard deactivation failed: {vpn_error}")
+                _update(execution_id, vpn_status="DOWN_ERROR", vpn_error=str(vpn_error))
+
         try:
             logger.info(f"[{execution_id}] Cleanup: destroying TN {tn_id}")
             await destroy_trial_network(tn_id)

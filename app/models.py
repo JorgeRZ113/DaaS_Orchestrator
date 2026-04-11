@@ -179,6 +179,10 @@ class ExecutionRecord(BaseModel):
     status: ExecutionState
     message: str = ""
     tn_id: Optional[str] = None
+    vpn_interface: Optional[str] = None
+    vpn_conf_path: Optional[str] = None
+    vpn_status: Optional[str] = None
+    vpn_error: Optional[str] = None
     experiment_id: Optional[str] = None
     experiment_ids: List[str] = Field(default_factory=list)
     elcm_execution_id: Optional[str] = None  # ID de la ejecución en ELCM
