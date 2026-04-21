@@ -34,8 +34,6 @@ line-length = 100
 [tool.black]
 line-length = 100
 
-[tool.fastapi]
-entrypoint = "app.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

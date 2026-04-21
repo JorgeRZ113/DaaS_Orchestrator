@@ -1,0 +1,71 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+stages:
+  - lint
+  - test
+  - build
+
+default:
+  image: python:3.11-slim
+  interruptible: true
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/pip
+  variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONUNBUFFERED: "1"
+    APP_ENV: "test"
+    API_KEY: "ci-test-key"
+    LOG_LEVEL: "INFO"
+    # URLs can be overridden per branch in GitLab Settings > CI/CD > Variables
+    # Default: safe defaults (localhost) to avoid unexpected connections
+    # Override in Settings for real cloud URLs on specific branches
+    TNLCM_URL: "http://localhost:5000"
+    TNLCM_USER: "dummy"
+    TNLCM_PASSWORD: "dummy"
+    TNLCM_TOKEN: "dummy"
+    ELCM_URL: "http://localhost:8080"
+    REQUEST_TIMEOUT: "1"
+    POLL_INTERVAL: "1"
+    TNLCM_ACTIVATE_TIMEOUT: "30"
+    TNLCM_ACTIVATE_RETRY_DELAY: "1"
+    TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS: "0"
+    TNLCM_REDEPLOY_DELAY: "0"
+    TNLCM_RECOVERY_DESTROY_DELAY: "0"
+    TNLCM_REPORT_TIMEOUT: "5"
+    EXECUTIONS_FILE: "$CI_PROJECT_DIR/.cache/executions.json"
+    ARTIFACTS_DIR: "$CI_PROJECT_DIR/.cache/artifacts"
+    EXAMPLES_DIR: "$CI_PROJECT_DIR/examples"
+  before_script:
+    - python -m pip install --upgrade pip
+    - python -m pip install -e ".[dev]"
+
+lint:
+  stage: lint
+  script:
+    - python -m ruff check app tests scripts
+    - python -m black --check tests
+
+pytest:
+  stage: test
+  script:
+    - python -m pytest -q --maxfail=1 --disable-warnings --cov=app --cov-report=term-missing
+
+build:
+  stage: build
+  script:
+    - python -m pip install build
+    - python -m build
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - dist/
+
+
