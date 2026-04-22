@@ -30,4 +30,3 @@ def test_execution_record_default_lists_are_initialized() -> None:
 
     assert record.experiment_ids == []
     assert record.artifacts == []
-
