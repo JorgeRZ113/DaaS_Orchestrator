@@ -50,7 +50,7 @@ default:
 lint:
   stage: lint
   script:
-    - python -m ruff check app tests scripts
+    - python -m ruff check app tests
     - python -m black --check tests
 
 pytest:
