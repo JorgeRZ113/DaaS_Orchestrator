@@ -9,14 +9,7 @@ stages:
   - test
   - build
 
-default:
-  image: python:3.11-slim
-  interruptible: true
-  cache:
-    key: pip-${CI_COMMIT_REF_SLUG}
-    paths:
-      - .cache/pip
-  variables:
+variables:
     PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
     PYTHONDONTWRITEBYTECODE: "1"
     PYTHONUNBUFFERED: "1"
@@ -42,6 +35,14 @@ default:
     EXECUTIONS_FILE: "$CI_PROJECT_DIR/.cache/executions.json"
     ARTIFACTS_DIR: "$CI_PROJECT_DIR/.cache/artifacts"
     EXAMPLES_DIR: "$CI_PROJECT_DIR/examples"
+
+default:
+  image: python:3.11-slim
+  interruptible: true
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/pip
   before_script:
     - python -m pip install --upgrade pip
     - python -m pip install -e ".[dev]"
