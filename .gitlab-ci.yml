@@ -51,7 +51,7 @@ lint:
   stage: lint
   script:
     - python -m ruff check app tests
-    - python -m black --check tests
+    - python -m black --check --target-version py311 tests
 
 pytest:
   stage: test
