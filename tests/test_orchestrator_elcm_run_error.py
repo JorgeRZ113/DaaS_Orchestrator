@@ -2,7 +2,13 @@ import pytest
 
 from app import elcm
 from app import orchestrator
-from app.models import DatasetDescriptor, ExecutionRecord, ExecutionState, ExperimentConfig, InfrastructureConfig
+from app.models import (
+    DatasetDescriptor,
+    ExecutionRecord,
+    ExecutionState,
+    ExperimentConfig,
+    InfrastructureConfig,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +65,9 @@ async def test_run_elcm_phase_run_error_is_propagated_without_retry(monkeypatch,
     caplog.set_level("INFO")
 
     descriptor = DatasetDescriptor(
-        infrastructure=InfrastructureConfig(name=execution_id, descriptor_path="examples/tn_descriptor_elcm.yaml"),
+        infrastructure=InfrastructureConfig(
+            name=execution_id, descriptor_path="examples/tn_descriptor_elcm.yaml"
+        ),
         experiment=ExperimentConfig(name="exp-elcm", testcase_paths=["examples/TestCase_ping.yml"]),
     )
 
@@ -111,7 +119,9 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
     monkeypatch.setattr("app.utils.wireguard.down_tunnel", _fake_down_tunnel)
 
     descriptor = DatasetDescriptor(
-        infrastructure=InfrastructureConfig(name=execution_id, descriptor_path="examples/tn_descriptor_elcm.yaml"),
+        infrastructure=InfrastructureConfig(
+            name=execution_id, descriptor_path="examples/tn_descriptor_elcm.yaml"
+        ),
         experiment=ExperimentConfig(name="exp-elcm", testcase_paths=["examples/TestCase_ping.yml"]),
     )
 
@@ -177,7 +187,9 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
     monkeypatch.setattr("app.utils.wireguard.down_tunnel", _fake_down_tunnel)
 
     descriptor = DatasetDescriptor(
-        infrastructure=InfrastructureConfig(name=execution_id, descriptor_path="examples/tn_descriptor_elcm.yaml"),
+        infrastructure=InfrastructureConfig(
+            name=execution_id, descriptor_path="examples/tn_descriptor_elcm.yaml"
+        ),
         experiment=ExperimentConfig(name="exp-elcm", testcase_paths=["examples/TestCase_ping.yml"]),
     )
 
@@ -198,11 +210,3 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
     assert record.status == ExecutionState.failed
     assert "not found" in (record.error or "").lower()
     assert "hay que repetirlo" in (record.error or "").lower()
-
-
-
-
-
-
-
-

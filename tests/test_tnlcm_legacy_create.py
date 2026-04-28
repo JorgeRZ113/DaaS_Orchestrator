@@ -6,7 +6,9 @@ from app.models import InfrastructureConfig
 
 
 class _FakeAsyncClient:
-    def __init__(self, legacy_response: httpx.Response, activate_response: httpx.Response | None = None):
+    def __init__(
+        self, legacy_response: httpx.Response, activate_response: httpx.Response | None = None
+    ):
         self._legacy_response = legacy_response
         self._activate_response = activate_response or _response(
             method="PUT",
@@ -109,5 +111,3 @@ async def test_deploy_trial_network_legacy_201_ok_continues_flow(monkeypatch):
     assert fake_client.post_calls[0].endswith("/api/v1/trial-network/legacy")
     assert len(fake_client.put_calls) == 1
     assert fake_client.put_calls[0].endswith("/api/v1/trial-networks/tn-demo/activate")
-
-

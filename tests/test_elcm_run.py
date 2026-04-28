@@ -55,7 +55,9 @@ def _upload_response(status_code: int, body: dict[str, object] | str = "ok") -> 
 
 def _make_descriptor_file(tmp_path) -> str:
     descriptor_path = tmp_path / "Exp_Desc.json"
-    descriptor_path.write_text(json.dumps({"Version": "1.0", "Application": "dummy"}), encoding="utf-8")
+    descriptor_path.write_text(
+        json.dumps({"Version": "1.0", "Application": "dummy"}), encoding="utf-8"
+    )
     return str(descriptor_path)
 
 
@@ -188,8 +190,3 @@ async def test_upload_test_cases_fails_without_retry_and_reports_backend_error(
     assert elcm.ELCM_UPLOAD_ERROR_HINT in message
     assert len(fake_client.post_calls) == 1
     assert fake_client.post_calls[0].endswith("/elcm/api/v1/facility/upload_test_case")
-
-
-
-
-

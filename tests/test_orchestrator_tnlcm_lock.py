@@ -48,4 +48,3 @@ async def test_run_tnlcm_phase_releases_lock_on_failure(monkeypatch) -> None:
 
     assert orchestrator._tnlcm_deploy_in_progress is None
     assert orchestrator.executions[execution_id].status == ExecutionState.failed
-

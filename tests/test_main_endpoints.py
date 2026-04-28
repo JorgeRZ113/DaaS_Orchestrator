@@ -5,7 +5,6 @@ from app.main import app, verify_api_key
 from app.models import ExecutionRecord, ExecutionState
 from app.orchestrator import TnlcmDeploymentInProgressError
 
-
 client = TestClient(app)
 
 
@@ -104,9 +103,9 @@ def test_post_execution_tnlcm_returns_409_when_tnlcm_deploy_is_busy(monkeypatch)
         "experiment": {"name": "exp-b", "testcase_paths": ["tc.yml"], "ues_paths": []},
         "dataset": {"output": "logs"},
     }
-    response = client.post("/executions/tnlcm", json=payload, headers={"x-api-key": settings.api_key})
+    response = client.post(
+        "/executions/tnlcm", json=payload, headers={"x-api-key": settings.api_key}
+    )
 
     assert response.status_code == 409
     assert "curso" in response.json()["detail"]
-
-
