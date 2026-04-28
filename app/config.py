@@ -19,14 +19,6 @@ RELOADABLE_SETTING_FIELDS = frozenset(
         "tnlcm_password",
         "tnlcm_token",
         "elcm_url",
-        "request_timeout",
-        "tnlcm_activate_timeout",
-        "tnlcm_activate_retry_delay",
-        "tnlcm_activate_redeploy_max_attempts",
-        "tnlcm_redeploy_delay",
-        "tnlcm_recovery_destroy_delay",
-        "tnlcm_report_timeout",
-        "poll_interval",
         "log_level",
     }
 )
@@ -55,15 +47,6 @@ class Settings(BaseModel):
     tnlcm_token: str
 
     elcm_url: str
-
-    request_timeout: int
-    tnlcm_activate_timeout: int
-    tnlcm_activate_retry_delay: int
-    tnlcm_activate_redeploy_max_attempts: int
-    tnlcm_redeploy_delay: int
-    tnlcm_recovery_destroy_delay: int
-    tnlcm_report_timeout: int
-    poll_interval: int
 
     executions_file: str
     artifacts_dir: str
@@ -105,18 +88,6 @@ def _load_settings(values: Mapping[str, Any] | None = None) -> Settings:
         tnlcm_password=_read_str(values, "TNLCM_PASSWORD", ""),
         tnlcm_token=_read_str(values, "TNLCM_TOKEN", "changeme"),
         elcm_url=_read_url(values, "ELCM_URL", "http://localhost:8080"),
-        request_timeout=_read_int(values, "REQUEST_TIMEOUT", 30),
-        tnlcm_activate_timeout=_read_int(values, "TNLCM_ACTIVATE_TIMEOUT", 1800),
-        tnlcm_activate_retry_delay=_read_int(values, "TNLCM_ACTIVATE_RETRY_DELAY", 5),
-        tnlcm_activate_redeploy_max_attempts=_read_int(
-            values,
-            "TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS",
-            1,
-        ),
-        tnlcm_redeploy_delay=_read_int(values, "TNLCM_REDEPLOY_DELAY", 5),
-        tnlcm_recovery_destroy_delay=_read_int(values, "TNLCM_RECOVERY_DESTROY_DELAY", 0),
-        tnlcm_report_timeout=_read_int(values, "TNLCM_REPORT_TIMEOUT", 300),
-        poll_interval=_read_int(values, "POLL_INTERVAL", 10),
         executions_file=_read_str(values, "EXECUTIONS_FILE", "./executions.json"),
         artifacts_dir=_read_str(values, "ARTIFACTS_DIR", "./artifacts"),
         examples_dir=_read_str(values, "EXAMPLES_DIR", "./examples"),
@@ -134,25 +105,6 @@ def _validate_settings(candidate: Settings) -> None:
     if not candidate.elcm_url.startswith(("http://", "https://")):
         raise ValueError("ELCM_URL must start with http:// or https://")
 
-    positive_fields = {
-        "request_timeout": candidate.request_timeout,
-        "tnlcm_activate_timeout": candidate.tnlcm_activate_timeout,
-        "tnlcm_activate_retry_delay": candidate.tnlcm_activate_retry_delay,
-        "tnlcm_report_timeout": candidate.tnlcm_report_timeout,
-        "poll_interval": candidate.poll_interval,
-    }
-    for name, value in positive_fields.items():
-        if value <= 0:
-            raise ValueError(f"{name} must be greater than 0")
-
-    non_negative_fields = {
-        "tnlcm_activate_redeploy_max_attempts": candidate.tnlcm_activate_redeploy_max_attempts,
-        "tnlcm_redeploy_delay": candidate.tnlcm_redeploy_delay,
-        "tnlcm_recovery_destroy_delay": candidate.tnlcm_recovery_destroy_delay,
-    }
-    for name, value in non_negative_fields.items():
-        if value < 0:
-            raise ValueError(f"{name} must be >= 0")
 
 
 _reload_lock = Lock()
