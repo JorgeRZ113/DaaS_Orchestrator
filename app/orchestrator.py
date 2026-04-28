@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 
 from app.config import settings
@@ -8,9 +9,21 @@ from app.models import DatasetDescriptor, ExecutionRecord, ExecutionState
 
 logger = logging.getLogger(__name__)
 
+
+class TnlcmDeploymentInProgressError(RuntimeError):
+    """Raised when a TNLCM deployment is already running."""
+
+# ELCM phase timing constants (kept local to orchestration flow)
+ELCM_POLL_INTERVAL_SECONDS = 10
+ELCM_EXECUTION_TIMEOUT_SECONDS = 3600
+ELCM_START_TIMEOUT_SECONDS = 300
+
 # In-memory state for MVP
 executions: dict[str, ExecutionRecord] = {}
 execution_descriptors: dict[str, DatasetDescriptor] = {}
+elcm_start_watchdogs: dict[str, asyncio.Task[None]] = {}
+_tnlcm_deploy_guard = threading.Lock()
+_tnlcm_deploy_in_progress: str | None = None
 
 # Persistencia en archivos
 EXECUTIONS_FILE = Path(settings.executions_file)
@@ -91,6 +104,96 @@ def _get_testcases(descriptor: DatasetDescriptor) -> list[str]:
     return unique
 
 
+def _cancel_elcm_start_timeout(execution_id: str) -> None:
+    task = elcm_start_watchdogs.pop(execution_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
+def _acquire_tnlcm_deploy_slot(execution_id: str) -> None:
+    global _tnlcm_deploy_in_progress
+    with _tnlcm_deploy_guard:
+        if _tnlcm_deploy_in_progress is not None:
+            raise TnlcmDeploymentInProgressError(
+                "Ya existe un despliegue/activacion TNLCM en curso. "
+                "Espere a que termine antes de lanzar otra peticion."
+            )
+        _tnlcm_deploy_in_progress = execution_id
+
+
+def _release_tnlcm_deploy_slot(execution_id: str) -> None:
+    global _tnlcm_deploy_in_progress
+    with _tnlcm_deploy_guard:
+        if _tnlcm_deploy_in_progress == execution_id:
+            _tnlcm_deploy_in_progress = None
+
+
+def _schedule_elcm_start_timeout(execution_id: str) -> None:
+    _cancel_elcm_start_timeout(execution_id)
+    timeout_seconds = ELCM_START_TIMEOUT_SECONDS
+    elcm_start_watchdogs[execution_id] = asyncio.create_task(
+        _elcm_start_timeout_watchdog(execution_id, timeout_seconds)
+    )
+    logger.info(
+        "[%s] ELCM trigger timeout watchdog scheduled: %ss",
+        execution_id,
+        timeout_seconds,
+    )
+
+
+async def _elcm_start_timeout_watchdog(execution_id: str, timeout_seconds: int) -> None:
+    try:
+        await asyncio.sleep(timeout_seconds)
+        await _handle_elcm_start_timeout(execution_id, timeout_seconds)
+    except asyncio.CancelledError:
+        logger.debug("[%s] ELCM trigger timeout watchdog cancelled", execution_id)
+        raise
+    finally:
+        task = elcm_start_watchdogs.get(execution_id)
+        if task is asyncio.current_task():
+            if execution_id in elcm_start_watchdogs:
+                del elcm_start_watchdogs[execution_id]
+
+
+async def _handle_elcm_start_timeout(execution_id: str, timeout_seconds: int) -> None:
+    from .tnlcm import destroy_trial_network
+    from .utils.wireguard import down_tunnel
+
+    record = executions.get(execution_id)
+    if not record or record.status != ExecutionState.completed or not record.tn_id:
+        return
+
+    timeout_error = (
+        f"ELCM phase was not triggered within {timeout_seconds} seconds after TN deployment"
+    )
+    logger.warning("[%s] %s. Starting automatic cleanup.", execution_id, timeout_error)
+
+    vpn_interface = record.vpn_interface or record.tn_id
+    if vpn_interface and record.vpn_status in {"UP", "DOWN_ERROR"}:
+        try:
+            down_tunnel(vpn_interface, record.vpn_conf_path)
+            _update(execution_id, vpn_status="DOWN", vpn_error=None)
+        except Exception as vpn_error:
+            logger.error("[%s] WireGuard timeout cleanup failed: %s", execution_id, vpn_error)
+            _update(execution_id, vpn_status="DOWN_ERROR", vpn_error=str(vpn_error))
+
+    cleanup_message = (
+        "ELCM trigger timeout exceeded; TN was destroyed/purged automatically."
+    )
+    try:
+        await destroy_trial_network(record.tn_id)
+    except Exception as cleanup_error:
+        logger.warning("[%s] Timeout cleanup failed: %s", execution_id, cleanup_error)
+        cleanup_message = f"{cleanup_message} Cleanup warning: {cleanup_error}"
+
+    _update(
+        execution_id,
+        status=ExecutionState.cancelled,
+        error=timeout_error,
+        message=cleanup_message,
+    )
+
+
 async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> None:
     """Phase 1: validate + deploy TN, then activate the WireGuard tunnel automatically."""
     from .artifacts import build_tnlcm_raw_report_artifact, build_tnlcm_summary_artifact
@@ -101,10 +204,11 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         extract_elcm_url_from_report,
         summarize_trial_network_report,
     )
-    from .utils.wireguard import up_tunnel, write_tunnel_conf
+    from .utils.wireguard import WireGuardManualDeploymentRequired, up_tunnel, write_tunnel_conf
 
     tn_id: str | None = None
     vpn_conf_path: str | None = None
+    _cancel_elcm_start_timeout(execution_id)
 
     try:
         _update(execution_id, status=ExecutionState.validating, message="Validating descriptor")
@@ -118,7 +222,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         tn_id = await deploy_trial_network(descriptor.infrastructure)
 
         _update(execution_id, status=ExecutionState.collecting, message="Downloading TNLCM report")
-        report_markdown = await download_trial_network_report(tn_id)
+        report_markdown = download_trial_network_report(tn_id)
         raw_report_path = await build_tnlcm_raw_report_artifact(execution_id, report_markdown)
         report_markdown_from_file = Path(raw_report_path).read_text(encoding="utf-8")
         report_summary = summarize_trial_network_report(report_markdown_from_file)
@@ -136,14 +240,36 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             vpn_status="CONFIG_WRITTEN",
             vpn_error=None,
         )
-        up_tunnel(tn_id, vpn_conf_path)
-        _update(execution_id, vpn_status="UP", message="TN ready and WireGuard tunnel active")
 
         # Extract ELCM URL from report if available
         elcm_url = extract_elcm_url_from_report(report_summary)
         if elcm_url:
             set_elcm_url(elcm_url)
             logger.info(f"[{execution_id}] ELCM URL extracted from report: {elcm_url}")
+
+        try:
+            up_tunnel(tn_id, vpn_conf_path)
+        except WireGuardManualDeploymentRequired as vpn_error:
+            manual_message = (
+                "TN deployment completed, but WireGuard VPN could not be deployed automatically; "
+                "deploy it manually before starting ELCM"
+            )
+            logger.warning(f"[{execution_id}] {manual_message}: {vpn_error}")
+            _update(
+                execution_id,
+                status=ExecutionState.completed,
+                tn_id=tn_id,
+                artifacts=report_artifacts,
+                vpn_interface=tn_id,
+                vpn_conf_path=vpn_conf_path,
+                vpn_status="MANUAL_REQUIRED",
+                vpn_error=str(vpn_error),
+                message=manual_message,
+            )
+            _schedule_elcm_start_timeout(execution_id)
+            return
+
+        _update(execution_id, vpn_status="UP", message="TN ready and WireGuard tunnel active")
 
         _update(
             execution_id,
@@ -152,6 +278,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             artifacts=report_artifacts,
             message="TN deployment completed with automatic WireGuard tunnel",
         )
+        _schedule_elcm_start_timeout(execution_id)
         logger.info(f"[{execution_id}] TN {tn_id} deployment completed with active WireGuard tunnel.")
 
     except Exception as exc:
@@ -172,12 +299,14 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
                 await destroy_trial_network(tn_id)
             except Exception as cleanup_error:
                 logger.warning(f"[{execution_id}] TN cleanup after TNLCM failure failed: {cleanup_error}")
+    finally:
+        _release_tnlcm_deploy_slot(execution_id)
 
 
 async def run_elcm_phase(execution_id: str) -> None:
     """Phase 2: run ELCM and always cleanup TN at the end."""
     from .artifacts import build_artifacts
-    from .elcm import collect_results, get_experiment_status, run_experiment, upload_test_cases
+    from .elcm import TnLogsNotFoundError, collect_results, get_experiment_status, run_experiment, upload_test_cases
     from .tnlcm import destroy_trial_network, get_tn_status
     from .utils.wireguard import down_tunnel
 
@@ -208,9 +337,10 @@ async def run_elcm_phase(execution_id: str) -> None:
         experiment_ids = [elcm_execution_id]
         _update(execution_id, elcm_execution_id=elcm_execution_id)
 
-        # Poll every 10 seconds until "Finished"
+        # Poll until terminal status using configurable ELCM timing.
         exp_done = False
-        timeout_seconds = 3600  # 1 hour timeout
+        timeout_seconds = ELCM_EXECUTION_TIMEOUT_SECONDS
+        poll_interval_seconds = ELCM_POLL_INTERVAL_SECONDS
         elapsed = 0
 
         while elapsed < timeout_seconds:
@@ -226,8 +356,8 @@ async def run_elcm_phase(execution_id: str) -> None:
             if "Error" in exp_status or "FAILED" in exp_status.upper():
                 raise RuntimeError(f"ELCM execution {elcm_execution_id} failed with status: {exp_status}")
 
-            await asyncio.sleep(10)  # Wait 10 seconds before next poll
-            elapsed += 10
+            await asyncio.sleep(poll_interval_seconds)
+            elapsed += poll_interval_seconds
 
         if not exp_done:
             raise TimeoutError(f"Timeout waiting for ELCM execution {elcm_execution_id} to finish")
@@ -236,10 +366,13 @@ async def run_elcm_phase(execution_id: str) -> None:
         _update(execution_id, status=ExecutionState.collecting, message="Collecting logs")
         try:
             execution_logs = await collect_results(elcm_execution_id)
+        except TnLogsNotFoundError as logs_error:
+            logger.warning(f"ELCM logs not found for {elcm_execution_id}: {logs_error}")
+            raise
         except Exception as logs_error:
             # If logs error, check TN status before failing
             logger.warning(f"Error collecting logs for {elcm_execution_id}: {logs_error}")
-            tn_status = await get_tn_status(tn_id)
+            tn_status = get_tn_status(tn_id)
             logger.info(f"TN {tn_id} status after logs error: {tn_status}")
 
             # If TN is running, logs will be available later, return empty for now
@@ -282,6 +415,7 @@ async def run_elcm_phase(execution_id: str) -> None:
         _update(execution_id, status=ExecutionState.failed, error=str(exc), message=f"Error: {exc}")
 
     finally:
+        _cancel_elcm_start_timeout(execution_id)
         vpn_interface = record.vpn_interface or tn_id
         if vpn_interface:
             try:
@@ -298,21 +432,29 @@ async def run_elcm_phase(execution_id: str) -> None:
         except Exception as cleanup_error:
             logger.warning(f"[{execution_id}] Cleanup failed: {cleanup_error}")
 
+        logger.info("[%s] ELCM phase finalization completed", execution_id)
+
 
 async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionRecord:
     execution_id = descriptor.infrastructure.name.strip()
-    record = ExecutionRecord(
-        execution_id=execution_id,
-        status=ExecutionState.pending,
-        message="Execution created",
-    )
-    executions[execution_id] = record
-    execution_descriptors[execution_id] = descriptor
-    logger.debug("[%s] STATUS NONE -> %s | %s", execution_id, record.status.value, record.message)
-    _save_executions_to_disk()  # Guarda al crear
+    _acquire_tnlcm_deploy_slot(execution_id)
+    _cancel_elcm_start_timeout(execution_id)
+    try:
+        record = ExecutionRecord(
+            execution_id=execution_id,
+            status=ExecutionState.pending,
+            message="Execution created",
+        )
+        executions[execution_id] = record
+        execution_descriptors[execution_id] = descriptor
+        logger.debug("[%s] STATUS NONE -> %s | %s", execution_id, record.status.value, record.message)
+        _save_executions_to_disk()  # Guarda al crear
 
-    asyncio.create_task(run_tnlcm_phase(execution_id, descriptor))
-    return record
+        asyncio.create_task(run_tnlcm_phase(execution_id, descriptor))
+        return record
+    except Exception:
+        _release_tnlcm_deploy_slot(execution_id)
+        raise
 
 
 async def start_elcm_phase(execution_id: str) -> ExecutionRecord:
@@ -323,9 +465,10 @@ async def start_elcm_phase(execution_id: str) -> ExecutionRecord:
         raise ValueError("Descriptor not found for execution")
     if not record.tn_id:
         raise ValueError("TNLCM phase is not ready yet (tn_id missing)")
-    if record.status == ExecutionState.running_experiment:
-        raise ValueError("ELCM phase is already running")
+    if record.status != ExecutionState.completed:
+        raise ValueError("ELCM phase can only be started when TNLCM phase is COMPLETED")
 
+    _cancel_elcm_start_timeout(execution_id)
     _update(execution_id, status=ExecutionState.running_experiment, message="ELCM phase triggered")
     asyncio.create_task(run_elcm_phase(execution_id))
     return executions[execution_id]
