@@ -13,6 +13,10 @@ class WireGuardError(RuntimeError):
     """Raised when WireGuard command execution fails."""
 
 
+class WireGuardManualDeploymentRequired(WireGuardError):
+    """Raised when the user cancels the privileged WireGuard deployment prompt."""
+
+
 def _artifacts_dir_for_execution(execution_id: str) -> Path:
     base = Path(settings.artifacts_dir)
     if not base.is_absolute():
@@ -97,6 +101,10 @@ def _run_helper_elevated(action: str, tn_id: str, conf_path: str) -> None:
         **_hide_window_kwargs(),
     )
     if result.returncode != 0:
+        if _needs_manual_deployment(result):
+            raise WireGuardManualDeploymentRequired(
+                "WireGuard automatic deployment was cancelled by the user; manual VPN deployment is required"
+            )
         _raise_helper_error(action, tn_id, result)
 
 
@@ -105,6 +113,25 @@ def _needs_windows_elevation(result: subprocess.CompletedProcess[str]) -> bool:
     stdout = (result.stdout or "").lower()
     details = f"{stderr} {stdout}"
     return result.returncode != 0 and ("access is denied" in details or "privilege" in details)
+
+
+def _needs_manual_deployment(result: subprocess.CompletedProcess[str]) -> bool:
+    stderr = (result.stderr or "").lower()
+    stdout = (result.stdout or "").lower()
+    details = f"{stderr} {stdout}"
+    return result.returncode == 1223 or any(
+        marker in details
+        for marker in (
+            "canceled by the user",
+            "cancelled by the user",
+            "operation was canceled",
+            "operation was cancelled",
+            "user cancelled",
+            "user canceled",
+            "elevation request was canceled",
+            "elevation request was cancelled",
+        )
+    )
 
 
 def _execute(action: str, tn_id: str, conf_path: str) -> None:
