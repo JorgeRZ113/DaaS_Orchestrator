@@ -54,20 +54,13 @@ TNLCM_TOKEN=changeme
 
 ELCM_URL=http://ip.elcm:5001
 
-REQUEST_TIMEOUT=60
-POLL_INTERVAL=10
-TNLCM_ACTIVATE_TIMEOUT=1800
-TNLCM_ACTIVATE_RETRY_DELAY=5
-TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS=1
-TNLCM_REDEPLOY_DELAY=5
-TNLCM_RECOVERY_DESTROY_DELAY=0
-TNLCM_REPORT_TIMEOUT=300
-
 EXECUTIONS_FILE=./executions.json
 ARTIFACTS_DIR=./artifacts
 EXAMPLES_DIR=./examples
 LOG_LEVEL=INFO
 ```
+
+Nota: la ventana maxima para disparar `POST /executions/{execution_id}/elcm` tras completar TNLCM se define como constante interna en `app/orchestrator.py` (`ELCM_START_TIMEOUT_SECONDS`). Si se supera, el orquestador cancela la ejecucion y ejecuta `destroy/purge` automatico.
 
 ## `examples` y su uso en endpoints
 
@@ -121,6 +114,7 @@ Header requerido para endpoints de ejecucion:
 - Almacena `access_token` y `refresh_token` en memoria (módulo `tnlcm.py`).
 - Los tokens en memoria se usan automáticamente en los headers Bearer de todas las llamadas TNLCM.
 - Si no hay token en memoria, el sistema busca automáticamente `TNLCM_TOKEN` en `.env` como fallback.
+- Si TNLCM no responde en 20 segundos (por ejemplo, VPN no activa), devuelve `504` con aviso para revisar la VPN.
 - No requiere body.
 
 ### `POST /executions/{execution_id}/elcm`
