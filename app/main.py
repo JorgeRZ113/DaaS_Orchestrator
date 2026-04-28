@@ -7,7 +7,12 @@ from fastapi.responses import JSONResponse
 
 from app.config import reload_mutable_settings, settings
 from app.models import DatasetDescriptor, ExecutionRecord, ExecutionResponse
-from app.orchestrator import create_tnlcm_execution, get_execution, start_elcm_phase
+from app.orchestrator import (
+    TnlcmDeploymentInProgressError,
+    create_tnlcm_execution,
+    get_execution,
+    start_elcm_phase,
+)
 
 logging.basicConfig(
     level=settings.log_level,
@@ -81,7 +86,10 @@ async def post_reload_config():
 async def post_execution(descriptor: DatasetDescriptor):
     """Alias compatible: inicia fase TNLCM."""
     logger.info(f"Nueva ejecucion TNLCM solicitada: {descriptor.infrastructure.name}")
-    record = await create_tnlcm_execution(descriptor)
+    try:
+        record = await create_tnlcm_execution(descriptor)
+    except TnlcmDeploymentInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return to_execution_response(record)
 
 
@@ -95,7 +103,10 @@ async def post_execution(descriptor: DatasetDescriptor):
 async def post_execution_tnlcm(descriptor: DatasetDescriptor):
     """Inicia solo la fase TNLCM (deploy y espera de VPN manual)."""
     logger.info(f"Nueva ejecucion TNLCM solicitada: {descriptor.infrastructure.name}")
-    record = await create_tnlcm_execution(descriptor)
+    try:
+        record = await create_tnlcm_execution(descriptor)
+    except TnlcmDeploymentInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return to_execution_response(record)
 
 
@@ -154,10 +165,37 @@ def refresh_tnlcm_token():
 
     try:
         token = login_tnlcm_and_persist_token()
+        logger.info("TNLCM token refreshed and successfully logged in")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "TNLCM login timeout after 20 seconds. "
+                "Verifica la conectividad y que la VPN este activa."
+            ),
+        )
     except httpx.HTTPStatusError as exc:
-        detail = f"TNLCM login failed: HTTP {exc.response.status_code}"
+        upstream_detail = ""
+        try:
+            payload = exc.response.json()
+            if isinstance(payload, dict):
+                upstream_detail = str(
+                    payload.get("message")
+                    or payload.get("detail")
+                    or payload.get("error")
+                    or payload
+                )
+            else:
+                upstream_detail = str(payload)
+        except Exception:
+            upstream_detail = (exc.response.text or "").strip()
+
+        detail = (
+            f"TNLCM login failed: HTTP {exc.response.status_code}. "
+            f"Backend error: {upstream_detail or 'unknown'}"
+        )
         raise HTTPException(status_code=502, detail=detail)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not refresh TNLCM token: {exc}")
