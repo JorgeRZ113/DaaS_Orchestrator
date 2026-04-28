@@ -13,6 +13,19 @@ from app.models import InfrastructureConfig
 
 logger = logging.getLogger(__name__)
 
+# TNLCM timing constants (kept local to this adapter)
+TNLCM_REQUEST_TIMEOUT = 60
+TNLCM_LOGIN_TIMEOUT_SECONDS = 20
+TNLCM_ACTIVATE_MAX_ATTEMPTS = 2
+TNLCM_ACTIVATE_RETRY_BASE_DELAY = 2
+TNLCM_ACTIVATE_RETRY_INCREMENT = 2
+TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS = 1
+TNLCM_REDEPLOY_DELAY = 5
+TNLCM_RECOVERY_DESTROY_DELAY = 0
+TNLCM_ACTIVATE_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
+TNLCM_LEGACY_NON_RETRYABLE_STATUS_CODES = {400, 404, 422}
+TNLCM_LEGACY_ERROR_HINT = "Revise lo indicado por el mensaje de error."
+
 
 # Token storage in memory (populated by login endpoint)
 _tnlcm_access_token: str | None = None
@@ -21,6 +34,111 @@ _tnlcm_refresh_token: str | None = None
 
 class _ActivateNoSuchFileError(Exception):
     """Raised when TNLCM activate fails due to missing file on backend side."""
+
+
+class _ActivateRetryExhaustedError(Exception):
+    """Raised when activate retries are exhausted for retryable errors."""
+
+
+class TnReportDownloadError(RuntimeError):
+    """Base error for TNLCM report download failures."""
+
+
+class TnNotFoundError(TnReportDownloadError):
+    """Raised when report download is requested for a non-existent TN."""
+
+
+class TnNotActivatedError(TnReportDownloadError):
+    """Raised when report download is requested before TN activation."""
+
+
+class TnReportGenerationError(TnReportDownloadError):
+    """Raised when TNLCM fails to generate/read the report artifact."""
+
+
+class TnStatusBadRequestError(RuntimeError):
+    """Raised when TN status request must be treated as a 400 client error."""
+
+
+def _activate_retry_delay_seconds(attempt_number: int) -> int:
+    # attempt_number is 1-based and points to the failed attempt.
+    return TNLCM_ACTIVATE_RETRY_BASE_DELAY + ((attempt_number - 1) * TNLCM_ACTIVATE_RETRY_INCREMENT)
+
+
+async def _activate_with_backoff(
+    request_call,
+    tn_id: str,
+    endpoint_label: str,
+) -> None:
+    for attempt in range(1, TNLCM_ACTIVATE_MAX_ATTEMPTS + 1):
+        try:
+            response = await request_call()
+            _log_http_response("TNLCM", response)
+            response.raise_for_status()
+            return
+        except httpx.HTTPStatusError as exc:
+            _log_http_response("TNLCM", exc.response)
+            if _is_no_such_file_error(exc.response):
+                raise _ActivateNoSuchFileError() from exc
+
+            status_code = exc.response.status_code
+            retryable = status_code in TNLCM_ACTIVATE_RETRYABLE_STATUS_CODES
+            if retryable and attempt < TNLCM_ACTIVATE_MAX_ATTEMPTS:
+                delay_seconds = _activate_retry_delay_seconds(attempt)
+                logger.warning(
+                    "TNLCM %s activate failed for tn_id=%s (HTTP %s). Retry %s/%s in %ss.",
+                    endpoint_label,
+                    tn_id,
+                    status_code,
+                    attempt + 1,
+                    TNLCM_ACTIVATE_MAX_ATTEMPTS,
+                    delay_seconds,
+                )
+                await asyncio.sleep(delay_seconds)
+                continue
+
+            if retryable:
+                detail = _response_error_detail(exc.response)
+                raise _ActivateRetryExhaustedError(
+                    (
+                        f"TNLCM {endpoint_label} activate exhausted retries for tn_id={tn_id} "
+                        f"(HTTP {status_code}). Backend error: {detail or 'unknown'}"
+                    )
+                ) from exc
+            raise
+        except httpx.TimeoutException as exc:
+            if attempt < TNLCM_ACTIVATE_MAX_ATTEMPTS:
+                delay_seconds = _activate_retry_delay_seconds(attempt)
+                logger.warning(
+                    "TNLCM %s activate timeout for tn_id=%s. Retry %s/%s in %ss.",
+                    endpoint_label,
+                    tn_id,
+                    attempt + 1,
+                    TNLCM_ACTIVATE_MAX_ATTEMPTS,
+                    delay_seconds,
+                )
+                await asyncio.sleep(delay_seconds)
+                continue
+            raise _ActivateRetryExhaustedError(
+                f"TNLCM {endpoint_label} activate exhausted retries for tn_id={tn_id} due to timeout"
+            ) from exc
+        except httpx.TransportError as exc:
+            if attempt < TNLCM_ACTIVATE_MAX_ATTEMPTS:
+                delay_seconds = _activate_retry_delay_seconds(attempt)
+                logger.warning(
+                    "TNLCM %s activate transport error for tn_id=%s: %s. Retry %s/%s in %ss.",
+                    endpoint_label,
+                    tn_id,
+                    exc,
+                    attempt + 1,
+                    TNLCM_ACTIVATE_MAX_ATTEMPTS,
+                    delay_seconds,
+                )
+                await asyncio.sleep(delay_seconds)
+                continue
+            raise _ActivateRetryExhaustedError(
+                f"TNLCM {endpoint_label} activate exhausted retries for tn_id={tn_id} due to transport errors"
+            ) from exc
 
 def _log_http_response(service: str, response: httpx.Response) -> None:
     body = ""
@@ -46,6 +164,43 @@ def _log_http_response(service: str, response: httpx.Response) -> None:
         url,
         status_code,
         body,
+    )
+
+
+def _response_error_detail(response: httpx.Response | None) -> str:
+    if response is None:
+        return ""
+
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            for key in ("message", "detail", "error", "errors"):
+                value = payload.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, (dict, list)):
+                    return json.dumps(value)
+                return str(value)
+            return json.dumps(payload)
+        if isinstance(payload, list):
+            return json.dumps(payload)
+        if isinstance(payload, str):
+            return payload
+    except Exception:
+        pass
+
+    return (response.text or "").strip()
+
+
+def _raise_legacy_create_error(response: httpx.Response | None) -> None:
+    status_code = getattr(response, "status_code", "unknown")
+    detail = _response_error_detail(response) or "unknown"
+    if isinstance(status_code, int) and status_code in TNLCM_LEGACY_NON_RETRYABLE_STATUS_CODES:
+        raise RuntimeError(
+            f"TNLCM /legacy (HTTP {status_code}): {detail}. {TNLCM_LEGACY_ERROR_HINT}"
+        )
+    raise RuntimeError(
+        f"TNLCM /legacy failed (HTTP {status_code}): {detail}. {TNLCM_LEGACY_ERROR_HINT}"
     )
 
 
@@ -80,7 +235,7 @@ def login_tnlcm_and_persist_token() -> str:
         "/api/v1/user/login"
     ]
 
-    with httpx.Client(timeout=settings.request_timeout) as client:
+    with httpx.Client(timeout=TNLCM_LOGIN_TIMEOUT_SECONDS) as client:
         response_data: dict[str, Any] | None = None
 
         for path in paths:
@@ -373,6 +528,27 @@ def _legacy_multipart_from_infra(
     return data, files
 
 
+async def _recover_tn_with_destroy_purge(tn_id: str) -> None:
+    """Reusable recovery sequence used before redeploy attempts."""
+    if TNLCM_RECOVERY_DESTROY_DELAY > 0:
+        logger.info(
+            "Waiting %ss before destroying TN %s for recovery",
+            TNLCM_RECOVERY_DESTROY_DELAY,
+            tn_id,
+        )
+        await asyncio.sleep(TNLCM_RECOVERY_DESTROY_DELAY)
+
+    await destroy_trial_network(tn_id)
+
+    if TNLCM_REDEPLOY_DELAY > 0:
+        logger.info(
+            "Waiting %ss after destroy/purge for TN %s before redeploy",
+            TNLCM_REDEPLOY_DELAY,
+            tn_id,
+        )
+        await asyncio.sleep(TNLCM_REDEPLOY_DELAY)
+
+
 async def deploy_trial_network(
     infra: InfrastructureConfig,
     redeploy_attempt: int = 0,
@@ -397,36 +573,7 @@ async def deploy_trial_network(
             create_data = response.json()
         except httpx.HTTPStatusError as exc:
             _log_http_response("TNLCM", exc.response)
-            
-            # If TN already exists in "activated" state, use it as-is
-            if exc.response.status_code == 400:
-                try:
-                    error_data = exc.response.json()
-                    error_msg = error_data.get("message", "").lower()
-                    if "current status: activated" in error_msg:
-                        logger.info(f"TN {infra.name} already exists in 'activated' state, skipping create/activate")
-                        tn_id = infra.name
-                except Exception:
-                    pass
-            
-            # If not the "already activated" case, try fallback
-            if tn_id is None:
-                if exc.response.status_code != 404:
-                    raise
-                fallback_payload = {
-                    "name": infra.name,
-                    "descriptor": _resolve_examples_path(infra.descriptor_path),
-                    "parameters": infra.parameters,
-                }
-                response = await client.post(
-                    f"{settings.tnlcm_url}/api/v1/trial-networks",
-                    json=fallback_payload,
-                    headers=_json_headers(),
-                    timeout=None,
-                )
-                _log_http_response("TNLCM", response)
-                response.raise_for_status()
-                create_data = response.json()
+            _raise_legacy_create_error(exc.response)
 
         if tn_id is None:
             tn_id = _extract_tn_id(create_data or {})
@@ -446,55 +593,29 @@ async def deploy_trial_network(
 
         try:
             try:
-                for attempt in range(2):
-                    response = await client.put(
+                await _activate_with_backoff(
+                    request_call=lambda: client.put(
                         f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/activate",
                         headers=_headers(),
                         timeout=None,
-                    )
-                    _log_http_response("TNLCM", response)
-                    try:
-                        response.raise_for_status()
-                        break
-                    except httpx.HTTPStatusError as exc:
-                        if exc.response.status_code == 500 and attempt == 0:
-                            logger.warning(
-                                "TNLCM activate returned 500 for tn_id=%s; retrying in %s seconds.",
-                                tn_id,
-                                settings.tnlcm_activate_retry_delay,
-                            )
-                            await asyncio.sleep(settings.tnlcm_activate_retry_delay)
-                            continue
-                        if _is_no_such_file_error(exc.response):
-                            raise _ActivateNoSuchFileError() from exc
-                        raise
+                    ),
+                    tn_id=tn_id,
+                    endpoint_label="new",
+                )
             except httpx.HTTPStatusError as exc:
                 _log_http_response("TNLCM", exc.response)
                 # Compatibilidad con despliegues legacy que esperan body con tn_id.
                 if exc.response.status_code in {404, 405}:
-                    for attempt in range(2):
-                        response = await client.post(
+                    await _activate_with_backoff(
+                        request_call=lambda: client.post(
                             f"{settings.tnlcm_url}/api/v1/trial-network/activate",
                             json=activate_payload,
                             headers=_json_headers(),
                             timeout=None,
-                        )
-                        _log_http_response("TNLCM", response)
-                        try:
-                            response.raise_for_status()
-                            break
-                        except httpx.HTTPStatusError as legacy_exc:
-                            if legacy_exc.response.status_code == 500 and attempt == 0:
-                                logger.warning(
-                                    "TNLCM legacy activate returned 500 for tn_id=%s; retrying in %s seconds.",
-                                    tn_id,
-                                    settings.tnlcm_activate_retry_delay,
-                                )
-                                await asyncio.sleep(settings.tnlcm_activate_retry_delay)
-                                continue
-                            if _is_no_such_file_error(legacy_exc.response):
-                                raise _ActivateNoSuchFileError() from legacy_exc
-                            raise
+                        ),
+                        tn_id=tn_id,
+                        endpoint_label="legacy",
+                    )
                 elif exc.response.status_code in {409, 422}:
                     logger.warning(
                         "TNLCM activate returned %s for tn_id=%s; continuing.",
@@ -503,66 +624,116 @@ async def deploy_trial_network(
                     )
                 else:
                     raise
-        except _ActivateNoSuchFileError:
-            if redeploy_attempt >= settings.tnlcm_activate_redeploy_max_attempts:
+        except (_ActivateNoSuchFileError, _ActivateRetryExhaustedError) as activate_error:
+            if redeploy_attempt >= TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS:
                 raise RuntimeError(
-                    "TNLCM activate returned 'No such file or directory' and max redeploy attempts reached"
+                    f"TNLCM activate recovery exhausted for tn_id={tn_id}: {activate_error}"
                 )
 
             logger.warning(
-                "TNLCM activate for tn_id=%s returned missing-file error. Destroying/purging and redeploying (attempt %s/%s).",
+                "TNLCM activate recovery for tn_id=%s. Destroying/purging and redeploying (attempt %s/%s). Cause: %s",
                 tn_id,
                 redeploy_attempt + 1,
-                settings.tnlcm_activate_redeploy_max_attempts,
+                TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS,
+                activate_error,
             )
-            if settings.tnlcm_recovery_destroy_delay > 0:
-                logger.info(f"Waiting {settings.tnlcm_recovery_destroy_delay}s before destroying TN {tn_id} for recovery")
-                await asyncio.sleep(settings.tnlcm_recovery_destroy_delay)
-            await destroy_trial_network(tn_id)
-            if settings.tnlcm_redeploy_delay > 0:
-                await asyncio.sleep(settings.tnlcm_redeploy_delay)
+            await _recover_tn_with_destroy_purge(tn_id)
             return await deploy_trial_network(infra, redeploy_attempt=redeploy_attempt + 1)
 
         logger.info(f"TN created with id: {tn_id}")
         return tn_id
 
 
-async def download_trial_network_report(tn_id: str) -> str:
-    """Download TNLCM deployment report after activation and return raw markdown."""
-    async with httpx.AsyncClient(timeout=None) as client:
-        url = f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/report/download"
-        response = await client.get(
-            url,
-            headers=_headers(),
-            timeout=None,
-        )
-        _log_http_response("TNLCM", response)
-        response.raise_for_status()
-        return _extract_report_markdown(response)
+def download_trial_network_report(tn_id: str) -> str:
+    """Download TNLCM deployment report synchronously and return raw markdown."""
+    url = f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/report/download"
+
+    with httpx.Client(timeout=TNLCM_REQUEST_TIMEOUT) as client:
+        try:
+            response = client.get(
+                url,
+                headers=_headers(),
+                timeout=TNLCM_REQUEST_TIMEOUT,
+            )
+            _log_http_response("TNLCM", response)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _log_http_response("TNLCM", exc.response)
+            status_code = exc.response.status_code
+            if status_code == 404:
+                detail = _response_error_detail(exc.response)
+                raise TnNotFoundError(
+                    (
+                        f"TN {tn_id} does not exist (404) while downloading report. "
+                        f"Backend error: {detail or 'unknown'}"
+                    )
+                ) from exc
+            if status_code == 400:
+                detail = _response_error_detail(exc.response)
+                raise TnNotActivatedError(
+                    (
+                        f"TN {tn_id} is not activated yet (400); report is not available. "
+                        f"Backend error: {detail or 'unknown'}"
+                    )
+                ) from exc
+            if status_code == 500:
+                detail = _response_error_detail(exc.response)
+                raise TnReportGenerationError(
+                    (
+                        f"TNLCM failed to generate/read report for TN {tn_id} "
+                        f"(500 generation/IO error). Backend error: {detail or 'unknown'}"
+                    )
+                ) from exc
+            detail = _response_error_detail(exc.response)
+            raise TnReportDownloadError(
+                (
+                    f"TNLCM report download failed for TN {tn_id} with HTTP {status_code}. "
+                    f"Backend error: {detail or 'unknown'}"
+                )
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise TnReportDownloadError(
+                f"Timeout downloading TNLCM report for TN {tn_id}"
+            ) from exc
+        except httpx.TransportError as exc:
+            raise TnReportDownloadError(
+                f"Transport error downloading TNLCM report for TN {tn_id}: {exc}"
+            ) from exc
+
+    report_markdown = _extract_report_markdown(response)
+    logger.info("TNLCM report ready for tn_id=%s (%s bytes)", tn_id, len(report_markdown.encode("utf-8")))
+    return report_markdown
 
 
-async def get_tn_status(tn_id: str) -> str:
-    """Get Trial Network status (READY, FAILED, DEPLOYING, etc.)."""
-    async with httpx.AsyncClient(timeout=None) as client:
-        paths = [
-            f"/api/v1/trial-networks/{tn_id}",
-        ]
+def get_tn_status(tn_id: str) -> str:
+    """Get Trial Network status synchronously (READY, FAILED, DEPLOYING, etc.)."""
+    url = f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}"
 
-        for path in paths:
-            try:
-                response = await client.get(f"{settings.tnlcm_url}{path}", headers=_headers())
-                _log_http_response("TNLCM", response)
-                response.raise_for_status()
-                data = response.json()
-                status = data.get("status") or data.get("state") or "UNKNOWN"
-                logger.debug(f"TN {tn_id} status: {status}")
-                return status
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 404:
-                    continue
-                raise
+    with httpx.Client(timeout=TNLCM_REQUEST_TIMEOUT) as client:
+        try:
+            response = client.get(
+                url,
+                headers=_headers(),
+                timeout=TNLCM_REQUEST_TIMEOUT,
+            )
+            _log_http_response("TNLCM", response)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _log_http_response("TNLCM", exc.response)
+            if exc.response.status_code == 404:
+                detail = _response_error_detail(exc.response)
+                raise TnStatusBadRequestError(
+                    (
+                        f"TN {tn_id} not found (mapped to 400 client error). "
+                        f"Backend error: {detail or 'unknown'}"
+                    )
+                ) from exc
+            raise
 
-    return "UNKNOWN"
+    data = response.json()
+    status = data.get("status") or data.get("state") or "UNKNOWN"
+    logger.debug(f"TN {tn_id} status: {status}")
+    return status
 
 
 async def destroy_trial_network(tn_id: str) -> None:
