@@ -10,15 +10,16 @@ import httpx
 
 from app.config import settings
 from app.models import InfrastructureConfig
+from app.utils.telemetry import telemetry
 
 logger = logging.getLogger(__name__)
 
 # TNLCM timing constants (kept local to this adapter)
 TNLCM_REQUEST_TIMEOUT = 60
 TNLCM_LOGIN_TIMEOUT_SECONDS = 20
-TNLCM_ACTIVATE_MAX_ATTEMPTS = 2
-TNLCM_ACTIVATE_RETRY_BASE_DELAY = 2
-TNLCM_ACTIVATE_RETRY_INCREMENT = 2
+TNLCM_ACTIVATE_MAX_ATTEMPTS = 3
+TNLCM_ACTIVATE_RETRY_BASE_DELAY = 1
+TNLCM_ACTIVATE_RETRY_INCREMENT = 1
 TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS = 1
 TNLCM_REDEPLOY_DELAY = 5
 TNLCM_RECOVERY_DESTROY_DELAY = 0
@@ -69,21 +70,36 @@ async def _activate_with_backoff(
     request_call,
     tn_id: str,
     endpoint_label: str,
+    execution_id: str | None = None,
 ) -> None:
+    from app.utils.telemetry import telemetry
+
+    activate_timer = telemetry.start_timer("tnlcm", "activate", execution_id=execution_id)
+    activate_timer.start()
+    telemetry.log_event("info", "tnlcm.activate.started", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id)
+    
     for attempt in range(1, TNLCM_ACTIVATE_MAX_ATTEMPTS + 1):
         try:
+            telemetry.increment_counter("tnlcm_activate_attempts", labels={"service": "tnlcm"})
             response = await request_call()
             _log_http_response("TNLCM", response)
             response.raise_for_status()
+            activate_timer.stop(status="success")
+            telemetry.log_event("info", "tnlcm.activate.completed", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, attempt=attempt)
+            telemetry.increment_counter("tnlcm_activate_total", labels={"service": "tnlcm", "status": "success"})
             return
         except httpx.HTTPStatusError as exc:
             _log_http_response("TNLCM", exc.response)
             if _is_no_such_file_error(exc.response):
+                activate_timer.stop(status="error")
+                telemetry.log_event("error", "tnlcm.activate.failed", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, error="no_such_file", attempt=attempt)
+                telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "activate"})
                 raise _ActivateNoSuchFileError() from exc
 
             status_code = exc.response.status_code
             retryable = status_code in TNLCM_ACTIVATE_RETRYABLE_STATUS_CODES
             if retryable and attempt < TNLCM_ACTIVATE_MAX_ATTEMPTS:
+                telemetry.increment_counter("retries_total", labels={"service": "tnlcm", "operation": "activate"})
                 delay_seconds = _activate_retry_delay_seconds(attempt)
                 logger.warning(
                     "TNLCM %s activate failed for tn_id=%s (HTTP %s). Retry %s/%s in %ss.",
@@ -94,20 +110,28 @@ async def _activate_with_backoff(
                     TNLCM_ACTIVATE_MAX_ATTEMPTS,
                     delay_seconds,
                 )
+                telemetry.log_event("warning", "tnlcm.activate.retry", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, status_code=status_code, attempt=attempt, next_retry_in_seconds=delay_seconds)
                 await asyncio.sleep(delay_seconds)
                 continue
 
             if retryable:
+                activate_timer.stop(status="error")
                 detail = _response_error_detail(exc.response)
+                telemetry.log_event("error", "tnlcm.activate.exhausted", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, status_code=status_code, attempt=attempt, error=detail)
+                telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "activate"})
                 raise _ActivateRetryExhaustedError(
                     (
                         f"TNLCM {endpoint_label} activate exhausted retries for tn_id={tn_id} "
                         f"(HTTP {status_code}). Backend error: {detail or 'unknown'}"
                     )
                 ) from exc
+            activate_timer.stop(status="error")
+            telemetry.log_event("error", "tnlcm.activate.failed", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, status_code=status_code, attempt=attempt)
+            telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "activate"})
             raise
         except httpx.TimeoutException as exc:
             if attempt < TNLCM_ACTIVATE_MAX_ATTEMPTS:
+                telemetry.increment_counter("retries_total", labels={"service": "tnlcm", "operation": "activate"})
                 delay_seconds = _activate_retry_delay_seconds(attempt)
                 logger.warning(
                     "TNLCM %s activate timeout for tn_id=%s. Retry %s/%s in %ss.",
@@ -117,13 +141,18 @@ async def _activate_with_backoff(
                     TNLCM_ACTIVATE_MAX_ATTEMPTS,
                     delay_seconds,
                 )
+                telemetry.log_event("warning", "tnlcm.activate.timeout", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, attempt=attempt, next_retry_in_seconds=delay_seconds)
                 await asyncio.sleep(delay_seconds)
                 continue
+            activate_timer.stop(status="error")
+            telemetry.log_event("error", "tnlcm.activate.timeout.exhausted", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, attempt=attempt)
+            telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "activate"})
             raise _ActivateRetryExhaustedError(
                 f"TNLCM {endpoint_label} activate exhausted retries for tn_id={tn_id} due to timeout"
             ) from exc
         except httpx.TransportError as exc:
             if attempt < TNLCM_ACTIVATE_MAX_ATTEMPTS:
+                telemetry.increment_counter("retries_total", labels={"service": "tnlcm", "operation": "activate"})
                 delay_seconds = _activate_retry_delay_seconds(attempt)
                 logger.warning(
                     "TNLCM %s activate transport error for tn_id=%s: %s. Retry %s/%s in %ss.",
@@ -134,11 +163,16 @@ async def _activate_with_backoff(
                     TNLCM_ACTIVATE_MAX_ATTEMPTS,
                     delay_seconds,
                 )
+                telemetry.log_event("warning", "tnlcm.activate.transport_error", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, attempt=attempt, error=str(exc), next_retry_in_seconds=delay_seconds)
                 await asyncio.sleep(delay_seconds)
                 continue
+            activate_timer.stop(status="error")
+            telemetry.log_event("error", "tnlcm.activate.transport_error.exhausted", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, attempt=attempt, error=str(exc))
+            telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "activate"})
             raise _ActivateRetryExhaustedError(
                 f"TNLCM {endpoint_label} activate exhausted retries for tn_id={tn_id} due to transport errors"
             ) from exc
+
 
 def _log_http_response(service: str, response: httpx.Response) -> None:
     body = ""
@@ -205,10 +239,10 @@ def _raise_legacy_create_error(response: httpx.Response | None) -> None:
 
 
 def _headers() -> dict[str, str]:
-    """Build headers using in-memory token (from login) or fallback to .env token."""
-    token = _tnlcm_access_token or settings.tnlcm_token.strip()
+    """Build headers using the token stored in memory by /tnlcm/token/refresh."""
+    token = _tnlcm_access_token.strip() if _tnlcm_access_token else ""
     if not token:
-        raise ValueError("TNLCM_TOKEN is not set. Use /tnlcm/token/refresh to login.")
+        raise ValueError("TNLCM access token is not loaded in memory. Call /tnlcm/token/refresh first.")
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
@@ -552,11 +586,19 @@ async def _recover_tn_with_destroy_purge(tn_id: str) -> None:
 async def deploy_trial_network(
     infra: InfrastructureConfig,
     redeploy_attempt: int = 0,
+    execution_id: str | None = None,
 ) -> str:
     """Create TN and trigger activate. Returns tn_id."""
+    from app.utils.telemetry import telemetry
+
     async with httpx.AsyncClient(timeout=None) as client:
         create_data: dict[str, Any] | None = None
         tn_id: str | None = None
+
+        # Medir duración de CREATE
+        create_timer = telemetry.start_timer("tnlcm", "create", execution_id=execution_id)
+        create_timer.start()
+        telemetry.log_event("info", "tnlcm.create.api_call.started", service="tnlcm", operation="create", execution_id=execution_id)
 
         # Preferred endpoint from project steps
         try:
@@ -573,7 +615,14 @@ async def deploy_trial_network(
             create_data = response.json()
         except httpx.HTTPStatusError as exc:
             _log_http_response("TNLCM", exc.response)
+            create_timer.stop(status="error")
+            telemetry.log_event("error", "tnlcm.create.api_call.failed", service="tnlcm", operation="create", execution_id=execution_id)
+            telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "create"})
             _raise_legacy_create_error(exc.response)
+
+        create_timer.stop(status="success")
+        telemetry.log_event("info", "tnlcm.create.api_call.completed", service="tnlcm", operation="create", execution_id=execution_id)
+        telemetry.increment_counter("tnlcm_create_api_total", labels={"service": "tnlcm"})
 
         if tn_id is None:
             tn_id = _extract_tn_id(create_data or {})
@@ -601,6 +650,7 @@ async def deploy_trial_network(
                     ),
                     tn_id=tn_id,
                     endpoint_label="new",
+                    execution_id=execution_id,
                 )
             except httpx.HTTPStatusError as exc:
                 _log_http_response("TNLCM", exc.response)
@@ -615,6 +665,7 @@ async def deploy_trial_network(
                         ),
                         tn_id=tn_id,
                         endpoint_label="legacy",
+                        execution_id=execution_id,
                     )
                 elif exc.response.status_code in {409, 422}:
                     logger.warning(
@@ -638,8 +689,9 @@ async def deploy_trial_network(
                 activate_error,
             )
             await _recover_tn_with_destroy_purge(tn_id)
-            return await deploy_trial_network(infra, redeploy_attempt=redeploy_attempt + 1)
+            return await deploy_trial_network(infra, redeploy_attempt=redeploy_attempt + 1, execution_id=execution_id)
 
+        telemetry.log_event("info", "tnlcm.deploy.completed", service="tnlcm", operation="deploy", execution_id=execution_id, tn_id=tn_id)
         logger.info(f"TN created with id: {tn_id}")
         return tn_id
 
@@ -647,7 +699,9 @@ async def deploy_trial_network(
 def download_trial_network_report(tn_id: str) -> str:
     """Download TNLCM deployment report synchronously and return raw markdown."""
     url = f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/report/download"
-
+    telemetry.increment_counter("requests_total", labels={"service": "tnlcm", "operation": "download_report"})
+    report_timer = telemetry.start_timer("tnlcm", "download_report", telemetry.ensure_execution_id())
+    report_timer.start()
     with httpx.Client(timeout=TNLCM_REQUEST_TIMEOUT) as client:
         try:
             response = client.get(
@@ -702,6 +756,10 @@ def download_trial_network_report(tn_id: str) -> str:
 
     report_markdown = _extract_report_markdown(response)
     logger.info("TNLCM report ready for tn_id=%s (%s bytes)", tn_id, len(report_markdown.encode("utf-8")))
+    try:
+        report_timer.stop(status="success")
+    except Exception:
+        pass
     return report_markdown
 
 
@@ -738,8 +796,12 @@ def get_tn_status(tn_id: str) -> str:
 
 async def destroy_trial_network(tn_id: str) -> None:
     """Destroy and purge TN using DELETE endpoints."""
+    telemetry.increment_counter("requests_total", labels={"service": "tnlcm", "operation": "destroy"})
+    destroy_timer = telemetry.start_timer("tnlcm", "destroy", telemetry.ensure_execution_id())
+    destroy_timer.start()
     async with httpx.AsyncClient(timeout=None) as client:
         # First destroy
+        destroy_ok = False
         try:
             response = await client.delete(
                 f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/destroy",
@@ -749,12 +811,21 @@ async def destroy_trial_network(tn_id: str) -> None:
             _log_http_response("TNLCM", response)
             response.raise_for_status()
             logger.info(f"TN {tn_id} destroyed successfully")
+            destroy_ok = True
         except httpx.HTTPStatusError as exc:
             _log_http_response("TNLCM", exc.response)
             if exc.response.status_code != 404:
                 logger.warning(f"Failed to destroy TN {tn_id}: {exc}")
 
+        try:
+            destroy_timer.stop(status="success" if destroy_ok else "error")
+        except Exception:
+            pass
+
         # Then purge
+        purged_timer = telemetry.start_timer("tnlcm", "purged", telemetry.ensure_execution_id())
+        purged_timer.start()
+        purge_ok = False
         try:
             response = await client.delete(
                 f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/purge",
@@ -764,20 +835,25 @@ async def destroy_trial_network(tn_id: str) -> None:
             _log_http_response("TNLCM", response)
             response.raise_for_status()
             logger.info(f"TN {tn_id} purged successfully")
+            purge_ok = True
         except httpx.HTTPStatusError as exc:
             _log_http_response("TNLCM", exc.response)
             if exc.response.status_code != 404:
                 logger.warning(f"Failed to purge TN {tn_id}: {exc}")
+        try:
+            purged_timer.stop(status="success" if purge_ok else "error")
+        except Exception:
+            pass
 
 
 def extract_elcm_url_from_report(report_summary: dict[str, Any]) -> str | None:
     """
     Extract ELCM backend URL from trial network report summary.
-    
-    Looks for ELCM component in the components dict and builds URL from IP and port.
-    Falls back to settings.elcm_url if not found in report.
-    
-    Returns: "http://ip:port" or None if not found
+
+    Looks for a component whose name contains "elcm" (for example: elcm-exp),
+    then builds URL from its first IP using the fixed backend port 5001.
+
+    Returns: "http://ip:port" or None if it cannot be resolved
     """
     if not report_summary or not isinstance(report_summary, dict):
         return None
@@ -786,19 +862,15 @@ def extract_elcm_url_from_report(report_summary: dict[str, Any]) -> str | None:
     if not components:
         return None
     
-    # Look for ELCM component (could be "ELCM", "elcm", "ELCM Backend", etc.)
+    # Look for ELCM component (for example: ELCM, elcm-exp, ...)
     for component_name, component_data in components.items():
-        if "elcm" in component_name.lower() and "backend" in component_name.lower():
+        if "elcm" in component_name.lower():
             comp_dict = component_data
             if isinstance(component_data, dict):
-                # Try to extract IP and port
                 ips = comp_dict.get("ips", [])
-                ports = comp_dict.get("ports", [])
-                
-                if ips and ports:
-                    ip = ips[0]  # Use first IP
-                    port = ports[0]  # Use first port (backend port)
-                    url = f"http://{ip}:{port}"
+                if ips:
+                    ip = str(ips[0]).strip()
+                    url = f"http://{ip}:5001"
                     logger.info(f"Extracted ELCM URL from report: {url}")
                     return url
     
