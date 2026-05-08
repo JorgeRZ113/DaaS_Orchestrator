@@ -20,7 +20,6 @@ variables:
   TNLCM_URL: "http://localhost:5000"
   TNLCM_USER: "dummy"
   TNLCM_PASSWORD: "dummy"
-  TNLCM_TOKEN: "dummy"
   ELCM_URL: "http://localhost:8080"
   EXECUTIONS_FILE: "$CI_PROJECT_DIR/.cache/executions.json"
   ARTIFACTS_DIR: "$CI_PROJECT_DIR/.cache/artifacts"
