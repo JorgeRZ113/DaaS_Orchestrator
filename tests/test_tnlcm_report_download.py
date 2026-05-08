@@ -6,6 +6,17 @@ import pytest
 from app import tnlcm
 
 
+@pytest.fixture(autouse=True)
+def _load_in_memory_token():
+    previous_access = tnlcm._tnlcm_access_token
+    previous_refresh = tnlcm._tnlcm_refresh_token
+    tnlcm._tnlcm_access_token = "test-token"
+    tnlcm._tnlcm_refresh_token = None
+    yield
+    tnlcm._tnlcm_access_token = previous_access
+    tnlcm._tnlcm_refresh_token = previous_refresh
+
+
 class _FakeClient:
     def __init__(self, response: httpx.Response):
         self._response = response

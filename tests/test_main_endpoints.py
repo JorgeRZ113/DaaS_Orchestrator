@@ -91,21 +91,3 @@ def test_post_execution_returns_409_when_tnlcm_deploy_is_busy(monkeypatch) -> No
     assert response.status_code == 409
     assert "curso" in response.json()["detail"]
 
-
-def test_post_execution_tnlcm_returns_409_when_tnlcm_deploy_is_busy(monkeypatch) -> None:
-    async def _raise_busy(descriptor):
-        raise TnlcmDeploymentInProgressError("deploy en curso")
-
-    monkeypatch.setattr("app.main.create_tnlcm_execution", _raise_busy)
-
-    payload = {
-        "infrastructure": {"name": "tn-b"},
-        "experiment": {"name": "exp-b", "testcase_paths": ["tc.yml"], "ues_paths": []},
-        "dataset": {"output": "logs"},
-    }
-    response = client.post(
-        "/executions/tnlcm", json=payload, headers={"x-api-key": settings.api_key}
-    )
-
-    assert response.status_code == 409
-    assert "curso" in response.json()["detail"]

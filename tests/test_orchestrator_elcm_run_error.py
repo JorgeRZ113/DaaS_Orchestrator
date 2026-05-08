@@ -2,6 +2,7 @@ import pytest
 
 from app import elcm
 from app import orchestrator
+from app.config import settings
 from app.models import (
     DatasetDescriptor,
     ExecutionRecord,
@@ -12,11 +13,13 @@ from app.models import (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_orchestrator_state(monkeypatch):
+def _isolate_orchestrator_state(monkeypatch, tmp_path):
+    previous_artifacts_dir = settings.artifacts_dir
     previous_executions = orchestrator.executions.copy()
     previous_descriptors = orchestrator.execution_descriptors.copy()
     previous_watchdogs = orchestrator.elcm_start_watchdogs.copy()
 
+    settings.artifacts_dir = str(tmp_path)
     orchestrator.executions.clear()
     orchestrator.execution_descriptors.clear()
     orchestrator.elcm_start_watchdogs.clear()
@@ -31,6 +34,7 @@ def _isolate_orchestrator_state(monkeypatch):
     orchestrator.executions.clear()
     orchestrator.execution_descriptors.clear()
     orchestrator.elcm_start_watchdogs.clear()
+    settings.artifacts_dir = previous_artifacts_dir
 
     orchestrator.executions.update(previous_executions)
     orchestrator.execution_descriptors.update(previous_descriptors)
@@ -42,10 +46,10 @@ async def test_run_elcm_phase_run_error_is_propagated_without_retry(monkeypatch,
     execution_id = "tn-elcm-error"
     call_count = {"run_experiment": 0}
 
-    async def _fake_upload_test_cases(testcase_paths):
+    async def _fake_upload_test_cases(testcase_paths, elcm_base_url=None, execution_id=None):
         return None
 
-    async def _fake_run_experiment(experiment):
+    async def _fake_run_experiment(experiment, elcm_base_url=None, execution_id=None):
         call_count["run_experiment"] += 1
         raise RuntimeError(
             "ELCM /experiment/run (HTTP 400): descriptor invalido. "
@@ -75,6 +79,7 @@ async def test_run_elcm_phase_run_error_is_propagated_without_retry(monkeypatch,
         execution_id=execution_id,
         status=ExecutionState.completed,
         tn_id=execution_id,
+        elcm_base_url="http://192.168.199.3:5000",
         vpn_interface=execution_id,
         vpn_status="UP",
         message="TN deployment completed",
@@ -97,13 +102,13 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
     execution_id = "tn-upload-error"
     call_count = {"upload_test_cases": 0, "run_experiment": 0}
 
-    async def _fake_upload_test_cases(testcase_paths):
+    async def _fake_upload_test_cases(testcase_paths, elcm_base_url=None, execution_id=None):
         call_count["upload_test_cases"] += 1
         raise elcm.TnUploadTestCaseError(
             "ELCM upload_test_case failed for TestCase_ping.yml (HTTP 400). Backend error: user_id ausente/invalido. Corrija lo indicado por el mensaje de error antes de volver a lanzar la parte de ELCM."
         )
 
-    async def _fake_run_experiment(experiment):
+    async def _fake_run_experiment(experiment, elcm_base_url=None, execution_id=None):
         call_count["run_experiment"] += 1
         return "exp-never-called"
 
@@ -129,6 +134,7 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
         execution_id=execution_id,
         status=ExecutionState.completed,
         tn_id=execution_id,
+        elcm_base_url="http://192.168.199.3:5000",
         vpn_interface=execution_id,
         vpn_status="UP",
         message="TN deployment completed",
@@ -150,16 +156,16 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
     execution_id = "tn-elcm-not-found"
     call_count = {"get_tn_status": 0}
 
-    async def _fake_upload_test_cases(testcase_paths):
+    async def _fake_upload_test_cases(testcase_paths, elcm_base_url=None, execution_id=None):
         return None
 
-    async def _fake_run_experiment(experiment):
+    async def _fake_run_experiment(experiment, elcm_base_url=None, execution_id=None):
         return "exp-404"
 
-    async def _fake_get_experiment_status(experiment_id):
+    async def _fake_get_experiment_status(experiment_id, elcm_base_url=None, execution_id=None):
         return "Finished"
 
-    async def _fake_collect_results(experiment_id):
+    async def _fake_collect_results(experiment_id, elcm_base_url=None, execution_id=None):
         raise elcm.TnLogsNotFoundError(
             "ELCM reports execution exp-404 as not found in logs. El experimento no se ha podido hacer y hay que repetirlo."
         )
@@ -197,6 +203,7 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
         execution_id=execution_id,
         status=ExecutionState.completed,
         tn_id=execution_id,
+        elcm_base_url="http://192.168.199.3:5000",
         vpn_interface=execution_id,
         vpn_status="UP",
         message="TN deployment completed",

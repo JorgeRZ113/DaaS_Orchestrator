@@ -7,6 +7,9 @@ from app import elcm
 from app.models import ExperimentConfig
 
 
+ELCM_BASE_URL = "http://elcm.local"
+
+
 class _FakeAsyncClient:
     def __init__(self, response: httpx.Response):
         self._response = response
@@ -69,7 +72,10 @@ async def test_run_experiment_success_200_returns_execution_id(monkeypatch, tmp_
     monkeypatch.setattr(elcm.httpx, "AsyncClient", lambda timeout=None: fake_client)
     monkeypatch.setattr(elcm, "_resolve_examples_path", lambda _: descriptor_path)
 
-    execution_id = await elcm.run_experiment(ExperimentConfig(name="exp-ok"))
+    execution_id = await elcm.run_experiment(
+        ExperimentConfig(name="exp-ok"),
+        elcm_base_url=ELCM_BASE_URL,
+    )
 
     assert execution_id == "321"
     assert len(fake_client.post_calls) == 1
@@ -97,7 +103,10 @@ async def test_run_experiment_400_does_not_retry_and_includes_backend_error_hint
     monkeypatch.setattr(elcm, "_resolve_examples_path", lambda _: descriptor_path)
 
     with pytest.raises(RuntimeError) as exc_info:
-        await elcm.run_experiment(ExperimentConfig(name="exp-fail"))
+        await elcm.run_experiment(
+            ExperimentConfig(name="exp-fail"),
+            elcm_base_url=ELCM_BASE_URL,
+        )
 
     message = str(exc_info.value)
     assert backend_message in message
@@ -115,7 +124,7 @@ async def test_collect_results_logs_successfully_extracted_logs(monkeypatch, cap
     monkeypatch.setattr(elcm.httpx, "AsyncClient", lambda timeout=None: fake_client)
     caplog.set_level("INFO")
 
-    result = await elcm.collect_results("exp-123")
+    result = await elcm.collect_results("exp-123", elcm_base_url=ELCM_BASE_URL)
 
     assert result["experiment_id"] == "exp-123"
     assert result["output"] == "logs"
@@ -132,7 +141,7 @@ async def test_collect_results_200_not_found_fails_without_retry(monkeypatch):
     monkeypatch.setattr(elcm.httpx, "AsyncClient", lambda timeout=None: fake_client)
 
     with pytest.raises(elcm.TnLogsNotFoundError) as exc_info:
-        await elcm.collect_results("exp-404")
+        await elcm.collect_results("exp-404", elcm_base_url=ELCM_BASE_URL)
 
     message = str(exc_info.value)
     assert "exp-404" in message
@@ -151,7 +160,7 @@ async def test_upload_test_cases_logs_success_on_200(monkeypatch, tmp_path, capl
     monkeypatch.setattr(elcm, "_resolve_examples_path", lambda _: str(testcase_path))
     caplog.set_level("INFO")
 
-    await elcm.upload_test_cases(["TestCase_ping.yml"])
+    await elcm.upload_test_cases(["TestCase_ping.yml"], elcm_base_url=ELCM_BASE_URL)
 
     assert len(fake_client.post_calls) == 1
     assert fake_client.post_calls[0].endswith("/elcm/api/v1/facility/upload_test_case")
@@ -183,7 +192,7 @@ async def test_upload_test_cases_fails_without_retry_and_reports_backend_error(
     monkeypatch.setattr(elcm, "_resolve_examples_path", lambda _: str(testcase_path))
 
     with pytest.raises(elcm.TnUploadTestCaseError) as exc_info:
-        await elcm.upload_test_cases(["TestCase_ping.yml"])
+        await elcm.upload_test_cases(["TestCase_ping.yml"], elcm_base_url=ELCM_BASE_URL)
 
     message = str(exc_info.value)
     assert backend_message in message

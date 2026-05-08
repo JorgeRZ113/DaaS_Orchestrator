@@ -47,5 +47,5 @@ def test_refresh_endpoint_returns_token_preview(monkeypatch) -> None:
     )
 
     assert response.status_code == 200
-    assert response.json()["message"].startswith("TNLCM token refreshed")
+    assert response.json()["message"] == "TNLCM token refreshed and stored in memory"
     assert response.json()["token_preview"].startswith("abcdefghijkl")

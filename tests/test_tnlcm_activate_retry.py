@@ -49,7 +49,7 @@ async def test_activate_with_backoff_exhausts_retryable_failures(monkeypatch):
         await tnlcm._activate_with_backoff(_request_call, "tn-demo", "legacy")
 
     assert attempts["count"] == tnlcm.TNLCM_ACTIVATE_MAX_ATTEMPTS
-    assert sleeps == [tnlcm.TNLCM_ACTIVATE_RETRY_BASE_DELAY]
+    assert sleeps == [1, 2]  # First retry 1s, second retry 2s
 
 
 @pytest.mark.asyncio
