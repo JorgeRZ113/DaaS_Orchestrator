@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class ExecutionState(str, Enum):
@@ -118,6 +118,10 @@ class DatasetDescriptor(BaseModel):
     infrastructure: InfrastructureConfig
     experiment: ExperimentConfig
     dataset: DatasetRequest = Field(default_factory=DatasetRequest)
+    auto_start_elcm: bool = Field(
+        default=True,
+        description="Si True, inicia automáticamente ELCM al completar TNLCM"
+    )
 
 
 class TnInitInfo(BaseModel):
@@ -186,8 +190,10 @@ class ExecutionRecord(BaseModel):
     experiment_id: Optional[str] = None
     experiment_ids: List[str] = Field(default_factory=list)
     elcm_execution_id: Optional[str] = None  # ID de la ejecución en ELCM
+    elcm_base_url: Optional[str] = None
     artifacts: List[str] = Field(default_factory=list)
     error: Optional[str] = None
+    _execution_timer: Any = PrivateAttr(default=None)
 
 
 class ExecutionResponse(BaseModel):
