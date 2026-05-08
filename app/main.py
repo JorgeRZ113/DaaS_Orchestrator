@@ -13,6 +13,7 @@ from app.orchestrator import (
     get_execution,
     start_elcm_phase,
 )
+from app.utils.telemetry import format_duration_display, telemetry
 
 logging.basicConfig(
     level=settings.log_level,
@@ -84,30 +85,38 @@ async def post_reload_config():
     dependencies=[Depends(verify_api_key)],
 )
 async def post_execution(descriptor: DatasetDescriptor):
-    """Alias compatible: inicia fase TNLCM."""
-    logger.info(f"Nueva ejecucion TNLCM solicitada: {descriptor.infrastructure.name}")
+    """Inicia una ejecución completa: TNLCM y opcionalmente ELCM (auto-start).
+
+    Si descriptor.auto_start_elcm=true (por defecto), ELCM se inicia automáticamente
+    al completar TNLCM. Establecer auto_start_elcm=false para control manual del flujo.
+    """
+    execution_id = descriptor.infrastructure.name.strip()
+    telemetry.increment_counter("requests_total", labels={"service": "orchestrator", "operation": "create"})
+    telemetry.log_event("info", "request.received", service="orchestrator", operation="create", execution_id=execution_id)
+    timer = telemetry.start_timer("orchestrator", "create", execution_id)
+    timer.start()
+    request_status = "success"
+    record = None
+    logger.info(f"Nueva ejecucion solicitada (auto_elcm={descriptor.auto_start_elcm}): {descriptor.infrastructure.name}")
     try:
         record = await create_tnlcm_execution(descriptor)
+        return to_execution_response(record)
     except TnlcmDeploymentInProgressError as exc:
+        request_status = "error"
+        telemetry.increment_counter("errors_total", labels={"service": "orchestrator", "operation": "create", "error_type": "tnlcm_deploy_in_progress"})
         raise HTTPException(status_code=409, detail=str(exc))
-    return to_execution_response(record)
-
-
-@app.post(
-    "/executions/tnlcm",
-    response_model=ExecutionResponse,
-    status_code=202,
-    tags=["executions"],
-    dependencies=[Depends(verify_api_key)],
-)
-async def post_execution_tnlcm(descriptor: DatasetDescriptor):
-    """Inicia solo la fase TNLCM (deploy y espera de VPN manual)."""
-    logger.info(f"Nueva ejecucion TNLCM solicitada: {descriptor.infrastructure.name}")
-    try:
-        record = await create_tnlcm_execution(descriptor)
-    except TnlcmDeploymentInProgressError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    return to_execution_response(record)
+    except Exception:
+        request_status = "error"
+        raise
+    finally:
+        try:
+            duration = timer.stop(status=request_status)
+            payload = {"service": "orchestrator", "operation": "create", "execution_id": execution_id}
+            if duration >= 1.0:
+                payload["duration_display"] = format_duration_display(duration)
+            telemetry.log_event("info", "request.completed", **payload)
+        except Exception:
+            pass
 
 
 @app.post(
@@ -118,7 +127,11 @@ async def post_execution_tnlcm(descriptor: DatasetDescriptor):
     dependencies=[Depends(verify_api_key)],
 )
 async def post_execution_elcm(execution_id: str):
-    """Dispara la fase ELCM y cleanup final de la TN."""
+    """Dispara manualmente la fase ELCM y cleanup final de la TN.
+    
+    Útil cuando descriptor.auto_start_elcm=false. Si ELCM ya está en progreso,
+    devuelve el estado actual sin error.
+    """
     try:
         record = await start_elcm_phase(execution_id)
     except ValueError as exc:
@@ -160,7 +173,7 @@ async def get_execution_detail(execution_id: str):
     dependencies=[Depends(verify_api_key)],
 )
 def refresh_tnlcm_token():
-    """Genera token TNLCM con user/password de .env y lo guarda en .env."""
+    """Genera token TNLCM con user/password de .env y lo guarda en memoria."""
     from app.tnlcm import login_tnlcm_and_persist_token
 
     try:
@@ -203,7 +216,7 @@ def refresh_tnlcm_token():
     # Return only a safe preview, not the full token.
     preview = f"{token[:12]}...{token[-6:]}" if len(token) > 20 else "[token-set]"
     return {
-        "message": "TNLCM token refreshed and saved in .env",
+        "message": "TNLCM token refreshed and stored in memory",
         "token_preview": preview,
     }
 
