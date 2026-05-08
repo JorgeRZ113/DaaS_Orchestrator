@@ -77,4 +77,3 @@ def test_extract_elcm_url_from_report_returns_none_when_component_missing() -> N
     }
 
     assert tnlcm.extract_elcm_url_from_report(report_summary) is None
-

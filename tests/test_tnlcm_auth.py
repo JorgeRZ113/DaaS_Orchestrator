@@ -26,4 +26,3 @@ def test_headers_use_in_memory_token() -> None:
 
     assert headers["Authorization"] == "Bearer abc123token"
     assert headers["Accept"] == "application/json"
-

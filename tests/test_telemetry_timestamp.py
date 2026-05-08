@@ -42,4 +42,3 @@ def test_telemetry_log_event_uses_correct_timestamp_format(caplog, tmp_path) -> 
                     pass
     finally:
         settings.artifacts_dir = previous
-

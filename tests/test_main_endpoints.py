@@ -90,4 +90,3 @@ def test_post_execution_returns_409_when_tnlcm_deploy_is_busy(monkeypatch) -> No
 
     assert response.status_code == 409
     assert "curso" in response.json()["detail"]
-

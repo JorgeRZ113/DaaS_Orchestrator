@@ -30,4 +30,3 @@ def test_telemetry_appends_to_single_file(tmp_path) -> None:
         assert last.get("service") == "test"
     finally:
         settings.artifacts_dir = prev
-

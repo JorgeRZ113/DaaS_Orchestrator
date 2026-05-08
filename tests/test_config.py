@@ -24,7 +24,9 @@ def test_reload_mutable_settings_updates_telemetry_report_flag(monkeypatch) -> N
     try:
         # Force current runtime value and simulate .env reloading to opposite value.
         config.settings.telemetry_report_artifacts = True
-        monkeypatch.setattr(config, "dotenv_values", lambda _path: {"TELEMETRY_REPORT_ARTIFACTS": "false"})
+        monkeypatch.setattr(
+            config, "dotenv_values", lambda _path: {"TELEMETRY_REPORT_ARTIFACTS": "false"}
+        )
 
         result = config.reload_mutable_settings()
 
@@ -32,4 +34,3 @@ def test_reload_mutable_settings_updates_telemetry_report_flag(monkeypatch) -> N
         assert config.settings.telemetry_report_artifacts is False
     finally:
         config.settings.telemetry_report_artifacts = previous
-

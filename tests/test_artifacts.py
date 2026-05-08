@@ -38,7 +38,9 @@ def test_build_artifacts_generates_logs_and_metadata(tmp_path) -> None:
     assert metadata["tn_id"] == "tn-demo"
     assert metadata["output"] == "logs"
     assert metadata["testcases_count"] == 2
-    assert TIMESTAMP_PATTERN.match(metadata["generated_at"]), f"Invalid timestamp format: {metadata['generated_at']}"
+    assert TIMESTAMP_PATTERN.match(
+        metadata["generated_at"]
+    ), f"Invalid timestamp format: {metadata['generated_at']}"
     assert logs == [{"line": "ok"}]
 
 
@@ -77,7 +79,9 @@ def test_build_telemetry_report_artifact_is_created(tmp_path) -> None:
     telemetry.reset()
 
     try:
-        telemetry.increment_counter("requests_total", labels={"service": "tests", "operation": "artifact"})
+        telemetry.increment_counter(
+            "requests_total", labels={"service": "tests", "operation": "artifact"}
+        )
         telemetry.observe_duration(
             service="tnlcm",
             operation="activate",
@@ -106,7 +110,9 @@ def test_build_telemetry_report_artifact_is_created(tmp_path) -> None:
     assert payload["metadata"]["execution_id"] == "exec-3"
     assert payload["metadata"]["stage"] == "tnlcm_completed"
     assert payload["metadata"]["snapshot_type"] == "telemetry_report"
-    assert TIMESTAMP_PATTERN.match(payload["metadata"]["generated_at"]), f"Invalid timestamp format: {payload['metadata']['generated_at']}"
+    assert TIMESTAMP_PATTERN.match(
+        payload["metadata"]["generated_at"]
+    ), f"Invalid timestamp format: {payload['metadata']['generated_at']}"
     assert any(metric["name"] == "requests_total" for metric in payload["counters"])
     assert any(timing["operation"] == "destroy" for timing in payload["timings"])
     assert all(timing["duration_seconds"] >= 1.0 for timing in payload["timings"])
@@ -115,4 +121,3 @@ def test_build_telemetry_report_artifact_is_created(tmp_path) -> None:
     assert payload["totals"]["tnlcm"]["destruccion"]["duration_display"] == "01:05:034"
     assert payload["totals"]["tnlcm"]["activacion"]["count"] == 1
     assert payload["totals"]["tnlcm"]["activacion"]["duration_display"] == "00:00:500"
-

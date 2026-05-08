@@ -6,7 +6,6 @@ import pytest
 from app import elcm
 from app.models import ExperimentConfig
 
-
 ELCM_BASE_URL = "http://elcm.local"
 
 

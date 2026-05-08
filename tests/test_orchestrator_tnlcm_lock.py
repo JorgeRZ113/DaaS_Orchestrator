@@ -69,9 +69,10 @@ async def test_persist_telemetry_report_skips_when_flag_disabled(monkeypatch) ->
 
         monkeypatch.setattr("app.artifacts.build_telemetry_report_artifact", _should_not_run)
 
-        result = await orchestrator._persist_telemetry_report_best_effort("exec-disabled", "tnlcm_completed")
+        result = await orchestrator._persist_telemetry_report_best_effort(
+            "exec-disabled", "tnlcm_completed"
+        )
 
         assert result is None
     finally:
         orchestrator.settings.telemetry_report_artifacts = previous
-
