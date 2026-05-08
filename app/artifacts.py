@@ -5,8 +5,26 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.config import settings
+from app.utils.telemetry import telemetry
 
 logger = logging.getLogger(__name__)
+
+
+def _artifact_root_dir() -> str:
+    base = settings.artifacts_dir or "./artifacts"
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        base = os.path.join(base, "tests")
+    return base
+
+
+def _artifact_base_dir(execution_id: str) -> str:
+    return os.path.join(_artifact_root_dir(), execution_id)
+
+
+def _format_timestamp_human() -> str:
+    """Generar timestamp en formato HH:MM:SS-DD/MM/AAAA (hora local o UTC según necesidad)."""
+    now = datetime.now(timezone.utc)
+    return now.strftime("%H:%M:%S-%d/%m/%Y")
 
 
 def _ensure_dir(path: str) -> None:
@@ -32,7 +50,7 @@ async def build_artifacts(
     - metadata.json
     - logs.json
     """
-    base_dir = os.path.join(settings.artifacts_dir, execution_id)
+    base_dir = _artifact_base_dir(execution_id)
     _ensure_dir(base_dir)
 
     # Signature compatibility: experiment_id is kept although metadata is now minimal.
@@ -60,7 +78,7 @@ async def build_artifacts(
     metadata = {
         "tn_id": tn_id,
         "output": "logs",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": _format_timestamp_human(),
         "testcases_count": testcases_count,
     }
     metadata_path = os.path.join(base_dir, "metadata.json")
@@ -82,7 +100,7 @@ async def build_tnlcm_raw_report_artifact(
     report_markdown: str,
 ) -> str:
     """Persist TNLCM raw report as markdown (.md)."""
-    base_dir = os.path.join(settings.artifacts_dir, execution_id)
+    base_dir = _artifact_base_dir(execution_id)
     _ensure_dir(base_dir)
 
     report_path = os.path.join(base_dir, "tnlcm_report_raw.md")
@@ -98,18 +116,51 @@ async def build_tnlcm_summary_artifact(
     tn_id: str,
     report_summary: dict[str, Any],
 ) -> str:
-    """Persist TNLCM parsed summary in template_tnlcm_report_summary.json."""
-    base_dir = os.path.join(settings.artifacts_dir, execution_id)
+    """Persist TNLCM parsed summary in tnlcm_report_summary.json."""
+    base_dir = _artifact_base_dir(execution_id)
     _ensure_dir(base_dir)
 
     summary_data = {
         "tn_id": tn_id,
         "summary": _json_safe(report_summary),
     }
-    summary_path = os.path.join(base_dir, "template_tnlcm_report_summary.json")
+    summary_path = os.path.join(base_dir, "tnlcm_report_summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary_data, f, indent=2)
 
     logger.info(f"[{execution_id}] TNLCM summary report generated")
     return summary_path
+
+
+def _stage_status_from_name(stage: str) -> str:
+    if stage.endswith("_completed"):
+        return "success"
+    if stage.endswith("_failed"):
+        return "error"
+    if stage.endswith("_finalized"):
+        return "finalized"
+    return "unknown"
+
+
+async def build_telemetry_report_artifact(
+    execution_id: str,
+    stage: str,
+) -> str:
+    """Persist an in-memory telemetry report next to execution artifacts."""
+    base_dir = _artifact_base_dir(execution_id)
+    _ensure_dir(base_dir)
+
+    safe_stage = (stage or "unknown").strip().lower().replace(" ", "_")
+    telemetry_path = os.path.join(base_dir, f"telemetry_report_{safe_stage}.json")
+    payload = telemetry.telemetry_report(
+        execution_id=execution_id,
+        stage=safe_stage,
+        status=_stage_status_from_name(safe_stage),
+    )
+    with open(telemetry_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+    logger.info(f"[{execution_id}] telemetry report generated: {telemetry_path}")
+    return telemetry_path
+
 
