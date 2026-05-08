@@ -17,9 +17,8 @@ RELOADABLE_SETTING_FIELDS = frozenset(
         "tnlcm_url",
         "tnlcm_user",
         "tnlcm_password",
-        "tnlcm_token",
-        "elcm_url",
         "log_level",
+        "telemetry_report_artifacts",
     }
 )
 
@@ -44,14 +43,12 @@ class Settings(BaseModel):
     tnlcm_url: str
     tnlcm_user: str
     tnlcm_password: str
-    tnlcm_token: str
-
-    elcm_url: str
 
     executions_file: str
     artifacts_dir: str
     examples_dir: str
     log_level: str
+    telemetry_report_artifacts: bool
 
 
 def _read_int(values: Mapping[str, Any] | None, name: str, default: int) -> int:
@@ -77,6 +74,15 @@ def _read_url(values: Mapping[str, Any] | None, name: str, default: str) -> str:
     return _read_str(values, name, default).rstrip("/")
 
 
+def _read_bool(values: Mapping[str, Any] | None, name: str, default: bool) -> bool:
+    raw = _read_str(values, name, "true" if default else "false").lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean for {name}: {raw}")
+
+
 def _load_settings(values: Mapping[str, Any] | None = None) -> Settings:
     return Settings(
         app_env=_read_str(values, "APP_ENV", "dev"),
@@ -86,12 +92,15 @@ def _load_settings(values: Mapping[str, Any] | None = None) -> Settings:
         tnlcm_url=_read_url(values, "TNLCM_URL", "http://localhost:5000"),
         tnlcm_user=_read_str(values, "TNLCM_USER", ""),
         tnlcm_password=_read_str(values, "TNLCM_PASSWORD", ""),
-        tnlcm_token=_read_str(values, "TNLCM_TOKEN", "changeme"),
-        elcm_url=_read_url(values, "ELCM_URL", "http://localhost:8080"),
         executions_file=_read_str(values, "EXECUTIONS_FILE", "./executions.json"),
         artifacts_dir=_read_str(values, "ARTIFACTS_DIR", "./artifacts"),
         examples_dir=_read_str(values, "EXAMPLES_DIR", "./examples"),
         log_level=_read_str(values, "LOG_LEVEL", "INFO").upper(),
+        telemetry_report_artifacts=_read_bool(
+            values,
+            "TELEMETRY_REPORT_ARTIFACTS",
+            True,
+        ),
     )
 
 
@@ -102,10 +111,6 @@ def _validate_settings(candidate: Settings) -> None:
         raise ValueError(f"LOG_LEVEL must be one of: {sorted(ALLOWED_LOG_LEVELS)}")
     if not candidate.tnlcm_url.startswith(("http://", "https://")):
         raise ValueError("TNLCM_URL must start with http:// or https://")
-    if not candidate.elcm_url.startswith(("http://", "https://")):
-        raise ValueError("ELCM_URL must start with http:// or https://")
-
-
 
 _reload_lock = Lock()
 settings = _load_settings()
