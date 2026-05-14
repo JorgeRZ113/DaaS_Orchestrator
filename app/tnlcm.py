@@ -76,8 +76,15 @@ async def _activate_with_backoff(
 
     activate_timer = telemetry.start_timer("tnlcm", "activate", execution_id=execution_id)
     activate_timer.start()
-    telemetry.log_event("info", "tnlcm.activate.started", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id)
-    
+    telemetry.log_event(
+        "info",
+        "tnlcm.activate.started",
+        service="tnlcm",
+        operation="activate",
+        execution_id=execution_id,
+        tn_id=tn_id,
+    )
+
     for attempt in range(1, TNLCM_ACTIVATE_MAX_ATTEMPTS + 1):
         try:
             telemetry.increment_counter("tnlcm_activate_attempts", labels={"service": "tnlcm"})
@@ -85,21 +92,44 @@ async def _activate_with_backoff(
             _log_http_response("TNLCM", response)
             response.raise_for_status()
             activate_timer.stop(status="success")
-            telemetry.log_event("info", "tnlcm.activate.completed", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, attempt=attempt)
-            telemetry.increment_counter("tnlcm_activate_total", labels={"service": "tnlcm", "status": "success"})
+            telemetry.log_event(
+                "info",
+                "tnlcm.activate.completed",
+                service="tnlcm",
+                operation="activate",
+                execution_id=execution_id,
+                tn_id=tn_id,
+                attempt=attempt,
+            )
+            telemetry.increment_counter(
+                "tnlcm_activate_total", labels={"service": "tnlcm", "status": "success"}
+            )
             return
         except httpx.HTTPStatusError as exc:
             _log_http_response("TNLCM", exc.response)
             if _is_no_such_file_error(exc.response):
                 activate_timer.stop(status="error")
-                telemetry.log_event("error", "tnlcm.activate.failed", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, error="no_such_file", attempt=attempt)
-                telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "activate"})
+                telemetry.log_event(
+                    "error",
+                    "tnlcm.activate.failed",
+                    service="tnlcm",
+                    operation="activate",
+                    execution_id=execution_id,
+                    tn_id=tn_id,
+                    error="no_such_file",
+                    attempt=attempt,
+                )
+                telemetry.increment_counter(
+                    "errors_total", labels={"service": "tnlcm", "operation": "activate"}
+                )
                 raise _ActivateNoSuchFileError() from exc
 
             status_code = exc.response.status_code
             retryable = status_code in TNLCM_ACTIVATE_RETRYABLE_STATUS_CODES
             if retryable and attempt < TNLCM_ACTIVATE_MAX_ATTEMPTS:
-                telemetry.increment_counter("retries_total", labels={"service": "tnlcm", "operation": "activate"})
+                telemetry.increment_counter(
+                    "retries_total", labels={"service": "tnlcm", "operation": "activate"}
+                )
                 delay_seconds = _activate_retry_delay_seconds(attempt)
                 logger.warning(
                     "TNLCM %s activate failed for tn_id=%s (HTTP %s). Retry %s/%s in %ss.",
@@ -110,15 +140,37 @@ async def _activate_with_backoff(
                     TNLCM_ACTIVATE_MAX_ATTEMPTS,
                     delay_seconds,
                 )
-                telemetry.log_event("warning", "tnlcm.activate.retry", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, status_code=status_code, attempt=attempt, next_retry_in_seconds=delay_seconds)
+                telemetry.log_event(
+                    "warning",
+                    "tnlcm.activate.retry",
+                    service="tnlcm",
+                    operation="activate",
+                    execution_id=execution_id,
+                    tn_id=tn_id,
+                    status_code=status_code,
+                    attempt=attempt,
+                    next_retry_in_seconds=delay_seconds,
+                )
                 await asyncio.sleep(delay_seconds)
                 continue
 
             if retryable:
                 activate_timer.stop(status="error")
                 detail = _response_error_detail(exc.response)
-                telemetry.log_event("error", "tnlcm.activate.exhausted", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, status_code=status_code, attempt=attempt, error=detail)
-                telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "activate"})
+                telemetry.log_event(
+                    "error",
+                    "tnlcm.activate.exhausted",
+                    service="tnlcm",
+                    operation="activate",
+                    execution_id=execution_id,
+                    tn_id=tn_id,
+                    status_code=status_code,
+                    attempt=attempt,
+                    error=detail,
+                )
+                telemetry.increment_counter(
+                    "errors_total", labels={"service": "tnlcm", "operation": "activate"}
+                )
                 raise _ActivateRetryExhaustedError(
                     (
                         f"TNLCM {endpoint_label} activate exhausted retries for tn_id={tn_id} "
@@ -126,12 +178,25 @@ async def _activate_with_backoff(
                     )
                 ) from exc
             activate_timer.stop(status="error")
-            telemetry.log_event("error", "tnlcm.activate.failed", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, status_code=status_code, attempt=attempt)
-            telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "activate"})
+            telemetry.log_event(
+                "error",
+                "tnlcm.activate.failed",
+                service="tnlcm",
+                operation="activate",
+                execution_id=execution_id,
+                tn_id=tn_id,
+                status_code=status_code,
+                attempt=attempt,
+            )
+            telemetry.increment_counter(
+                "errors_total", labels={"service": "tnlcm", "operation": "activate"}
+            )
             raise
         except httpx.TimeoutException as exc:
             if attempt < TNLCM_ACTIVATE_MAX_ATTEMPTS:
-                telemetry.increment_counter("retries_total", labels={"service": "tnlcm", "operation": "activate"})
+                telemetry.increment_counter(
+                    "retries_total", labels={"service": "tnlcm", "operation": "activate"}
+                )
                 delay_seconds = _activate_retry_delay_seconds(attempt)
                 logger.warning(
                     "TNLCM %s activate timeout for tn_id=%s. Retry %s/%s in %ss.",
@@ -141,18 +206,39 @@ async def _activate_with_backoff(
                     TNLCM_ACTIVATE_MAX_ATTEMPTS,
                     delay_seconds,
                 )
-                telemetry.log_event("warning", "tnlcm.activate.timeout", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, attempt=attempt, next_retry_in_seconds=delay_seconds)
+                telemetry.log_event(
+                    "warning",
+                    "tnlcm.activate.timeout",
+                    service="tnlcm",
+                    operation="activate",
+                    execution_id=execution_id,
+                    tn_id=tn_id,
+                    attempt=attempt,
+                    next_retry_in_seconds=delay_seconds,
+                )
                 await asyncio.sleep(delay_seconds)
                 continue
             activate_timer.stop(status="error")
-            telemetry.log_event("error", "tnlcm.activate.timeout.exhausted", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, attempt=attempt)
-            telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "activate"})
+            telemetry.log_event(
+                "error",
+                "tnlcm.activate.timeout.exhausted",
+                service="tnlcm",
+                operation="activate",
+                execution_id=execution_id,
+                tn_id=tn_id,
+                attempt=attempt,
+            )
+            telemetry.increment_counter(
+                "errors_total", labels={"service": "tnlcm", "operation": "activate"}
+            )
             raise _ActivateRetryExhaustedError(
                 f"TNLCM {endpoint_label} activate exhausted retries for tn_id={tn_id} due to timeout"
             ) from exc
         except httpx.TransportError as exc:
             if attempt < TNLCM_ACTIVATE_MAX_ATTEMPTS:
-                telemetry.increment_counter("retries_total", labels={"service": "tnlcm", "operation": "activate"})
+                telemetry.increment_counter(
+                    "retries_total", labels={"service": "tnlcm", "operation": "activate"}
+                )
                 delay_seconds = _activate_retry_delay_seconds(attempt)
                 logger.warning(
                     "TNLCM %s activate transport error for tn_id=%s: %s. Retry %s/%s in %ss.",
@@ -163,12 +249,33 @@ async def _activate_with_backoff(
                     TNLCM_ACTIVATE_MAX_ATTEMPTS,
                     delay_seconds,
                 )
-                telemetry.log_event("warning", "tnlcm.activate.transport_error", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, attempt=attempt, error=str(exc), next_retry_in_seconds=delay_seconds)
+                telemetry.log_event(
+                    "warning",
+                    "tnlcm.activate.transport_error",
+                    service="tnlcm",
+                    operation="activate",
+                    execution_id=execution_id,
+                    tn_id=tn_id,
+                    attempt=attempt,
+                    error=str(exc),
+                    next_retry_in_seconds=delay_seconds,
+                )
                 await asyncio.sleep(delay_seconds)
                 continue
             activate_timer.stop(status="error")
-            telemetry.log_event("error", "tnlcm.activate.transport_error.exhausted", service="tnlcm", operation="activate", execution_id=execution_id, tn_id=tn_id, attempt=attempt, error=str(exc))
-            telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "activate"})
+            telemetry.log_event(
+                "error",
+                "tnlcm.activate.transport_error.exhausted",
+                service="tnlcm",
+                operation="activate",
+                execution_id=execution_id,
+                tn_id=tn_id,
+                attempt=attempt,
+                error=str(exc),
+            )
+            telemetry.increment_counter(
+                "errors_total", labels={"service": "tnlcm", "operation": "activate"}
+            )
             raise _ActivateRetryExhaustedError(
                 f"TNLCM {endpoint_label} activate exhausted retries for tn_id={tn_id} due to transport errors"
             ) from exc
@@ -242,7 +349,9 @@ def _headers() -> dict[str, str]:
     """Build headers using the token stored in memory by /tnlcm/token/refresh."""
     token = _tnlcm_access_token.strip() if _tnlcm_access_token else ""
     if not token:
-        raise ValueError("TNLCM access token is not loaded in memory. Call /tnlcm/token/refresh first.")
+        raise ValueError(
+            "TNLCM access token is not loaded in memory. Call /tnlcm/token/refresh first."
+        )
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
@@ -265,9 +374,7 @@ def login_tnlcm_and_persist_token() -> str:
     if not username or not password:
         raise ValueError("TNLCM_USER/TNLCM_PASSWORD are required in .env")
 
-    paths = [
-        "/api/v1/user/login"
-    ]
+    paths = ["/api/v1/user/login"]
 
     with httpx.Client(timeout=TNLCM_LOGIN_TIMEOUT_SECONDS) as client:
         response_data: dict[str, Any] | None = None
@@ -298,9 +405,8 @@ def login_tnlcm_and_persist_token() -> str:
         or (response_data.get("data") or {}).get("access_token")
     )
 
-    refresh_token = (
-        response_data.get("refresh_token")
-        or (response_data.get("data") or {}).get("refresh_token")
+    refresh_token = response_data.get("refresh_token") or (response_data.get("data") or {}).get(
+        "refresh_token"
     )
 
     if access_token is None:
@@ -356,9 +462,7 @@ def _resolve_examples_path(path_or_name: str | None) -> str | None:
 
 
 def _extract_tn_id(data: dict[str, Any]) -> str | None:
-    return (
-        data.get("tn_id")
-    )
+    return data.get("tn_id")
 
 
 def _extract_report_markdown(response: httpx.Response) -> str:
@@ -457,77 +561,206 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
             return None
         return match.group(1).strip()
 
+    def _ordered_unique(values: list[Any]) -> list[Any]:
+        ordered: list[Any] = []
+        for value in values:
+            if value not in ordered:
+                ordered.append(value)
+        return ordered
+
+    def _extract_label_value(raw_text: str, label: str) -> str | None:
+        patterns = (
+            rf"\*\*{re.escape(label)}\*\*:\s*`([^`]+)`",
+            rf"\*\*{re.escape(label)}\*\*:\s*([^\n`]+)",
+            rf"{re.escape(label)}\s*:\s*`([^`]+)`",
+            rf"{re.escape(label)}\s*:\s*([^\n`]+)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, raw_text, flags=re.IGNORECASE)
+            if match:
+                value = match.group(1).strip()
+                return value or None
+        return None
+
+    def _maybe_int(value: str | None) -> int | str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if re.fullmatch(r"-?\d+", stripped):
+            try:
+                return int(stripped)
+            except ValueError:
+                return stripped
+        return stripped
+
+    def _component_label(raw_text: str, fallback: str) -> str:
+        match = re.search(r"The component\s+`([^`]+)`\s+has been", raw_text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        return fallback.strip()
+
+    def _component_ips(interfaces: dict[str, str]) -> list[str]:
+        return _ordered_unique([str(value).strip() for value in interfaces.values() if str(value).strip()])
+
+    def _component_ports(raw_text: str) -> list[int]:
+        ports_found = re.findall(r"available on port\s+(\d+)", raw_text, flags=re.IGNORECASE)
+        return _ordered_unique([int(port) for port in ports_found])
+
+    def _prune_none_values(data: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in data.items()
+            if value is not None and value != [] and value != {}
+        }
+
+    def _build_component_entry(component_name: str, block: str) -> dict[str, Any]:
+        interfaces = _parse_interfaces(block)
+        ips = _component_ips(interfaces)
+        ports = _component_ports(block)
+        usernames = re.findall(r"\*\*(?:Username|user)\*\*:\s*`([^`]+)`", block, flags=re.IGNORECASE)
+        passwords = re.findall(r"\*\*(?:Password|password)\*\*:\s*`([^`]+)`", block, flags=re.IGNORECASE)
+
+        credentials = _prune_none_values(
+            {
+                "username": usernames[0].strip() if usernames else None,
+                "password": passwords[0].strip() if passwords else None,
+                "usernames": _ordered_unique([username.strip() for username in usernames if username.strip()]),
+                "passwords": _ordered_unique([password.strip() for password in passwords if password.strip()]),
+                "organization": _extract_label_value(block, "Organization"),
+                "bucket": _extract_label_value(block, "Bucket"),
+                "token": _extract_label_value(block, "Token"),
+            }
+        )
+
+        technitium_dns = _parse_technitium_dns(block)
+        extra_info = _prune_none_values(
+            {
+                "opennebula_vm_id": _maybe_int(_extract_label_value(block, "OpenNebula VM ID")),
+                "opennebula_vnet_id": _maybe_int(_extract_label_value(block, "OpenNebula VNet ID")),
+                "vm_memory_mib": _maybe_int(_extract_label_value(block, "VM memory")),
+                "vm_vcpus": _maybe_int(_extract_label_value(block, "VM VCPUs")),
+                "vm_available_storage_gib": _maybe_int(_extract_label_value(block, "VM available storage")),
+                "vxlan_subnet": _extract_label_value(block, "VXLAN subnet"),
+                "vxlan_first_ip": _extract_label_value(block, "VXLAN first IP"),
+                "vxlan_address_size": _maybe_int(_extract_label_value(block, "VXLAN address size")),
+                "vxlan_netmask": _maybe_int(_extract_label_value(block, "VXLAN netmask")),
+                "vxlan_gateway": _extract_label_value(block, "VXLAN gateway"),
+                "vxlan_dns": _extract_label_value(block, "VXLAN DNS"),
+                "vxlan_mtu": _maybe_int(_extract_label_value(block, "VXLAN MTU")),
+                "vxlan_guest_mtu": _maybe_int(_extract_label_value(block, "VXLAN guest MTU")),
+                "network_interfaces": interfaces or None,
+                "technitium_dns": technitium_dns,
+            }
+        )
+
+        return {
+            "name": _component_label(block, component_name),
+            "ip": ips[0] if ips else None,
+            "ips": ips,
+            "port": ports[0] if ports else None,
+            "ports": ports,
+            "credentials": credentials or None,
+            "extra_info": extra_info or None,
+        }
+
+    def _component_category(component_name: str, block: str) -> str:
+        component_name_lower = component_name.lower()
+        block_lower = block.lower()
+        if any(
+            token in component_name_lower or token in block_lower
+            for token in ("wireguard vpn client config", "private key", "vxlan", "technitium dns")
+        ):
+            return "tn_init"
+        if any(
+            token in component_name_lower or token in block_lower
+            for token in ("monitoring", "influxdb", "grafana", "prometheus")
+        ):
+            return "monitoring"
+        if any(
+            token in component_name_lower or token in block_lower
+            for token in ("elcm", "backend dashboard", "frontend dashboard")
+        ):
+            return "elcm"
+        return "auxiliary"
+
+    def _tn_init_subkey(component_name: str, block: str) -> str:
+        hint = f"{component_name} {block}".lower()
+        if "vxlan" in hint:
+            return "tn_vxlan"
+        if "bastion" in hint:
+            return "tn_bastion"
+        return "tn_init"
+
     raw_text = report_markdown or ""
     if not raw_text:
         return {
             "private_ssh_key": None,
             "wireguard_client_config": None,
-            "opennebula_vnet_index": [],
+            "tn_vxlan": None,
+            "tn_bastion": None,
+            "technitium_dns": None,
+            "monitoring": None,
+            "elcm": None,
             "components": {},
             "components_count": 0,
         }
 
     component_blocks = _extract_component_blocks(raw_text)
-    components: dict[str, Any] = {}
-    vnet_index: list[dict[str, Any]] = []
-    for component_name, block in component_blocks.items():
-        vnet_match = re.search(r"OpenNebula VNet ID\*\*:\s*`([^`]+)`", block, flags=re.IGNORECASE)
-        opennebula_vnet_id = vnet_match.group(1).strip() if vnet_match else None
-
-        interfaces = _parse_interfaces(block)
-        ips = sorted(set(interfaces.values()))
-        ports_found = re.findall(r"available on port\s+(\d+)", block, flags=re.IGNORECASE)
-        ports = sorted({int(p) for p in ports_found})
-
-        usernames = re.findall(r"\*\*(?:Username|user)\*\*:\s*`([^`]+)`", block)
-        passwords = re.findall(r"\*\*(?:Password|password)\*\*:\s*`([^`]+)`", block)
-
-        comp_data: dict[str, Any] = {
-            "ips": ips,
-            "ports": ports,
-            "usernames": usernames,
-            "passwords": passwords,
-        }
-
-        technitium_data = _parse_technitium_dns(block)
-        if technitium_data:
-            comp_data["technitium_dns"] = technitium_data
-
-        components[component_name] = comp_data
-
-        if opennebula_vnet_id:
-            vnet_index.append(
-                {
-                    "component": component_name,
-                    "opennebula_vnet_id": opennebula_vnet_id,
-                    "interfaces": interfaces,
-                    "ports": ports,
-                }
-            )
-
-    private_key = _extract_code_block(raw_text, "Private key")
-
-    wg_match = re.search(
-        r"\*\*wg_client\d+\*\*:\s*```(?:[A-Za-z0-9_+-]+)?\s*(.*?)```",
-        raw_text,
-        flags=re.DOTALL,
-    )
-    wireguard_client_config = wg_match.group(1).strip() if wg_match else None
-
-    return {
-        "private_ssh_key": private_key,
-        "wireguard_client_config": wireguard_client_config,
-        "opennebula_vnet_index": vnet_index,
-        "components": components,
-        "components_count": len(components),
+    result: dict[str, Any] = {
+        "private_ssh_key": None,
+        "wireguard_client_config": None,
+        "tn_vxlan": None,
+        "tn_bastion": None,
+        "technitium_dns": None,
+        "monitoring": None,
+        "elcm": None,
+        "components": {},
+        "components_count": len(component_blocks),
     }
 
+    for component_name, block in component_blocks.items():
+        component_data = _build_component_entry(component_name, block)
+        category = _component_category(component_name, block)
+
+        if category == "tn_init":
+            subkey = _tn_init_subkey(component_name, block)
+            if subkey == "tn_vxlan" and result["tn_vxlan"] is None:
+                result["tn_vxlan"] = component_data
+            elif subkey == "tn_bastion" and result["tn_bastion"] is None:
+                result["tn_bastion"] = component_data
+
+            private_key = _extract_code_block(block, "Private key")
+            if private_key and not result["private_ssh_key"]:
+                result["private_ssh_key"] = private_key
+
+            wg_match = re.search(
+                r"\*\*wg_client\d+\*\*:\s*```(?:[A-Za-z0-9_+-]+)?\s*(.*?)```",
+                block,
+                flags=re.DOTALL,
+            )
+            wireguard_client_config = wg_match.group(1).strip() if wg_match else None
+            if wireguard_client_config and not result["wireguard_client_config"]:
+                result["wireguard_client_config"] = wireguard_client_config
+
+            technitium_data = component_data.get("extra_info", {}).get("technitium_dns") if component_data.get("extra_info") else None
+            if technitium_data and not result["technitium_dns"]:
+                result["technitium_dns"] = technitium_data
+        elif category == "monitoring" and result["monitoring"] is None:
+            result["monitoring"] = component_data
+        elif category == "elcm" and result["elcm"] is None:
+            result["elcm"] = component_data
+        else:
+            result["components"][component_name] = component_data
+
+    return result
 
 
 def _legacy_multipart_from_infra(
     infra: InfrastructureConfig,
 ) -> tuple[dict[str, str], dict[str, tuple[str, bytes, str]]]:
-    descriptor_ref = infra.parameters.get("descriptor") or _resolve_examples_path(infra.descriptor_path)
+    descriptor_ref = infra.parameters.get("descriptor") or _resolve_examples_path(
+        infra.descriptor_path
+    )
     reference_type = infra.parameters.get("library_reference_type")
     reference_value = infra.parameters.get("library_reference_value")
     custom_tn_id = infra.parameters.get("tn_id") or infra.name
@@ -598,7 +831,13 @@ async def deploy_trial_network(
         # Medir duración de CREATE
         create_timer = telemetry.start_timer("tnlcm", "create", execution_id=execution_id)
         create_timer.start()
-        telemetry.log_event("info", "tnlcm.create.api_call.started", service="tnlcm", operation="create", execution_id=execution_id)
+        telemetry.log_event(
+            "info",
+            "tnlcm.create.api_call.started",
+            service="tnlcm",
+            operation="create",
+            execution_id=execution_id,
+        )
 
         # Preferred endpoint from project steps
         try:
@@ -616,17 +855,31 @@ async def deploy_trial_network(
         except httpx.HTTPStatusError as exc:
             _log_http_response("TNLCM", exc.response)
             create_timer.stop(status="error")
-            telemetry.log_event("error", "tnlcm.create.api_call.failed", service="tnlcm", operation="create", execution_id=execution_id)
-            telemetry.increment_counter("errors_total", labels={"service": "tnlcm", "operation": "create"})
+            telemetry.log_event(
+                "error",
+                "tnlcm.create.api_call.failed",
+                service="tnlcm",
+                operation="create",
+                execution_id=execution_id,
+            )
+            telemetry.increment_counter(
+                "errors_total", labels={"service": "tnlcm", "operation": "create"}
+            )
             _raise_legacy_create_error(exc.response)
 
         create_timer.stop(status="success")
-        telemetry.log_event("info", "tnlcm.create.api_call.completed", service="tnlcm", operation="create", execution_id=execution_id)
+        telemetry.log_event(
+            "info",
+            "tnlcm.create.api_call.completed",
+            service="tnlcm",
+            operation="create",
+            execution_id=execution_id,
+        )
         telemetry.increment_counter("tnlcm_create_api_total", labels={"service": "tnlcm"})
 
         if tn_id is None:
             tn_id = _extract_tn_id(create_data or {})
-        
+
         if not tn_id:
             raise ValueError(f"TNLCM did not return a valid tn_id: {create_data}")
 
@@ -689,9 +942,18 @@ async def deploy_trial_network(
                 activate_error,
             )
             await _recover_tn_with_destroy_purge(tn_id)
-            return await deploy_trial_network(infra, redeploy_attempt=redeploy_attempt + 1, execution_id=execution_id)
+            return await deploy_trial_network(
+                infra, redeploy_attempt=redeploy_attempt + 1, execution_id=execution_id
+            )
 
-        telemetry.log_event("info", "tnlcm.deploy.completed", service="tnlcm", operation="deploy", execution_id=execution_id, tn_id=tn_id)
+        telemetry.log_event(
+            "info",
+            "tnlcm.deploy.completed",
+            service="tnlcm",
+            operation="deploy",
+            execution_id=execution_id,
+            tn_id=tn_id,
+        )
         logger.info(f"TN created with id: {tn_id}")
         return tn_id
 
@@ -699,8 +961,12 @@ async def deploy_trial_network(
 def download_trial_network_report(tn_id: str) -> str:
     """Download TNLCM deployment report synchronously and return raw markdown."""
     url = f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/report/download"
-    telemetry.increment_counter("requests_total", labels={"service": "tnlcm", "operation": "download_report"})
-    report_timer = telemetry.start_timer("tnlcm", "download_report", telemetry.ensure_execution_id())
+    telemetry.increment_counter(
+        "requests_total", labels={"service": "tnlcm", "operation": "download_report"}
+    )
+    report_timer = telemetry.start_timer(
+        "tnlcm", "download_report", telemetry.ensure_execution_id()
+    )
     report_timer.start()
     with httpx.Client(timeout=TNLCM_REQUEST_TIMEOUT) as client:
         try:
@@ -746,16 +1012,16 @@ def download_trial_network_report(tn_id: str) -> str:
                 )
             ) from exc
         except httpx.TimeoutException as exc:
-            raise TnReportDownloadError(
-                f"Timeout downloading TNLCM report for TN {tn_id}"
-            ) from exc
+            raise TnReportDownloadError(f"Timeout downloading TNLCM report for TN {tn_id}") from exc
         except httpx.TransportError as exc:
             raise TnReportDownloadError(
                 f"Transport error downloading TNLCM report for TN {tn_id}: {exc}"
             ) from exc
 
     report_markdown = _extract_report_markdown(response)
-    logger.info("TNLCM report ready for tn_id=%s (%s bytes)", tn_id, len(report_markdown.encode("utf-8")))
+    logger.info(
+        "TNLCM report ready for tn_id=%s (%s bytes)", tn_id, len(report_markdown.encode("utf-8"))
+    )
     try:
         report_timer.stop(status="success")
     except Exception:
@@ -796,7 +1062,9 @@ def get_tn_status(tn_id: str) -> str:
 
 async def destroy_trial_network(tn_id: str) -> None:
     """Destroy and purge TN using DELETE endpoints."""
-    telemetry.increment_counter("requests_total", labels={"service": "tnlcm", "operation": "destroy"})
+    telemetry.increment_counter(
+        "requests_total", labels={"service": "tnlcm", "operation": "destroy"}
+    )
     destroy_timer = telemetry.start_timer("tnlcm", "destroy", telemetry.ensure_execution_id())
     destroy_timer.start()
     async with httpx.AsyncClient(timeout=None) as client:
@@ -850,29 +1118,44 @@ def extract_elcm_url_from_report(report_summary: dict[str, Any]) -> str | None:
     """
     Extract ELCM backend URL from trial network report summary.
 
-    Looks for a component whose name contains "elcm" (for example: elcm-exp),
-    then builds URL from its first IP using the fixed backend port 5001.
+    Looks first at the fixed `elcm` field, then falls back to
+    auxiliary or legacy component collections for backwards compatibility.
 
     Returns: "http://ip:port" or None if it cannot be resolved
     """
     if not report_summary or not isinstance(report_summary, dict):
         return None
-    
-    components = report_summary.get("components", {})
-    if not components:
+
+    def _first_ip(component_data: Any) -> str | None:
+        if not isinstance(component_data, dict):
+            return None
+        ip = component_data.get("ip")
+        if isinstance(ip, str) and ip.strip():
+            return ip.strip()
+        ips = component_data.get("ips")
+        if isinstance(ips, list):
+            for candidate in ips:
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
         return None
-    
-    # Look for ELCM component (for example: ELCM, elcm-exp, ...)
-    for component_name, component_data in components.items():
-        if "elcm" in component_name.lower():
-            comp_dict = component_data
-            if isinstance(component_data, dict):
-                ips = comp_dict.get("ips", [])
-                if ips:
-                    ip = str(ips[0]).strip()
+
+    # Check fixed elcm field
+    elcm_data = report_summary.get("elcm")
+    ip = _first_ip(elcm_data)
+    if ip:
+        url = f"http://{ip}:5001"
+        logger.info(f"Extracted ELCM URL from report: {url}")
+        return url
+
+    # Check auxiliary components
+    components = report_summary.get("components", {})
+    if isinstance(components, dict):
+        for component_name, component_data in components.items():
+            if "elcm" in str(component_name).lower():
+                ip = _first_ip(component_data)
+                if ip:
                     url = f"http://{ip}:5001"
                     logger.info(f"Extracted ELCM URL from report: {url}")
                     return url
-    
-    return None
 
+    return None

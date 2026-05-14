@@ -167,7 +167,7 @@
       "name": "Config",
       "item": [
         {
-          "name": "POST /config/reload",
+          "name": "POST /login",
           "request": {
             "method": "POST",
             "header": [
@@ -178,16 +178,39 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/config/reload",
+              "raw": "{{baseUrl}}/login",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
-                "config",
-                "reload"
+                "login"
               ]
             },
-            "description": "Recarga en caliente solo variables mutables del .env en la instancia actual del backend."
+            "description": "Recarga en caliente solo variables mutables del .env en la instancia actual del backend (renombrado desde /config/reload)."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /register",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/register?username=jorge&password=jorge&email=jorgeramirezzotano@uma.es&org=uma",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "register"
+              ],
+              "query": [
+                { "key": "username", "value": "jorge" },
+                { "key": "password", "value": "jorge" },
+                { "key": "email", "value": "jorgeramirezzotano@uma.es" },
+                { "key": "org", "value": "uma" }
+              ]
+            },
+            "description": "Registra usuario en TNLCM (sin auth) y devuelve access/refresh token. Todos los parámetros se pasan por query string."
           },
           "response": []
         }

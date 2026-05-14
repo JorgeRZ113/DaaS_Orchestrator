@@ -141,7 +141,9 @@ def _execute(action: str, tn_id: str, conf_path: str) -> None:
         return
 
     if os.name == "nt" and _needs_windows_elevation(result):
-        logger.info("WireGuard %s requires elevation for %s; retrying elevated helper", action, tn_id)
+        logger.info(
+            "WireGuard %s requires elevation for %s; retrying elevated helper", action, tn_id
+        )
         _run_helper_elevated(action, tn_id, conf_path)
         return
 
@@ -156,5 +158,3 @@ def down_tunnel(tn_id: str, conf_path: str | None = None) -> None:
     if not conf_path:
         conf_path = str(_artifacts_dir_for_execution(tn_id) / f"{tn_id}.conf")
     _execute("down", tn_id, conf_path)
-
-

@@ -15,6 +15,7 @@ The implementation keeps internal counters, gauges and timing samples as
 objects. The exported report filters human-visible timings to durations >= 1s
 while keeping all samples available for totals and calculations.
 """
+
 from __future__ import annotations
 import json
 import logging
@@ -26,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from app.config import settings
+
 logger = logging.getLogger("telemetry")
 _MIN_VISIBLE_DURATION_SECONDS = 1.0
 
@@ -41,22 +43,32 @@ def _format_timestamp_human() -> str:
     """Generar timestamp en formato HH:MM:SS-DD/MM/AAAA."""
     now = datetime.now(timezone.utc)
     return now.strftime("%H:%M:%S-%d/%m/%Y")
+
+
 def format_duration_display(duration_seconds: float) -> str:
     """Format duration as MM:SS:MMM for human-readable reports/logs."""
     total_ms = max(0, int(round(float(duration_seconds) * 1000)))
     minutes, remaining_ms = divmod(total_ms, 60_000)
     seconds, millis = divmod(remaining_ms, 1000)
     return f"{minutes:02d}:{seconds:02d}:{millis:03d}"
+
+
 def _safe_json_value(value: Any) -> Any:
     try:
         return json.loads(json.dumps(value, sort_keys=True, default=str))
     except Exception:
         return str(value)
+
+
 def _normalize_labels(labels: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return _safe_json_value(labels or {})
+
+
 def _metric_key(name: str, labels: Optional[Dict[str, Any]]) -> str:
     normalized_labels = _normalize_labels(labels)
     return f"{name}:{json.dumps(normalized_labels, sort_keys=True, default=str)}"
+
+
 def _infer_phase(message: str) -> str:
     suffix = (message or "").split(".")[-1].lower()
     mapping = {
@@ -74,6 +86,8 @@ def _infer_phase(message: str) -> str:
         "timed_out": "error",
     }
     return mapping.get(suffix, suffix or "info")
+
+
 def _status_from_phase(phase: str) -> str:
     mapping = {
         "start": "start",
@@ -82,17 +96,22 @@ def _status_from_phase(phase: str) -> str:
         "retry": "retry",
     }
     return mapping.get(phase, phase)
+
+
 @dataclass
 class MetricRecord:
     name: str
     labels: Dict[str, Any] = field(default_factory=dict)
     value: float = 0.0
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "labels": self.labels,
             "value": self.value,
         }
+
+
 @dataclass
 class TimingRecord:
     service: str
@@ -104,6 +123,7 @@ class TimingRecord:
     execution_id: Optional[str] = None
     attempt: Optional[int] = None
     labels: Dict[str, Any] = field(default_factory=dict)
+
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "service": self.service,
@@ -120,6 +140,8 @@ class TimingRecord:
         if self.labels:
             payload["labels"] = self.labels
         return payload
+
+
 @dataclass
 class TelemetryReport:
     metadata: Dict[str, Any]
@@ -127,6 +149,7 @@ class TelemetryReport:
     gauges: List[Dict[str, Any]]
     timings: List[Dict[str, Any]]
     totals: Dict[str, Any]
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "metadata": self.metadata,
@@ -135,6 +158,8 @@ class TelemetryReport:
             "timings": self.timings,
             "totals": self.totals,
         }
+
+
 @dataclass
 class Timer:
     telemetry: "Telemetry"
@@ -143,8 +168,10 @@ class Timer:
     execution_id: Optional[str]
     labels: Dict[str, Any] = field(default_factory=dict)
     _start: Optional[float] = None
+
     def start(self) -> None:
         self._start = time.time()
+
     def stop(
         self,
         *,
@@ -181,6 +208,8 @@ class Timer:
         level = "error" if status in {"error", "failed"} or phase == "error" else "info"
         self.telemetry.log_event(level, f"{self.service}.{self.operation}.{phase}", **log_fields)
         return duration
+
+
 class Telemetry:
     def __init__(self) -> None:
         self._counters: Dict[str, MetricRecord] = {}
@@ -189,6 +218,7 @@ class Telemetry:
         self._lock = threading.Lock()
         # separate lock used when writing the telemetry file
         self._file_lock = threading.Lock()
+
     def _telemetry_file_path(self, execution_id: Optional[str] = None) -> str:
         try:
             base = _telemetry_root_dir()
@@ -211,13 +241,17 @@ class Telemetry:
             self._counters.clear()
             self._gauges.clear()
             self._timings.clear()
+
     # IDs
     def ensure_execution_id(self, execution_id: Optional[str] = None) -> str:
         if execution_id:
             return execution_id
         return str(uuid.uuid4())
+
     # Counters
-    def increment_counter(self, name: str, labels: Optional[Dict[str, Any]] = None, amount: int = 1) -> None:
+    def increment_counter(
+        self, name: str, labels: Optional[Dict[str, Any]] = None, amount: int = 1
+    ) -> None:
         key = _metric_key(name, labels)
         normalized_labels = _normalize_labels(labels)
         with self._lock:
@@ -226,6 +260,7 @@ class Telemetry:
                 record = MetricRecord(name=name, labels=normalized_labels, value=0.0)
                 self._counters[key] = record
             record.value += amount
+
     # Gauges
     def set_gauge(self, name: str, value: float, labels: Optional[Dict[str, Any]] = None) -> None:
         key = _metric_key(name, labels)
@@ -237,7 +272,10 @@ class Telemetry:
                 self._gauges[key] = record
             else:
                 record.value = float(value)
-    def change_gauge(self, name: str, delta: float, labels: Optional[Dict[str, Any]] = None) -> None:
+
+    def change_gauge(
+        self, name: str, delta: float, labels: Optional[Dict[str, Any]] = None
+    ) -> None:
         key = _metric_key(name, labels)
         normalized_labels = _normalize_labels(labels)
         with self._lock:
@@ -247,6 +285,7 @@ class Telemetry:
                 self._gauges[key] = record
             else:
                 record.value = float(record.value + delta)
+
     # Durations
     def observe_duration(
         self,
@@ -276,6 +315,7 @@ class Telemetry:
         with self._lock:
             self._timings.append(timing)
         return timing
+
     # Timers
     def start_timer(
         self,
@@ -286,6 +326,7 @@ class Telemetry:
     ) -> Timer:
         execution_id = self.ensure_execution_id(execution_id)
         return Timer(self, service, operation, execution_id, labels or {})
+
     # Logs
     def log_event(self, level: str, message: str, **fields: Any) -> None:
         phase = fields.pop("phase", None) or _infer_phase(message)
@@ -320,6 +361,7 @@ class Telemetry:
         except Exception:
             # Never fail the main flow due to telemetry file I/O
             logger.debug("Could not append to telemetry log file", exc_info=True)
+
     # Telemetry report for tests/exports
     def telemetry_report(
         self,
@@ -339,7 +381,11 @@ class Telemetry:
         with self._lock:
             counters = [record.to_dict() for record in self._counters.values()]
             gauges = [record.to_dict() for record in self._gauges.values()]
-            timings = [record.to_dict() for record in self._timings if record.duration_seconds >= _MIN_VISIBLE_DURATION_SECONDS]
+            timings = [
+                record.to_dict()
+                for record in self._timings
+                if record.duration_seconds >= _MIN_VISIBLE_DURATION_SECONDS
+            ]
             totals = self._build_totals(self._timings)
         report = TelemetryReport(
             metadata=metadata,
@@ -349,18 +395,24 @@ class Telemetry:
             totals=totals,
         )
         return report.to_dict()
+
     def _build_totals(self, timings: List[TimingRecord]) -> Dict[str, Any]:
         return {
             "tnlcm": {
-                "creacion": self._aggregate_timings(timings, {("orchestrator", "create"), ("tnlcm", "create")}),
+                "creacion": self._aggregate_timings(
+                    timings, {("orchestrator", "create"), ("tnlcm", "create")}
+                ),
                 "activacion": self._aggregate_timings(timings, {("tnlcm", "activate")}),
                 "destruccion": self._aggregate_timings(timings, {("tnlcm", "destroy")}),
-                "purged": self._aggregate_timings(timings, {("tnlcm", "purged")} ),
+                "purged": self._aggregate_timings(timings, {("tnlcm", "purged")}),
             },
             "elcm": {
-                "experimento_completo": self._aggregate_timings(timings, {("orchestrator", "elcm_phase")}),
+                "experimento_completo": self._aggregate_timings(
+                    timings, {("orchestrator", "elcm_phase")}
+                ),
             },
         }
+
     def _aggregate_timings(
         self,
         timings: List[TimingRecord],
@@ -373,6 +425,7 @@ class Telemetry:
             "duration_seconds": total_seconds,
             "duration_display": format_duration_display(total_seconds),
         }
+
+
 # Singleton instance used by the application
 telemetry = Telemetry()
-

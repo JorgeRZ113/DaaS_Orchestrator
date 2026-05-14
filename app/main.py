@@ -2,11 +2,15 @@ import logging
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 
 from app.config import reload_mutable_settings, settings
-from app.models import DatasetDescriptor, ExecutionRecord, ExecutionResponse
+from app.models import (
+    DatasetDescriptor,
+    ExecutionRecord,
+    ExecutionResponse,
+)
 from app.orchestrator import (
     TnlcmDeploymentInProgressError,
     create_tnlcm_execution,
@@ -57,12 +61,15 @@ async def health():
 
 
 @app.post(
-    "/config/reload",
+    "/login",
     tags=["config"],
     dependencies=[Depends(verify_api_key)],
 )
-async def post_reload_config():
-    """Recarga en caliente solo variables de configuracion mutables."""
+async def post_login():
+    """Recarga en caliente solo variables de configuracion mutables.
+
+    Nota: este endpoint se renombró desde /config/reload a /login.
+    """
     try:
         result = reload_mutable_settings()
     except ValueError as exc:
@@ -75,6 +82,146 @@ async def post_reload_config():
         "updated_fields": result["updated_fields"],
         "non_reloadable_fields": result["non_reloadable_fields"],
     }
+
+
+@app.post(
+    "/register",
+    tags=["auth"],
+)
+async def post_register(
+    username: str = Query(..., description="username, required"),
+    password: str = Query(..., description="password, required"),
+    org: str | None = Query(None, description="org, optional"),
+    email: str | None = Query(None, description="email, optional"),
+) -> dict[str, str]:
+    """Registro que delega en TNLCM y luego realiza login para obtener token.
+
+    Todos los parámetros se reciben por query string: ?username=x&password=y&email=a&org=b
+    - `username` y `password` son obligatorios.
+    - `email` y `org` son opcionales.
+
+    El endpoint hace POST a TNLCM /api/v1/user/register (sin autenticación)
+    enviando en el body JSON:
+
+    {
+      "email": "...",
+      "username": "...",
+      "password": "...",
+      "org": "..."
+    }
+
+    Luego realiza login para obtener los tokens, los guarda en memoria y devuelve
+    una respuesta con token enmascarado.
+    """
+    # Validar obligatorios (FastAPI ya fuerza Body(...), pero reforzamos)
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="username and password are required")
+
+    from app.tnlcm import TNLCM_LOGIN_TIMEOUT_SECONDS, _response_error_detail
+    import app.tnlcm
+
+    # Construir body exactamente como TNLCM espera
+    register_payload: dict = {}
+    # TNLCM example includes email even if optional; include fields only when present
+    if email is not None:
+        register_payload["email"] = email
+    register_payload["username"] = username
+    register_payload["password"] = password
+    if org is not None:
+        register_payload["org"] = org
+
+    telemetry.increment_counter(
+        "requests_total", labels={"service": "auth", "operation": "register"}
+    )
+    telemetry.log_event("info", "user.register.request", username=username, email=email)
+
+    async with httpx.AsyncClient(timeout=TNLCM_LOGIN_TIMEOUT_SECONDS) as client:
+        # 1) Registrar en TNLCM (no auth)
+        try:
+            resp = await client.post(
+                f"{settings.tnlcm_url}/api/v1/user/register",
+                json=register_payload,
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = _response_error_detail(exc.response) or "unknown"
+            telemetry.increment_counter(
+                "errors_total",
+                labels={
+                    "service": "auth",
+                    "operation": "register",
+                    "error_type": str(exc.response.status_code),
+                },
+            )
+            raise HTTPException(
+                status_code=exc.response.status_code, detail=f"TNLCM register failed: {detail}"
+            ) from exc
+        except httpx.TimeoutException as exc:
+            telemetry.increment_counter(
+                "errors_total", labels={"service": "auth", "operation": "register"}
+            )
+            raise HTTPException(
+                status_code=504, detail="Timeout contacting TNLCM register endpoint"
+            ) from exc
+
+        # 2) Login with the newly created credentials to get tokens
+        try:
+            login_resp = await client.post(
+                f"{settings.tnlcm_url}/api/v1/user/login",
+                auth=(username, password),
+                headers={"Accept": "application/json"},
+            )
+            login_resp.raise_for_status()
+            response_data = login_resp.json()
+        except httpx.HTTPStatusError as exc:
+            detail = _response_error_detail(exc.response) or "unknown"
+            telemetry.increment_counter(
+                "errors_total",
+                labels={
+                    "service": "auth",
+                    "operation": "login",
+                    "error_type": str(exc.response.status_code),
+                },
+            )
+            raise HTTPException(
+                status_code=502, detail=f"TNLCM login failed after register: {detail}"
+            ) from exc
+        except httpx.TimeoutException as exc:
+            telemetry.increment_counter(
+                "errors_total", labels={"service": "auth", "operation": "login"}
+            )
+            raise HTTPException(
+                status_code=504, detail="Timeout contacting TNLCM login endpoint"
+            ) from exc
+
+    access_token = (
+        response_data.get("access_token")
+        or response_data.get("token")
+        or (response_data.get("data") or {}).get("access_token")
+    )
+    refresh_token = response_data.get("refresh_token") or (response_data.get("data") or {}).get(
+        "refresh_token"
+    )
+
+    if access_token is None:
+        raise HTTPException(
+            status_code=502, detail=f"TNLCM login did not return access_token: {response_data}"
+        )
+
+    app.tnlcm._tnlcm_access_token = str(access_token).strip()
+    if refresh_token:
+        app.tnlcm._tnlcm_refresh_token = str(refresh_token).strip()
+
+    token_preview = (
+        f"{app.tnlcm._tnlcm_access_token[:12]}...{app.tnlcm._tnlcm_access_token[-6:]}"
+        if len(app.tnlcm._tnlcm_access_token) > 20
+        else "[token-set]"
+    )
+
+    telemetry.log_event("info", "user.register.completed", username=username)
+
+    return {"status": "ok", "token_preview": token_preview}
 
 
 @app.post(
@@ -91,19 +238,36 @@ async def post_execution(descriptor: DatasetDescriptor):
     al completar TNLCM. Establecer auto_start_elcm=false para control manual del flujo.
     """
     execution_id = descriptor.infrastructure.name.strip()
-    telemetry.increment_counter("requests_total", labels={"service": "orchestrator", "operation": "create"})
-    telemetry.log_event("info", "request.received", service="orchestrator", operation="create", execution_id=execution_id)
+    telemetry.increment_counter(
+        "requests_total", labels={"service": "orchestrator", "operation": "create"}
+    )
+    telemetry.log_event(
+        "info",
+        "request.received",
+        service="orchestrator",
+        operation="create",
+        execution_id=execution_id,
+    )
     timer = telemetry.start_timer("orchestrator", "create", execution_id)
     timer.start()
     request_status = "success"
     record = None
-    logger.info(f"Nueva ejecucion solicitada (auto_elcm={descriptor.auto_start_elcm}): {descriptor.infrastructure.name}")
+    logger.info(
+        f"Nueva ejecucion solicitada (auto_elcm={descriptor.auto_start_elcm}): {descriptor.infrastructure.name}"
+    )
     try:
         record = await create_tnlcm_execution(descriptor)
         return to_execution_response(record)
     except TnlcmDeploymentInProgressError as exc:
         request_status = "error"
-        telemetry.increment_counter("errors_total", labels={"service": "orchestrator", "operation": "create", "error_type": "tnlcm_deploy_in_progress"})
+        telemetry.increment_counter(
+            "errors_total",
+            labels={
+                "service": "orchestrator",
+                "operation": "create",
+                "error_type": "tnlcm_deploy_in_progress",
+            },
+        )
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception:
         request_status = "error"
@@ -111,7 +275,11 @@ async def post_execution(descriptor: DatasetDescriptor):
     finally:
         try:
             duration = timer.stop(status=request_status)
-            payload = {"service": "orchestrator", "operation": "create", "execution_id": execution_id}
+            payload = {
+                "service": "orchestrator",
+                "operation": "create",
+                "execution_id": execution_id,
+            }
             if duration >= 1.0:
                 payload["duration_display"] = format_duration_display(duration)
             telemetry.log_event("info", "request.completed", **payload)
@@ -128,7 +296,7 @@ async def post_execution(descriptor: DatasetDescriptor):
 )
 async def post_execution_elcm(execution_id: str):
     """Dispara manualmente la fase ELCM y cleanup final de la TN.
-    
+
     Útil cuando descriptor.auto_start_elcm=false. Si ELCM ya está en progreso,
     devuelve el estado actual sin error.
     """

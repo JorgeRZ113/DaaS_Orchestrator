@@ -112,6 +112,7 @@ def _validate_settings(candidate: Settings) -> None:
     if not candidate.tnlcm_url.startswith(("http://", "https://")):
         raise ValueError("TNLCM_URL must start with http:// or https://")
 
+
 _reload_lock = Lock()
 settings = _load_settings()
 _validate_settings(settings)

@@ -64,17 +64,6 @@ class ActivateRequest(TNIdRequest):
     )
 
 
-class ReportRequest(TNIdRequest):
-    pass
-
-
-class DestroyRequest(TNIdRequest):
-    pass
-
-
-class PurgeRequest(TNIdRequest):
-    pass
-
 
 class InfrastructureConfig(BaseModel):
     name: str = Field(..., description="Nombre del escenario o TN")
@@ -102,7 +91,6 @@ class ExperimentConfig(BaseModel):
     )
 
 
-
 class RunExperimentRequest(BaseModel):
     descriptor: ExperimentConfig
 
@@ -119,63 +107,9 @@ class DatasetDescriptor(BaseModel):
     experiment: ExperimentConfig
     dataset: DatasetRequest = Field(default_factory=DatasetRequest)
     auto_start_elcm: bool = Field(
-        default=True,
-        description="Si True, inicia automáticamente ELCM al completar TNLCM"
+        default=True, description="Si True, inicia automáticamente ELCM al completar TNLCM"
     )
 
-
-class TnInitInfo(BaseModel):
-    opennebula_vnet_id: Optional[str] = None
-    vxlan: Optional[str] = None
-
-
-class BastionInfo(BaseModel):
-    private_key: Optional[str] = None
-    wireguard_client_config: Optional[str] = None
-
-
-class InfluxInfo(BaseModel):
-    ip: Optional[str] = None
-    port: Optional[int] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
-
-
-class GrafanaInfo(BaseModel):
-    ip: Optional[str] = None
-    port: Optional[int] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
-
-
-class ElcmInfo(BaseModel):
-    ip: Optional[str] = None
-    backend_port: Optional[int] = None
-    frontend_port: Optional[int] = None
-
-
-class ComponentInfo(BaseModel):
-    name: str
-    ip: Optional[str] = None
-    port: Optional[int] = None
-    ports: Dict[str, int] = Field(default_factory=dict)
-    username: Optional[str] = None
-    password: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-
-class ReportResponse(BaseModel):
-    tn_id: str
-    raw: Optional[str] = None
-    markdown: Optional[str] = None
-
-    tn_init: Optional[TnInitInfo] = None
-    bastion: Optional[BastionInfo] = None
-    influx: Optional[InfluxInfo] = None
-    grafana: Optional[GrafanaInfo] = None
-    elcm: Optional[ElcmInfo] = None
-
-    components: Dict[str, ComponentInfo] = Field(default_factory=dict)
 
 
 class ExecutionRecord(BaseModel):

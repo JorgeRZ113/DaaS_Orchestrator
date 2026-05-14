@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 class TnlcmDeploymentInProgressError(RuntimeError):
     """Raised when a TNLCM deployment is already running."""
 
+
 # ELCM phase timing constants (kept local to orchestration flow)
 ELCM_POLL_INTERVAL_SECONDS = 10
 ELCM_EXECUTION_TIMEOUT_SECONDS = 3600
@@ -35,11 +36,8 @@ EXECUTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
 def _save_executions_to_disk() -> None:
     """Guarda el estado de las ejecuciones a disco en JSON."""
     try:
-        data = {
-            execution_id: record.model_dump()
-            for execution_id, record in executions.items()
-        }
-        with open(EXECUTIONS_FILE, 'w') as f:
+        data = {execution_id: record.model_dump() for execution_id, record in executions.items()}
+        with open(EXECUTIONS_FILE, "w") as f:
             json.dump(data, f, indent=2, default=str)
     except Exception as exc:
         logger.warning(f"Could not save executions to disk: {exc}")
@@ -49,11 +47,11 @@ def _load_executions_from_disk() -> None:
     """Carga el estado de las ejecuciones desde disco al iniciar."""
     if not EXECUTIONS_FILE.exists():
         return
-    
+
     try:
-        with open(EXECUTIONS_FILE, 'r') as f:
+        with open(EXECUTIONS_FILE, "r") as f:
             data = json.load(f)
-        
+
         for execution_id, record_dict in data.items():
             try:
                 record = ExecutionRecord(**record_dict)
@@ -154,7 +152,9 @@ def _release_tnlcm_deploy_slot(execution_id: str) -> None:
         if _tnlcm_deploy_in_progress == execution_id:
             _tnlcm_deploy_in_progress = None
             try:
-                telemetry.change_gauge("active_executions", -1.0, labels={"service": "orchestrator"})
+                telemetry.change_gauge(
+                    "active_executions", -1.0, labels={"service": "orchestrator"}
+                )
             except Exception:
                 pass
 
@@ -208,9 +208,7 @@ async def _handle_elcm_start_timeout(execution_id: str, timeout_seconds: int) ->
             logger.error("[%s] WireGuard timeout cleanup failed: %s", execution_id, vpn_error)
             _update(execution_id, vpn_status="DOWN_ERROR", vpn_error=str(vpn_error))
 
-    cleanup_message = (
-        "ELCM trigger timeout exceeded; TN was destroyed/purged automatically."
-    )
+    cleanup_message = "ELCM trigger timeout exceeded; TN was destroyed/purged automatically."
     try:
         await destroy_trial_network(record.tn_id)
     except Exception as cleanup_error:
@@ -241,7 +239,9 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
     _cancel_elcm_start_timeout(execution_id)
 
     # Timer para TNLCM total
-    tnlcm_phase_timer = telemetry.start_timer("orchestrator", "tnlcm_phase", execution_id=execution_id)
+    tnlcm_phase_timer = telemetry.start_timer(
+        "orchestrator", "tnlcm_phase", execution_id=execution_id
+    )
     tnlcm_phase_timer.start()
 
     try:
@@ -253,16 +253,30 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
 
         _update(execution_id, status=ExecutionState.deploying, message="Deploying Trial Network")
         logger.info(f"[{execution_id}] Deploying TN: {descriptor.infrastructure.name}")
-        
+
         # Timer para TNLCM create
-        tnlcm_create_timer = telemetry.start_timer("orchestrator", "tnlcm_create", execution_id=execution_id)
+        tnlcm_create_timer = telemetry.start_timer(
+            "orchestrator", "tnlcm_create", execution_id=execution_id
+        )
         tnlcm_create_timer.start()
-        telemetry.log_event("info", "tnlcm.create.started", service="orchestrator", operation="tnlcm_create", execution_id=execution_id)
-        
+        telemetry.log_event(
+            "info",
+            "tnlcm.create.started",
+            service="orchestrator",
+            operation="tnlcm_create",
+            execution_id=execution_id,
+        )
+
         tn_id = await deploy_trial_network(descriptor.infrastructure, execution_id=execution_id)
-        
+
         tnlcm_create_timer.stop(status="success")
-        telemetry.log_event("info", "tnlcm.create.completed", service="orchestrator", operation="tnlcm_create", execution_id=execution_id)
+        telemetry.log_event(
+            "info",
+            "tnlcm.create.completed",
+            service="orchestrator",
+            operation="tnlcm_create",
+            execution_id=execution_id,
+        )
         telemetry.increment_counter("tnlcm_create_total", labels={"service": "orchestrator"})
 
         _update(execution_id, status=ExecutionState.collecting, message="Downloading TNLCM report")
@@ -270,10 +284,15 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         raw_report_path = await build_tnlcm_raw_report_artifact(execution_id, report_markdown)
         report_markdown_from_file = Path(raw_report_path).read_text(encoding="utf-8")
         report_summary = summarize_trial_network_report(report_markdown_from_file)
-        summary_report_path = await build_tnlcm_summary_artifact(execution_id, tn_id, report_summary)
+        summary_report_path = await build_tnlcm_summary_artifact(
+            execution_id, tn_id, report_summary
+        )
         report_artifacts = [raw_report_path, summary_report_path]
 
-        wireguard_config = report_summary.get("wireguard_client_config")
+        tn_init_summary = report_summary
+        wireguard_config = None
+        if isinstance(tn_init_summary, dict):
+            wireguard_config = tn_init_summary.get("wireguard_client_config")
         if not isinstance(wireguard_config, str) or not wireguard_config.strip():
             raise ValueError("TNLCM report does not include wireguard_client_config")
         vpn_conf_path = write_tunnel_conf(execution_id, tn_id, wireguard_config)
@@ -312,7 +331,15 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
                 message=manual_message,
             )
             tnlcm_phase_timer.stop(status="success")
-            telemetry.log_event("info", "tnlcm.phase.completed", service="orchestrator", operation="tnlcm_phase", execution_id=execution_id, tn_id=tn_id, status="manual_required")
+            telemetry.log_event(
+                "info",
+                "tnlcm.phase.completed",
+                service="orchestrator",
+                operation="tnlcm_phase",
+                execution_id=execution_id,
+                tn_id=tn_id,
+                status="manual_required",
+            )
             await _persist_telemetry_report_best_effort(execution_id, "tnlcm_manual_required")
             _schedule_elcm_start_timeout(execution_id)
             return
@@ -330,8 +357,18 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             message="TN deployment completed with automatic WireGuard tunnel",
         )
         tnlcm_phase_timer.stop(status="success")
-        telemetry.log_event("info", "tnlcm.phase.completed", service="orchestrator", operation="tnlcm_phase", execution_id=execution_id, tn_id=tn_id, status="success")
-        telemetry.increment_counter("tnlcm_phase_total", labels={"service": "orchestrator", "status": "success"})
+        telemetry.log_event(
+            "info",
+            "tnlcm.phase.completed",
+            service="orchestrator",
+            operation="tnlcm_phase",
+            execution_id=execution_id,
+            tn_id=tn_id,
+            status="success",
+        )
+        telemetry.increment_counter(
+            "tnlcm_phase_total", labels={"service": "orchestrator", "status": "success"}
+        )
         await _persist_telemetry_report_best_effort(execution_id, "tnlcm_completed")
 
         # Auto-start ELCM if configured
@@ -341,14 +378,25 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             asyncio.create_task(run_elcm_phase(execution_id))
         else:
             _schedule_elcm_start_timeout(execution_id)
-        
-        logger.info(f"[{execution_id}] TN {tn_id} deployment completed with active WireGuard tunnel.")
+
+        logger.info(
+            f"[{execution_id}] TN {tn_id} deployment completed with active WireGuard tunnel."
+        )
 
     except Exception as exc:
         logger.error(f"[{execution_id}] TNLCM phase error: {exc}")
         tnlcm_phase_timer.stop(status="error")
-        telemetry.log_event("error", "tnlcm.phase.failed", service="orchestrator", operation="tnlcm_phase", execution_id=execution_id, error=str(exc))
-        telemetry.increment_counter("errors_total", labels={"service": "orchestrator", "operation": "tnlcm_phase"})
+        telemetry.log_event(
+            "error",
+            "tnlcm.phase.failed",
+            service="orchestrator",
+            operation="tnlcm_phase",
+            execution_id=execution_id,
+            error=str(exc),
+        )
+        telemetry.increment_counter(
+            "errors_total", labels={"service": "orchestrator", "operation": "tnlcm_phase"}
+        )
         _update(execution_id, status=ExecutionState.failed, error=str(exc), message=f"Error: {exc}")
         await _persist_telemetry_report_best_effort(execution_id, "tnlcm_failed")
         if tn_id:
@@ -358,14 +406,18 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
 
                     down_tunnel(tn_id, vpn_conf_path)
             except Exception as cleanup_error:
-                logger.warning(f"[{execution_id}] WireGuard cleanup after TNLCM failure failed: {cleanup_error}")
+                logger.warning(
+                    f"[{execution_id}] WireGuard cleanup after TNLCM failure failed: {cleanup_error}"
+                )
 
             try:
                 from .tnlcm import destroy_trial_network
 
                 await destroy_trial_network(tn_id)
             except Exception as cleanup_error:
-                logger.warning(f"[{execution_id}] TN cleanup after TNLCM failure failed: {cleanup_error}")
+                logger.warning(
+                    f"[{execution_id}] TN cleanup after TNLCM failure failed: {cleanup_error}"
+                )
     finally:
         _release_tnlcm_deploy_slot(execution_id)
 
@@ -373,7 +425,13 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
 async def run_elcm_phase(execution_id: str) -> None:
     """Phase 2: run ELCM and always cleanup TN at the end."""
     from .artifacts import build_artifacts
-    from .elcm import TnLogsNotFoundError, collect_results, get_experiment_status, run_experiment, upload_test_cases
+    from .elcm import (
+        TnLogsNotFoundError,
+        collect_results,
+        get_experiment_status,
+        run_experiment,
+        upload_test_cases,
+    )
     from .tnlcm import destroy_trial_network, get_tn_status
     from .utils.wireguard import down_tunnel
 
@@ -386,16 +444,30 @@ async def run_elcm_phase(execution_id: str) -> None:
         _update(execution_id, status=ExecutionState.failed, message="tn_id missing for ELCM phase")
         return
     if not elcm_base_url:
-        _update(execution_id, status=ExecutionState.failed, message="elcm_base_url missing for ELCM phase")
+        _update(
+            execution_id,
+            status=ExecutionState.failed,
+            message="elcm_base_url missing for ELCM phase",
+        )
         return
 
     # Timer para ELCM total
-    elcm_phase_timer = telemetry.start_timer("orchestrator", "elcm_phase", execution_id=execution_id)
+    elcm_phase_timer = telemetry.start_timer(
+        "orchestrator", "elcm_phase", execution_id=execution_id
+    )
     elcm_phase_timer.start()
-    telemetry.log_event("info", "elcm.phase.started", service="orchestrator", operation="elcm_phase", execution_id=execution_id)
+    telemetry.log_event(
+        "info",
+        "elcm.phase.started",
+        service="orchestrator",
+        operation="elcm_phase",
+        execution_id=execution_id,
+    )
 
     try:
-        _update(execution_id, status=ExecutionState.running_experiment, message="Running experiments")
+        _update(
+            execution_id, status=ExecutionState.running_experiment, message="Running experiments"
+        )
 
         testcase_list = _get_testcases(descriptor)
         if not testcase_list:
@@ -406,10 +478,14 @@ async def run_elcm_phase(execution_id: str) -> None:
                 execution_id,
                 message=f"Uploading testcase {index}/{len(testcase_list)}: {testcase}",
             )
-            await upload_test_cases([testcase], elcm_base_url=elcm_base_url, execution_id=execution_id)
+            await upload_test_cases(
+                [testcase], elcm_base_url=elcm_base_url, execution_id=execution_id
+            )
 
         _update(execution_id, message="Launching Exp_Desc.json")
-        elcm_execution_id = await run_experiment(descriptor.experiment, elcm_base_url=elcm_base_url, execution_id=execution_id)
+        elcm_execution_id = await run_experiment(
+            descriptor.experiment, elcm_base_url=elcm_base_url, execution_id=execution_id
+        )
         experiment_ids = [elcm_execution_id]
         _update(execution_id, elcm_execution_id=elcm_execution_id)
 
@@ -420,7 +496,9 @@ async def run_elcm_phase(execution_id: str) -> None:
         elapsed = 0
 
         while elapsed < timeout_seconds:
-            exp_status = await get_experiment_status(elcm_execution_id, elcm_base_url=elcm_base_url, execution_id=execution_id)
+            exp_status = await get_experiment_status(
+                elcm_execution_id, elcm_base_url=elcm_base_url, execution_id=execution_id
+            )
             logger.info(f"ELCM execution {elcm_execution_id} status: {exp_status}")
 
             # Check if execution is finished
@@ -430,7 +508,9 @@ async def run_elcm_phase(execution_id: str) -> None:
 
             # Check for errors
             if "Error" in exp_status or "FAILED" in exp_status.upper():
-                raise RuntimeError(f"ELCM execution {elcm_execution_id} failed with status: {exp_status}")
+                raise RuntimeError(
+                    f"ELCM execution {elcm_execution_id} failed with status: {exp_status}"
+                )
 
             await asyncio.sleep(poll_interval_seconds)
             elapsed += poll_interval_seconds
@@ -441,7 +521,9 @@ async def run_elcm_phase(execution_id: str) -> None:
         # Collect logs with transient error handling
         _update(execution_id, status=ExecutionState.collecting, message="Collecting logs")
         try:
-            execution_logs = await collect_results(elcm_execution_id, elcm_base_url=elcm_base_url, execution_id=execution_id)
+            execution_logs = await collect_results(
+                elcm_execution_id, elcm_base_url=elcm_base_url, execution_id=execution_id
+            )
         except TnLogsNotFoundError as logs_error:
             logger.warning(f"ELCM logs not found for {elcm_execution_id}: {logs_error}")
             raise
@@ -486,14 +568,32 @@ async def run_elcm_phase(execution_id: str) -> None:
             message="ELCM phase completed. TN cleanup done.",
         )
         elcm_phase_timer.stop(status="success")
-        telemetry.log_event("info", "elcm.phase.completed", service="orchestrator", operation="elcm_phase", execution_id=execution_id, status="success")
-        telemetry.increment_counter("elcm_phase_total", labels={"service": "orchestrator", "status": "success"})
+        telemetry.log_event(
+            "info",
+            "elcm.phase.completed",
+            service="orchestrator",
+            operation="elcm_phase",
+            execution_id=execution_id,
+            status="success",
+        )
+        telemetry.increment_counter(
+            "elcm_phase_total", labels={"service": "orchestrator", "status": "success"}
+        )
 
     except Exception as exc:
         logger.error(f"[{execution_id}] ELCM phase error: {exc}")
         elcm_phase_timer.stop(status="error")
-        telemetry.log_event("error", "elcm.phase.failed", service="orchestrator", operation="elcm_phase", execution_id=execution_id, error=str(exc))
-        telemetry.increment_counter("errors_total", labels={"service": "orchestrator", "operation": "elcm_phase"})
+        telemetry.log_event(
+            "error",
+            "elcm.phase.failed",
+            service="orchestrator",
+            operation="elcm_phase",
+            execution_id=execution_id,
+            error=str(exc),
+        )
+        telemetry.increment_counter(
+            "errors_total", labels={"service": "orchestrator", "operation": "elcm_phase"}
+        )
         _update(execution_id, status=ExecutionState.failed, error=str(exc), message=f"Error: {exc}")
 
     finally:
@@ -501,7 +601,9 @@ async def run_elcm_phase(execution_id: str) -> None:
         vpn_interface = record.vpn_interface or tn_id
         if vpn_interface:
             try:
-                logger.info(f"[{execution_id}] Cleanup: deactivating WireGuard tunnel {vpn_interface}")
+                logger.info(
+                    f"[{execution_id}] Cleanup: deactivating WireGuard tunnel {vpn_interface}"
+                )
                 down_tunnel(vpn_interface, record.vpn_conf_path)
                 _update(execution_id, vpn_status="DOWN", vpn_error=None)
             except Exception as vpn_error:
@@ -515,28 +617,56 @@ async def run_elcm_phase(execution_id: str) -> None:
             logger.warning(f"[{execution_id}] Cleanup failed: {cleanup_error}")
 
         final_record = executions.get(execution_id)
-        final_stage = "elcm_completed" if final_record and final_record.status == ExecutionState.completed else "elcm_finalized"
+        final_stage = (
+            "elcm_completed"
+            if final_record and final_record.status == ExecutionState.completed
+            else "elcm_finalized"
+        )
         await _persist_telemetry_report_best_effort(execution_id, final_stage)
         logger.info("[%s] ELCM phase finalization completed", execution_id)
-        
+
         # Cerrar timer global de ejecución
         execution_timer = getattr(final_record, "_execution_timer", None)
         if execution_timer is not None:
-            final_status = "success" if final_record and final_record.status == ExecutionState.completed else "failed"
+            final_status = (
+                "success"
+                if final_record and final_record.status == ExecutionState.completed
+                else "failed"
+            )
             execution_timer.stop(status=final_status)
-            telemetry.log_event("info", "orchestrator_execution.completed", service="orchestrator", operation="create", execution_id=execution_id, status=final_status)
-            telemetry.increment_counter("orchestrator_execution_total", labels={"service": "orchestrator", "status": final_status})
+            telemetry.log_event(
+                "info",
+                "orchestrator_execution.completed",
+                service="orchestrator",
+                operation="create",
+                execution_id=execution_id,
+                status=final_status,
+            )
+            telemetry.increment_counter(
+                "orchestrator_execution_total",
+                labels={"service": "orchestrator", "status": final_status},
+            )
 
 
 async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionRecord:
     execution_id = descriptor.infrastructure.name.strip()
-    telemetry.increment_counter("requests_total", labels={"service": "orchestrator", "operation": "create"})
-    
+    telemetry.increment_counter(
+        "requests_total", labels={"service": "orchestrator", "operation": "create"}
+    )
+
     # Timer end-to-end para toda la ejecución
-    execution_timer = telemetry.start_timer("orchestrator", "execution_total", execution_id=execution_id)
+    execution_timer = telemetry.start_timer(
+        "orchestrator", "execution_total", execution_id=execution_id
+    )
     execution_timer.start()
-    telemetry.log_event("info", "orchestrator_execution.started", service="orchestrator", operation="create", execution_id=execution_id)
-    
+    telemetry.log_event(
+        "info",
+        "orchestrator_execution.started",
+        service="orchestrator",
+        operation="create",
+        execution_id=execution_id,
+    )
+
     # Measure lock wait time
     lock_start = time.time()
     _acquire_tnlcm_deploy_slot(execution_id)
@@ -566,7 +696,9 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
         )
         executions[execution_id] = record
         execution_descriptors[execution_id] = descriptor
-        logger.debug("[%s] STATUS NONE -> %s | %s", execution_id, record.status.value, record.message)
+        logger.debug(
+            "[%s] STATUS NONE -> %s | %s", execution_id, record.status.value, record.message
+        )
         _save_executions_to_disk()  # Guarda al crear
 
         # Update telemetry: active executions gauge
@@ -577,13 +709,21 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
 
         # Store execution timer for later closure at end of orchestration
         setattr(executions[execution_id], "_execution_timer", execution_timer)
-        
+
         asyncio.create_task(run_tnlcm_phase(execution_id, descriptor))
         return record
     except Exception:
         execution_timer.stop(status="error")
-        telemetry.log_event("error", "orchestrator_execution.failed", service="orchestrator", operation="create", execution_id=execution_id)
-        telemetry.increment_counter("errors_total", labels={"service": "orchestrator", "operation": "create"})
+        telemetry.log_event(
+            "error",
+            "orchestrator_execution.failed",
+            service="orchestrator",
+            operation="create",
+            execution_id=execution_id,
+        )
+        telemetry.increment_counter(
+            "errors_total", labels={"service": "orchestrator", "operation": "create"}
+        )
         _release_tnlcm_deploy_slot(execution_id)
         raise
 
@@ -603,4 +743,3 @@ async def start_elcm_phase(execution_id: str) -> ExecutionRecord:
     _update(execution_id, status=ExecutionState.running_experiment, message="ELCM phase triggered")
     asyncio.create_task(run_elcm_phase(execution_id))
     return executions[execution_id]
-

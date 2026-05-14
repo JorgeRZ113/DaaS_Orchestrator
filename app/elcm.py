@@ -18,6 +18,7 @@ ELCM_RUN_ERROR_HINT = (
     "Corrija lo indicado por el error antes de volver a ejecutar la parte de ELCM."
 )
 
+
 def _normalize_elcm_url(base_url: str) -> str:
     return base_url.strip().rstrip("/")
 
@@ -143,30 +144,34 @@ async def upload_test_cases(
         for testcase_path in testcase_paths:
             if not testcase_path:
                 continue
-            
+
             resolved_path = _resolve_examples_path(testcase_path)
             if not resolved_path:
                 logger.warning(f"Could not resolve testcase path: {testcase_path}")
                 continue
-            
+
             path = Path(resolved_path)
             if not path.exists():
                 logger.warning(f"Testcase file not found: {resolved_path}")
                 continue
-            
+
             # Read the file
             with open(path, "rb") as f:
                 file_content = f.read()
-            
+
             # Upload to ELCM
             files = {
                 "test_case": (path.name, file_content),
                 "file_type": (None, "testcase"),
                 "user_id": (None, str(user_id)),
             }
-            
-            telemetry.increment_counter("requests_total", labels={"service": "elcm", "operation": "upload"})
-            upload_timer = telemetry.start_timer("elcm", "upload", telemetry.ensure_execution_id(execution_id))
+
+            telemetry.increment_counter(
+                "requests_total", labels={"service": "elcm", "operation": "upload"}
+            )
+            upload_timer = telemetry.start_timer(
+                "elcm", "upload", telemetry.ensure_execution_id(execution_id)
+            )
             upload_timer.start()
             upload_status = "success"
             try:
@@ -181,7 +186,14 @@ async def upload_test_cases(
             except httpx.HTTPStatusError as exc:
                 _log_http_response("ELCM", exc.response)
                 detail = _response_error_detail(exc.response)
-                telemetry.increment_counter("errors_total", labels={"service": "elcm", "operation": "upload", "error_type": str(exc.response.status_code)})
+                telemetry.increment_counter(
+                    "errors_total",
+                    labels={
+                        "service": "elcm",
+                        "operation": "upload",
+                        "error_type": str(exc.response.status_code),
+                    },
+                )
                 upload_status = "error"
                 raise TnUploadTestCaseError(
                     (
@@ -235,7 +247,10 @@ async def run_experiment(
             _log_http_response("ELCM", exc.response)
             status_code = exc.response.status_code
             detail = _response_error_detail(exc.response)
-            telemetry.increment_counter("errors_total", labels={"service": "elcm", "operation": "run", "error_type": str(status_code)})
+            telemetry.increment_counter(
+                "errors_total",
+                labels={"service": "elcm", "operation": "run", "error_type": str(status_code)},
+            )
             run_status = "error"
             if status_code in ELCM_RUN_NON_RETRYABLE_STATUS_CODES:
                 raise RuntimeError(
@@ -269,7 +284,9 @@ async def get_experiment_status(
 ) -> str:
     """Get execution status from ELCM."""
     telemetry.increment_counter("requests_total", labels={"service": "elcm", "operation": "status"})
-    status_timer = telemetry.start_timer("elcm", "status", execution_id=telemetry.ensure_execution_id(execution_id or experiment_id))
+    status_timer = telemetry.start_timer(
+        "elcm", "status", execution_id=telemetry.ensure_execution_id(execution_id or experiment_id)
+    )
     status_timer.start()
     status_value = "success"
     base_url = _resolve_elcm_url(elcm_base_url)
@@ -284,7 +301,14 @@ async def get_experiment_status(
         except httpx.HTTPStatusError as exc:
             _log_http_response("ELCM", exc.response)
             detail = _response_error_detail(exc.response)
-            telemetry.increment_counter("errors_total", labels={"service": "elcm", "operation": "status", "error_type": str(exc.response.status_code)})
+            telemetry.increment_counter(
+                "errors_total",
+                labels={
+                    "service": "elcm",
+                    "operation": "status",
+                    "error_type": str(exc.response.status_code),
+                },
+            )
             status_value = "error"
             raise RuntimeError(
                 (
@@ -310,8 +334,12 @@ async def collect_results(
     execution_id: str | None = None,
 ) -> dict[str, Any]:
     """Collect experiment logs (current dataset mode: logs)."""
-    telemetry.increment_counter("requests_total", labels={"service": "elcm", "operation": "collect"})
-    collect_timer = telemetry.start_timer("elcm", "collect", execution_id=telemetry.ensure_execution_id(execution_id or experiment_id))
+    telemetry.increment_counter(
+        "requests_total", labels={"service": "elcm", "operation": "collect"}
+    )
+    collect_timer = telemetry.start_timer(
+        "elcm", "collect", execution_id=telemetry.ensure_execution_id(execution_id or experiment_id)
+    )
     collect_timer.start()
     collect_status = "success"
     base_url = _resolve_elcm_url(elcm_base_url)
@@ -343,7 +371,9 @@ async def collect_results(
             error_msg = exc.response.text
             # If logs not ready yet (file doesn't exist), return empty logs
             if "No such file or directory" in error_msg:
-                logger.info(f"Logs not ready yet for experiment {experiment_id}, returning empty logs")
+                logger.info(
+                    f"Logs not ready yet for experiment {experiment_id}, returning empty logs"
+                )
                 return {
                     "output": "logs",
                     "experiment_id": experiment_id,
@@ -352,7 +382,14 @@ async def collect_results(
                 }
             _log_http_response("ELCM", exc.response)
             detail = _response_error_detail(exc.response)
-            telemetry.increment_counter("errors_total", labels={"service": "elcm", "operation": "collect", "error_type": str(exc.response.status_code)})
+            telemetry.increment_counter(
+                "errors_total",
+                labels={
+                    "service": "elcm",
+                    "operation": "collect",
+                    "error_type": str(exc.response.status_code),
+                },
+            )
             collect_status = "error"
             raise RuntimeError(
                 (

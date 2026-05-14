@@ -82,7 +82,8 @@ Header requerido para endpoints de ejecucion:
 | Metodo | Endpoint | Auth | Body | Para que sirve |
 |---|---|---|---|---|
 | `GET` | `/health` | No | No | Verificar servicio |
-| `POST` | `/config/reload` | Si | No | Recarga en caliente variables mutables de `.env` |
+| `POST` | `/login` | Si | No | Recarga en caliente variables mutables de `.env` |
+| `POST` | `/register` | No | No (query params) | Registra usuario en TNLCM y devuelve access/refresh token |
 | `POST` | `/executions` | Si | Si | **[UNIFICADO]** Ejecuta TNLCM + ELCM automático (o solo TNLCM si `auto_start_elcm=false`) |
 | `POST` | `/tnlcm/token/refresh` | Si | No | Hacer login TNLCM con `.env` y guardar el token en memoria |
 | `POST` | `/executions/{execution_id}/elcm` | Si | No | Disparar ELCM manualmente (para `auto_start_elcm=false`) |
@@ -104,11 +105,17 @@ Header requerido para endpoints de ejecucion:
 - Devuelve `execution_id`, `status`, `message`.
 - Ver `docs/UNIFIED_EXECUTIONS_API.md` y `examples/EXECUTIONS_EXAMPLES.md` para detalles y ejemplos.
 
-### `POST /config/reload`
+### `POST /login`
 - Recarga sin reinicio solo configuracion mutable en memoria del proceso actual.
 - Requiere header `x-api-key`.
 - Valida tipos/rangos antes de aplicar cambios.
 - No recarga: `APP_HOST`, `APP_PORT`, `EXECUTIONS_FILE`, `ARTIFACTS_DIR`, `EXAMPLES_DIR`.
+
+### `POST /register`
+- Registra un usuario en TNLCM y, tras registro exitoso, realiza login para devolver tokens.
+- No requiere header `x-api-key`.
+- Parámetros por query string: `username` (obligatorio), `password` (obligatorio), `email` (opcional), `org` (opcional).
+- Envía al TNLCM el body JSON: `{"email":..., "username":..., "password":..., "org":...}` y luego hace login para obtener `access_token`/`refresh_token`.
 
 ### `POST /tnlcm/token/refresh`
 - Usa `TNLCM_USER` y `TNLCM_PASSWORD` de `.env` para hacer login en TNLCM.
@@ -253,6 +260,81 @@ Si necesitas control granular:
 - Windows: usa `wireguard.exe` via helper; primero intenta sin elevacion y, si detecta permisos insuficientes, reintenta elevando el helper.
 - Campos de seguimiento en `GET /executions/{execution_id}/detail`: `vpn_interface`, `vpn_conf_path`, `vpn_status`, `vpn_error`.
 
+## Estructura del resumen TNLCM
+
+El artefacto `tnlcm_report_summary.json` se genera a partir del markdown devuelto por el endpoint externo de TNLCM.
+La estructura actual respeta el esquema de `Modificacion_report.txt`:
+
+```json
+{
+  "tn_id": "<tn_id>",
+  "summary": {
+    "private_ssh_key": "<private_key_o_null>",
+    "wireguard_client_config": "<wireguard_config_o_null>",
+    "tn_vxlan": {
+      "name": "<nombre_componente>",
+      "ip": "<ip_o_null>",
+      "ips": ["<ip_1>", "<ip_2>"],
+      "ports": [<puerto_1>, <puerto_2>],
+      "credentials": { ... },
+      "extra_info": { ... }
+    },
+    "tn_bastion": {
+      "name": "<nombre_componente>",
+      "ip": "<ip_o_null>",
+      "ips": ["<ip_1>", "<ip_2>"],
+      "ports": [<puerto_1>, <puerto_2>],
+      "credentials": { ... },
+      "extra_info": { ... }
+    },
+    "technitium_dns": {
+      "url": "<url_o_null>",
+      "username": "<username_o_null>",
+      "password": "<password_o_null>"
+    },
+    "monitoring": {
+      "name": "<nombre_componente>",
+      "ip": "<ip_o_null>",
+      "ips": ["<ip_1>", "<ip_2>"],
+      "ports": [<puerto_1>, <puerto_2>],
+      "credentials": {
+        "username": "<username_o_null>",
+        "password": "<password_o_null>",
+        "organization": "<organization_o_null>",
+        "bucket": "<bucket_o_null>",
+        "token": "<token_o_null>"
+      },
+      "extra_info": { ... }
+    },
+    "elcm": {
+      "name": "<nombre_componente>",
+      "ip": "<ip_o_null>",
+      "ips": ["<ip_1>", "<ip_2>"],
+      "ports": [<puerto_1>, <puerto_2>],
+      "credentials": { ... },
+      "extra_info": { ... }
+    },
+    "components": {
+      "<nombre_componente_extra>": {
+        "name": "<nombre_componente>",
+        "ip": "<ip_o_null>",
+        "ips": ["<ip_1>", "<ip_2>"],
+        "ports": [<puerto_1>, <puerto_2>],
+        "credentials": { ... },
+        "extra_info": { ... }
+      }
+    },
+    "components_count": 0
+  }
+}
+```
+
+- Las claves fijas en `summary` son: `private_ssh_key`, `wireguard_client_config`, `tn_vxlan`, `tn_bastion`, `technitium_dns`, `monitoring`, `elcm` y `components`.
+- Si una clave fija no aparece en el markdown, su valor es `null`.
+- Los componentes adicionales (más allá de `tn_vxlan`, `tn_bastion`, `monitoring` y `elcm`) se añaden en el diccionario `components`, respetando el orden del markdown.
+- `components_count` cuenta todos los bloques de componentes detectados en el report.
+- Cada componente contiene `name`, `ip`, `ips`, `ports`, `credentials` (si aplica) e `extra_info` con metadatos adicionales (OpenNebula IDs, VXLAN settings, etc.).
+
 ## Changelog (formato compacto)
 
 | Fecha | Cambio |
@@ -273,6 +355,7 @@ Si necesitas control granular:
 | 2026-04 | Refactor de WireGuard a `app/utils` con helper dedicado `app/utils/wireguard_helper.py` |
 | 2026-05 | **Telemetría Orchestrator-Céntrica**: Métricas granulares de fase (TNLCM create/activate, ELCM total, ejecución end-to-end) |
 | 2026-05 | **API Unificada**: Endpoint `/executions` unificado con `auto_start_elcm` (defecto `true`) para flujo automático TNLCM+ELCM; remover `/executions/tnlcm` redundante |
+| 2026-05 | Rediseño del resumen TNLCM: claves fijas `tn_init`/`monitoring`/`elcm` y componentes auxiliares ordenados |
 
 ## Uso con Postman
 

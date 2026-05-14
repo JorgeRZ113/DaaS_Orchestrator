@@ -62,7 +62,9 @@ async def build_artifacts(
 
     testcases_count = 0
     if isinstance(results, dict) and isinstance(results.get("testcases"), list):
-        testcases_count = len([tc for tc in results.get("testcases", []) if isinstance(tc, str) and tc])
+        testcases_count = len(
+            [tc for tc in results.get("testcases", []) if isinstance(tc, str) and tc]
+        )
     elif isinstance(logs_payload, list):
         seen_testcases: set[str] = set()
         for entry in logs_payload:
@@ -85,7 +87,6 @@ async def build_artifacts(
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
     logger.info(f"[{execution_id}] metadata.json generated")
-
 
     logs_path = os.path.join(base_dir, "logs.json")
     with open(logs_path, "w", encoding="utf-8") as f:
@@ -162,5 +163,3 @@ async def build_telemetry_report_artifact(
 
     logger.info(f"[{execution_id}] telemetry report generated: {telemetry_path}")
     return telemetry_path
-
-

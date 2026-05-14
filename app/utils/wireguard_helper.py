@@ -58,7 +58,9 @@ def main() -> int:
         subprocess.run(["wg-quick", "down", args.tn_id], capture_output=True, text=True)
 
     if args.action == "up" and os.name == "nt":
-        subprocess.run(_build_command("down", args.tn_id, args.conf_path), capture_output=True, text=True)
+        subprocess.run(
+            _build_command("down", args.tn_id, args.conf_path), capture_output=True, text=True
+        )
 
     command = _build_command(args.action, args.tn_id, args.conf_path)
     result = _run_command(command)
@@ -71,8 +73,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-
-
