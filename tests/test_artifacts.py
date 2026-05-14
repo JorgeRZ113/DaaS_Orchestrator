@@ -59,7 +59,17 @@ def test_build_tnlcm_report_files_are_created(tmp_path) -> None:
             artifacts.build_tnlcm_summary_artifact(
                 execution_id="exec-2",
                 tn_id="tn-demo",
-                report_summary={"components": {"elcm": {"ip": "10.0.0.1"}}},
+                report_summary={
+                    "private_ssh_key": "PRIVATE",
+                    "wireguard_client_config": "WG",
+                    "tn_vxlan": {"name": "tn-vxlan", "ips": ["192.168.199.1"]},
+                    "tn_bastion": {"name": "tn-bastion", "ips": ["192.168.199.1"]},
+                    "technitium_dns": {"url": "http://example:5380", "username": "admin"},
+                    "monitoring": {"name": "monitoring-test", "ip": "10.0.0.2"},
+                    "elcm": {"name": "elcm-exp", "ip": "10.0.0.1"},
+                    "components": {"alpha": {"name": "alpha", "ip": "10.0.0.3"}},
+                    "components_count": 6,
+                },
             )
         )
     finally:
@@ -71,6 +81,8 @@ def test_build_tnlcm_report_files_are_created(tmp_path) -> None:
     summary = json.loads(Path(summary_path).read_text(encoding="utf-8"))
     assert summary["tn_id"] == "tn-demo"
     assert "summary" in summary
+    assert summary["summary"]["private_ssh_key"] == "PRIVATE"
+    assert "alpha" in summary["summary"]["components"]
 
 
 def test_build_telemetry_report_artifact_is_created(tmp_path) -> None:

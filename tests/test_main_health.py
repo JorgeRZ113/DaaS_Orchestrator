@@ -15,7 +15,7 @@ def test_health_endpoint_returns_ok() -> None:
 
 
 def test_protected_endpoint_rejects_invalid_api_key() -> None:
-    response = client.post("/config/reload", headers={"x-api-key": "bad-key"})
+    response = client.post("/login", headers={"x-api-key": "bad-key"})
 
     assert response.status_code == 401
 
