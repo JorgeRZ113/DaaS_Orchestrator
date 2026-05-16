@@ -219,8 +219,7 @@ The component `tn-demo-beta` has been succesfully created.
 
 
 def test_summarize_trial_network_report_sets_missing_fixed_sections_to_null() -> None:
-    summary = tnlcm.summarize_trial_network_report(
-        """
+    summary = tnlcm.summarize_trial_network_report("""
 # tn-demo-custom
 
 The component `tn-demo-custom` has been succesfully created.
@@ -232,8 +231,7 @@ The component `tn-demo-custom` has been succesfully created.
 ```json
 {"779": "10.0.0.3"}
 ```
-"""
-    )
+""")
 
     assert summary["private_ssh_key"] is None
     assert summary["wireguard_client_config"] is None
