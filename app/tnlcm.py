@@ -346,11 +346,11 @@ def _raise_legacy_create_error(response: httpx.Response | None) -> None:
 
 
 def _headers() -> dict[str, str]:
-    """Build headers using the token stored in memory by /tnlcm/token/refresh."""
+    """Build headers using the token stored in memory by /login."""
     token = _tnlcm_access_token.strip() if _tnlcm_access_token else ""
     if not token:
         raise ValueError(
-            "TNLCM access token is not loaded in memory. Call /tnlcm/token/refresh first."
+            "TNLCM access token is not loaded in memory. Call /login first."
         )
     return {
         "Authorization": f"Bearer {token}",

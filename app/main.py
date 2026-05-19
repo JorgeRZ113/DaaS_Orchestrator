@@ -61,14 +61,14 @@ async def health():
 
 
 @app.post(
-    "/login",
+    "/refresh",
     tags=["config"],
     dependencies=[Depends(verify_api_key)],
 )
-async def post_login():
+async def post_refresh_config():
     """Recarga en caliente solo variables de configuracion mutables.
 
-    Nota: este endpoint se renombró desde /config/reload a /login.
+    Nota: este endpoint se renombró desde /login a /refresh.
     """
     try:
         result = reload_mutable_settings()
@@ -336,7 +336,7 @@ async def get_execution_detail(execution_id: str):
 
 
 @app.post(
-    "/tnlcm/token/refresh",
+    "/login",
     tags=["auth"],
     dependencies=[Depends(verify_api_key)],
 )

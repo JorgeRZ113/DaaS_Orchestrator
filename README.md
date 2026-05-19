@@ -83,10 +83,10 @@ Header requerido para endpoints de ejecucion:
 | Metodo | Endpoint | Auth | Body | Para que sirve |
 |---|---|---|---|---|
 | `GET` | `/health` | No | No | Verificar servicio |
-| `POST` | `/login` | Si | No | Recarga en caliente variables mutables de `.env` |
+| `POST` | `/refresh` | Si | No | Recarga en caliente variables mutables de `.env` |
 | `POST` | `/register` | No | No (query params) | Registra usuario en TNLCM y devuelve access/refresh token |
 | `POST` | `/executions` | Si | Si | **[UNIFICADO]** Ejecuta TNLCM + ELCM automático (o solo TNLCM si `auto_start_elcm=false`) |
-| `POST` | `/tnlcm/token/refresh` | Si | No | Hacer login TNLCM con `.env` y guardar el token en memoria |
+| `POST` | `/login` | Si | No | Hacer login TNLCM con `.env` y guardar el token en memoria |
 | `POST` | `/executions/{execution_id}/elcm` | Si | No | Disparar ELCM manualmente (para `auto_start_elcm=false`) |
 | `GET` | `/executions/{execution_id}` | Si | No | Estado resumido |
 | `GET` | `/executions/{execution_id}/detail` | Si | No | Estado detallado + artefactos |
@@ -106,7 +106,7 @@ Header requerido para endpoints de ejecucion:
 - Devuelve `execution_id`, `status`, `message`.
 - Ver `docs/UNIFIED_EXECUTIONS_API.md` y `examples/EXECUTIONS_EXAMPLES.md` para detalles y ejemplos.
 
-### `POST /login`
+### `POST /refresh`
 - Recarga sin reinicio solo configuracion mutable en memoria del proceso actual.
 - Requiere header `x-api-key`.
 - Valida tipos/rangos antes de aplicar cambios.
@@ -118,11 +118,11 @@ Header requerido para endpoints de ejecucion:
 - Parámetros por query string: `username` (obligatorio), `password` (obligatorio), `email` (opcional), `org` (opcional).
 - Envía al TNLCM el body JSON: `{"email":..., "username":..., "password":..., "org":...}` y luego hace login para obtener `access_token`/`refresh_token`.
 
-### `POST /tnlcm/token/refresh`
+### `POST /login`
 - Usa `TNLCM_USER` y `TNLCM_PASSWORD` de `.env` para hacer login en TNLCM.
 - Almacena `access_token` y `refresh_token` en memoria (módulo `tnlcm.py`).
 - Los tokens en memoria se usan automáticamente en los headers Bearer de todas las llamadas TNLCM.
-- Si no hay token en memoria, el sistema falla y te pide llamar a `POST /tnlcm/token/refresh`.
+- Si no hay token en memoria, el sistema falla y te pide llamar a `POST /login`.
 - Si TNLCM no responde en 20 segundos (por ejemplo, VPN no activa), devuelve `504` con aviso para revisar la VPN.
 - No requiere body.
 
@@ -211,7 +211,7 @@ Payload recomendado (con descriptor base y component):
 - Sin body.
 - Solo `execution_id` en path + header `x-api-key`.
 
-### Para `POST /tnlcm/token/refresh`
+### Para `POST /login`
 
 - Sin body.
 - Solo header `x-api-key`.
@@ -225,7 +225,7 @@ Payload recomendado (con descriptor base y component):
 Con VPN automática ya solucionada, la forma más sencilla es:
 
 ```
-1. POST /tnlcm/token/refresh  (opcional pero recomendado)
+1. POST /login  (opcional pero recomendado)
 2. POST /executions con auto_start_elcm=true (defecto)
 3. GET /executions/{execution_id} para monitorear
 4. ✓ TNLCM + ELCM automático secuencial
@@ -241,7 +241,7 @@ Con VPN automática ya solucionada, la forma más sencilla es:
 Si necesitas control granular:
 
 ```
-1. POST /tnlcm/token/refresh  (opcional pero recomendado)
+1. POST /login  (opcional pero recomendado)
 2. POST /executions con auto_start_elcm=false
 3. GET /executions/{execution_id} hasta COMPLETED (TNLCM)
 4. POST /executions/{execution_id}/elcm  (disparar ELCM)
@@ -256,7 +256,7 @@ Si necesitas control granular:
 ### Detalles del Flujo Automático
 
 **Autenticacion TNLCM (opcional pero recomendado):**
-- `POST /tnlcm/token/refresh` con header `x-api-key`.
+- `POST /login` con header `x-api-key`.
   - Obtiene `access_token` de TNLCM y lo guarda en memoria.
   - Los tokens en memoria tendrán prioridad en todas las llamadas TNLCM.
   - Si NO ejecutas este endpoint, las llamadas TNLCM fallarán hasta refrescar el token.
@@ -316,8 +316,8 @@ Reglas de interpretación:
 | 2026-03 | Soporte de `ExecutionId` de ELCM (incluyendo entero) |
 | 2026-03 | Polling de estado ELCM cada 10s |
 | 2026-03 | Recuperacion automatica TNLCM ante error transitorio en `activate` |
-| 2026-03 | Endpoint `/tnlcm/token/refresh` para login TNLCM con credenciales `.env` |
-| 2026-03 | Tokens TNLCM almacenados en memoria (refresco explícito con `/tnlcm/token/refresh`) |
+| 2026-03 | Endpoint `/login` para login TNLCM con credenciales `.env` |
+| 2026-03 | Tokens TNLCM almacenados en memoria (refresco explícito con `/login`) |
 | 2026-03 | Si TN ya existe en estado "activated", se salta create y continua con activate |
 | 2026-03 | URL de ELCM extraída dinámicamente del reporte TNLCM |
 | 2026-04 | Automatizacion de WireGuard: `<tn_id>.conf`, activacion automatica tras TNLCM y desactivacion obligatoria en cleanup ELCM |
