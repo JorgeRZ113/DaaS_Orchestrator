@@ -1,0 +1,12 @@
+@load("@ytt:data", "data")
+---
+trial_network:
+  # No necesita TN_init, porque se incluye en la base (base_tnlcm_descriptor.yaml)
+  vm_kvm-ubuntu22_04:
+    type: "vm_kvm"
+    name: "ubuntu22_04"
+    dependencies:
+      - "tn_init"
+    input:
+      one_vm_kvm_size: @data.values.vm.size
+      one_vm_kvm_networks: @data.values.vm.networks

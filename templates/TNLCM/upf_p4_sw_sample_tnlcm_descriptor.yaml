@@ -1,0 +1,70 @@
+@load("@ytt:data", "data")
+---
+trial_network:
+  vnet-n1_n3:
+    type: "vnet"
+    name: "n1_n3"
+    dependencies:
+      - "tn_init"
+    input:
+      one_vnet_first_ip: @data.values.network.n1_n3_first_ip
+
+  vnet-n6:
+    type: "vnet"
+    name: "n6"
+    dependencies:
+      - "tn_init"
+    input:
+      one_vnet_first_ip: @data.values.network.n6_first_ip
+
+  upf_p4_sw-upf:
+    type: "upf_p4_sw"
+    name: "upf"
+    dependencies:
+      - "tn_init"
+      - "vnet-n1_n3"
+      - "vnet-n6"
+    input:
+      one_upf_p4_sw_networks: @data.values.upf.networks
+      one_upf_p4_sw_open5gs_amf_ngap_addr: @data.values.upf.amf_ngap_addr
+      one_upf_p4_sw_controller_upf_ipv4_n3: @data.values.upf.controller_upf_ipv4_n3
+      one_upf_p4_sw_controller_upf_ipv4_n6: @data.values.upf.controller_upf_ipv4_n6
+      one_upf_p4_sw_controller_enb_ipv4_n3: @data.values.upf.controller_enb_ipv4_n3
+      one_upf_p4_sw_controller_dn_ipv4_n6: @data.values.upf.controller_dn_ipv4_n6
+      one_upf_p4_sw_ue_pool: @data.values.upf.ue_pool
+
+  ueransim-gnb:
+    type: "ueransim"
+    name: "gnb"
+    dependencies:
+      - "tn_init"
+      - "vnet-n1_n3"
+      - "upf_p4_sw-upf"
+    input:
+      one_ueransim_networks: @data.values.ueransim.networks
+      one_ueransim_mode: @data.values.ueransim.mode
+      one_ueransim_gnb_linked_5gcore: @data.values.ueransim.gnb_linked_5gcore
+      one_ueransim_gnb_amf_n2_ip: @data.values.ueransim.gnb_amf_n2_ip
+
+  ueransim-ue:
+    type: "ueransim"
+    name: "ue"
+    dependencies:
+      - "tn_init"
+      - "upf_p4_sw-upf"
+      - "ueransim-gnb"
+    input:
+      one_ueransim_networks: @data.values.ueransim.networks
+      one_ueransim_mode: @data.values.ueransim.mode_ue
+      one_ueransim_ue_linked_gnb: @data.values.ueransim.ue_linked_gnb
+
+  vm_kvm-pdn:
+    type: "vm_kvm"
+    name: "pdn"
+    dependencies:
+      - "tn_init"
+      - "upf_p4_sw-upf"
+    input:
+      one_vm_kvm_size: @data.values.vm.size
+      one_vm_kvm_networks: @data.values.vm.networks
+

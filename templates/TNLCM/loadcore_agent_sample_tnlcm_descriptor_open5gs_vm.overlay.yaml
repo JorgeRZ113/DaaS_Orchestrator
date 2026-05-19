@@ -1,0 +1,12 @@
+# Overlay para `loadcore_agent_sample_tnlcm_descriptor_open5gs_vm.yaml`
+# Component: loadcore_agent
+# Depends on: vnet, open5gs_vm
+
+@data/values
+---
+loadcore_agent:
+  networks:
+    - "tn_vxlan"
+    - "vnet-n2"
+  hugepages: true
+

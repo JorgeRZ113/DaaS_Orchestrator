@@ -1,0 +1,31 @@
+@load("@ytt:data", "data")
+---
+trial_network:
+  tn_init:
+    type: "tn_init"
+    dependencies: []
+    input: {}
+  monitoring-test:
+    type: "monitoring"
+    name: "test"
+    dependencies: ["tn_init"]
+    input:
+      one_influxdb_version: @data.values.monitoring.influxdb_version
+      one_influxdb_user: @data.values.monitoring.influxdb_user
+      one_influxdb_password: @data.values.monitoring.influxdb_password
+      one_influxdb_org: @data.values.monitoring.influxdb_org
+      one_influxdb_bucket: @data.values.monitoring.influxdb_bucket
+      one_influxdb_token: @data.values.monitoring.influxdb_token
+      one_grafana_version: @data.values.monitoring.grafana_version
+      one_grafana_password: @data.values.monitoring.grafana_password
+      one_prometheus_version: @data.values.monitoring.prometheus_version
+  elcm-exp:
+    type: "elcm"
+    name: "exp"
+    dependencies:
+      - "monitoring-test"
+    input:
+      one_elcm_influxdb: "monitoring-test"
+      one_elcm_grafana: "monitoring-test"
+
+
