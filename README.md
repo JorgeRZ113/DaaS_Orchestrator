@@ -1,13 +1,14 @@
 # tfgjorge
 
-Orquestador API para ejecutar un flujo en dos fases:
+Orquestador API para ejecutar un flujo en tres fases:
 
 1. `TNLCM`: despliegue y preparacion de Trial Network.
-2. `ELCM`: ejecucion de experimentos y recogida de logs.
+2. `ELCM` (TestCases): generacion y subida de casos de prueba.
+3. `ELCM` (Experiment): ejecucion de experimentos y recogida de logs.
 
 ## Descripcion
 
-Este servicio expone endpoints HTTP para crear ejecuciones, consultar su estado y recuperar detalle de resultados. El flujo objetivo es reproducible y guiado por descriptores y ejemplos en `examples`.
+Este servicio expone endpoints HTTP para crear ejecuciones, consultar su estado y recuperar detalle de resultados. El flujo objetivo es reproducible y guiado por descriptores y plantillas separadas por dominio en `templates/`.
 
 ## Objetivo del proyecto
 
@@ -62,16 +63,16 @@ TELEMETRY_REPORT_ARTIFACTS=true
 
 Nota: la ventana máxima para disparar `POST /executions/{execution_id}/elcm` tras completar TNLCM se define como constante interna en `app/orchestrator.py` (`ELCM_START_TIMEOUT_SECONDS`). Si se supera, el orquestador cancela la ejecución y ejecuta `destroy/purge` automático. **Con `auto_start_elcm=true` (defecto), esto no es un problema ya que ELCM se dispara automáticamente.**
 
-## `examples` y su uso en endpoints
+- `examples` y su uso en endpoints
 
 | Archivo | Uso | Donde se referencia |
 |---|---|---|
-| `examples/tn_descriptor_elcm.yaml` | Descriptor TNLCM | `infrastructure.descriptor_path` en `POST /executions` |
-| `examples/TestCase_ping.yml` | Test case para ELCM | `experiment.testcase_paths` en `POST /executions` |
-| `examples/Exp_Desc.json` | Descriptor base para `/experiment/run` interno de ELCM | Cargado automáticamente durante fase ELCM |
+| `templates/TNLCM/` | Plantillas TNLCM | `infrastructure.descriptor_path` en `POST /executions` |
+| `templates/ELCM/TestCase/` | Fragmentos y bases de TestCase | `experiment.testcase_paths` en `POST /executions` |
+| `templates/ELCM/template_experiment_descriptor.json` | Descriptor base para `/experiment/run` interno de ELCM | Cargado automáticamente durante fase ELCM |
 | `examples/EXECUTIONS_EXAMPLES.md` | Ejemplos completos de payloads y flujos | Referencia de uso de la API |
 
-Nota: En `Exp_Desc.json`, `TestCases` debe contener nombres lógicos (ej. `Test_ping`), no rutas.
+Nota: En el descriptor de experimento, `TestCases` debe contener nombres lógicos (ej. `testcase_001`), no rutas absolutas.
 
 ## Endpoints actuales (resumen)
 
@@ -142,7 +143,7 @@ Header requerido para endpoints de ejecucion:
 
 Payload mínimo (ejecución completa automática):
 
-```json
+```text
 {
   "infrastructure": {
     "name": "tn-demo"
@@ -155,13 +156,28 @@ Payload mínimo (ejecución completa automática):
 }
 ```
 
-Payload recomendado (con control manual):
+Payload recomendado (con descriptor base y component):
 
 ```json
 {
   "infrastructure": {
-    "name": "tn-demo-manual",
-    "descriptor_path": "tn_descriptor_elcm.yaml",
+    "name": "tn-demo-base",
+    "descriptor_path": "tnlcm_descriptor_base.yaml",
+    "component": {
+      "base": {
+        "monitoring": {
+          "influxdb_version": "2.7.11",
+          "influxdb_user": "admin",
+          "influxdb_password": "adminadmin",
+          "influxdb_org": "testing",
+          "influxdb_bucket": "testing",
+          "influxdb_token": "default-token-testing",
+          "grafana_version": "11.6.0",
+          "grafana_password": "adminadmin",
+          "prometheus_version": "2.54.3"
+        }
+      }
+    },
     "parameters": {
       "library_reference_type": "branch",
       "library_reference_value": "develop"
@@ -180,6 +196,11 @@ Payload recomendado (con control manual):
   "auto_start_elcm": true
 }
 ```
+
+**Nuevo campo `component`:**
+- Contiene bloques por descriptor (ej: `component.base` para `tnlcm_descriptor_base.yaml`)
+- Los valores dentro de `component.<nombre>` se mapean a `@data.values` en la plantilla ytt
+- Alternativa: puede usar `parameters.data_descriptor` o `parameters.values` (retrocompatible)
 
 **Nuevo campo `auto_start_elcm`:**
 - `true` (defecto): TNLCM + ELCM automático secuencial
@@ -263,77 +284,25 @@ Si necesitas control granular:
 ## Estructura del resumen TNLCM
 
 El artefacto `tnlcm_report_summary.json` se genera a partir del markdown devuelto por el endpoint externo de TNLCM.
-La estructura actual respeta el esquema de `Modificacion_report.txt`:
+La estructura actual respeta el esquema de `Modificacion_report.txt` y resume el reporte en estas claves:
 
-```json
-{
-  "tn_id": "<tn_id>",
-  "summary": {
-    "private_ssh_key": "<private_key_o_null>",
-    "wireguard_client_config": "<wireguard_config_o_null>",
-    "tn_vxlan": {
-      "name": "<nombre_componente>",
-      "ip": "<ip_o_null>",
-      "ips": ["<ip_1>", "<ip_2>"],
-      "ports": [<puerto_1>, <puerto_2>],
-      "credentials": { ... },
-      "extra_info": { ... }
-    },
-    "tn_bastion": {
-      "name": "<nombre_componente>",
-      "ip": "<ip_o_null>",
-      "ips": ["<ip_1>", "<ip_2>"],
-      "ports": [<puerto_1>, <puerto_2>],
-      "credentials": { ... },
-      "extra_info": { ... }
-    },
-    "technitium_dns": {
-      "url": "<url_o_null>",
-      "username": "<username_o_null>",
-      "password": "<password_o_null>"
-    },
-    "monitoring": {
-      "name": "<nombre_componente>",
-      "ip": "<ip_o_null>",
-      "ips": ["<ip_1>", "<ip_2>"],
-      "ports": [<puerto_1>, <puerto_2>],
-      "credentials": {
-        "username": "<username_o_null>",
-        "password": "<password_o_null>",
-        "organization": "<organization_o_null>",
-        "bucket": "<bucket_o_null>",
-        "token": "<token_o_null>"
-      },
-      "extra_info": { ... }
-    },
-    "elcm": {
-      "name": "<nombre_componente>",
-      "ip": "<ip_o_null>",
-      "ips": ["<ip_1>", "<ip_2>"],
-      "ports": [<puerto_1>, <puerto_2>],
-      "credentials": { ... },
-      "extra_info": { ... }
-    },
-    "components": {
-      "<nombre_componente_extra>": {
-        "name": "<nombre_componente>",
-        "ip": "<ip_o_null>",
-        "ips": ["<ip_1>", "<ip_2>"],
-        "ports": [<puerto_1>, <puerto_2>],
-        "credentials": { ... },
-        "extra_info": { ... }
-      }
-    },
-    "components_count": 0
-  }
-}
-```
+- `tn_id`
+- `summary.private_ssh_key`
+- `summary.wireguard_client_config`
+- `summary.tn_vxlan`
+- `summary.tn_bastion`
+- `summary.technitium_dns`
+- `summary.monitoring`
+- `summary.elcm`
+- `summary.components`
+- `summary.components_count`
 
-- Las claves fijas en `summary` son: `private_ssh_key`, `wireguard_client_config`, `tn_vxlan`, `tn_bastion`, `technitium_dns`, `monitoring`, `elcm` y `components`.
-- Si una clave fija no aparece en el markdown, su valor es `null`.
-- Los componentes adicionales (más allá de `tn_vxlan`, `tn_bastion`, `monitoring` y `elcm`) se añaden en el diccionario `components`, respetando el orden del markdown.
-- `components_count` cuenta todos los bloques de componentes detectados en el report.
-- Cada componente contiene `name`, `ip`, `ips`, `ports`, `credentials` (si aplica) e `extra_info` con metadatos adicionales (OpenNebula IDs, VXLAN settings, etc.).
+Reglas de interpretación:
+
+- Las claves fijas en `summary` se inicializan a `null` si no aparecen en el markdown.
+- Los componentes adicionales se añaden en `summary.components`, respetando el orden del reporte.
+- `components_count` cuenta todos los bloques de componentes detectados.
+- Cada componente puede incluir `name`, `ip`, `ips`, `ports`, `credentials` y `extra_info` con metadatos adicionales.
 
 ## Changelog (formato compacto)
 
@@ -343,7 +312,7 @@ La estructura actual respeta el esquema de `Modificacion_report.txt`:
 | 2026-03 | `execution_id` determinista (`infrastructure.name`) |
 | 2026-03 | Fases separadas: `POST /executions/tnlcm` y `POST /executions/{execution_id}/elcm` |
 | 2026-03 | ELCM sin token (`Authorization` eliminado) |
-| 2026-03 | Uso de `examples/Exp_Desc.json` como base para `/experiment/run` |
+| 2026-03 | Uso de `templates/ELCM/template_experiment_descriptor.json` como base para `/experiment/run` |
 | 2026-03 | Soporte de `ExecutionId` de ELCM (incluyendo entero) |
 | 2026-03 | Polling de estado ELCM cada 10s |
 | 2026-03 | Recuperacion automatica TNLCM ante error transitorio en `activate` |
@@ -356,6 +325,7 @@ La estructura actual respeta el esquema de `Modificacion_report.txt`:
 | 2026-05 | **Telemetría Orchestrator-Céntrica**: Métricas granulares de fase (TNLCM create/activate, ELCM total, ejecución end-to-end) |
 | 2026-05 | **API Unificada**: Endpoint `/executions` unificado con `auto_start_elcm` (defecto `true`) para flujo automático TNLCM+ELCM; remover `/executions/tnlcm` redundante |
 | 2026-05 | Rediseño del resumen TNLCM: claves fijas `tn_init`/`monitoring`/`elcm` y componentes auxiliares ordenados |
+| 2026-05-17 | Convertidos templates TNLCM base a `ytt` (`@ytt:data` / `@data.values`) y añadida documentación sobre qué valores debe contener el `DataDescriptor` para cada descriptor TNLCM |
 
 ## Uso con Postman
 
