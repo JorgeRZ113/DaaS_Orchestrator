@@ -51,7 +51,9 @@ async def test_generate_testcase_and_experiment_descriptor():
     )
 
     experiment_path = await generators.generate_experiment_descriptor(
-        ExperimentConfig(name="exp-demo", testcase_paths=["TPL_Run_Message.yml", "TPL_Run_Dummy.yml"]),
+        ExperimentConfig(
+            name="exp-demo", testcase_paths=["TPL_Run_Message.yml", "TPL_Run_Dummy.yml"]
+        ),
         [testcase_one, testcase_two],
         execution_id="exec-elcm",
     )
@@ -68,4 +70,3 @@ async def test_generate_testcase_and_experiment_descriptor():
     payload = json.loads(experiment_file.read_text(encoding="utf-8"))
     assert payload["Application"] == "exp-demo"
     assert payload["TestCases"] == ["testcase_001", "testcase_002"]
-

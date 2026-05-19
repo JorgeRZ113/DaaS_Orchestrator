@@ -30,7 +30,7 @@ def test_post_reload_config_returns_updated_fields(monkeypatch) -> None:
         },
     )
 
-    response = client.post("/login", headers={"x-api-key": settings.api_key})
+    response = client.post("/refresh", headers={"x-api-key": settings.api_key})
 
     assert response.status_code == 200
     body = response.json()
@@ -44,7 +44,7 @@ def test_post_reload_config_returns_400_on_validation_error(monkeypatch) -> None
 
     monkeypatch.setattr("app.main.reload_mutable_settings", _raise_value_error)
 
-    response = client.post("/login", headers={"x-api-key": settings.api_key})
+    response = client.post("/refresh", headers={"x-api-key": settings.api_key})
 
     assert response.status_code == 400
     assert "LOG_LEVEL" in response.json()["detail"]

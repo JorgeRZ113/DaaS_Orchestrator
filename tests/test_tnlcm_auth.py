@@ -15,7 +15,7 @@ def _reset_tnlcm_tokens():
 
 
 def test_headers_fail_when_token_is_not_loaded_in_memory() -> None:
-    with pytest.raises(ValueError, match="Call /tnlcm/token/refresh first"):
+    with pytest.raises(ValueError, match="Call /login first"):
         tnlcm._headers()
 
 

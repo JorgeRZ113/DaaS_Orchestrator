@@ -15,7 +15,7 @@ def test_health_endpoint_returns_ok() -> None:
 
 
 def test_protected_endpoint_rejects_invalid_api_key() -> None:
-    response = client.post("/login", headers={"x-api-key": "bad-key"})
+    response = client.post("/refresh", headers={"x-api-key": "bad-key"})
 
     assert response.status_code == 401
 
@@ -27,7 +27,7 @@ def test_refresh_endpoint_returns_timeout_hint_when_vpn_is_down(monkeypatch) -> 
     monkeypatch.setattr("app.tnlcm.login_tnlcm_and_persist_token", _raise_timeout)
 
     response = client.post(
-        "/tnlcm/token/refresh",
+        "/login",
         headers={"x-api-key": settings.api_key},
     )
 
@@ -42,7 +42,7 @@ def test_refresh_endpoint_returns_token_preview(monkeypatch) -> None:
     )
 
     response = client.post(
-        "/tnlcm/token/refresh",
+        "/login",
         headers={"x-api-key": settings.api_key},
     )
 
