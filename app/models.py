@@ -71,10 +71,67 @@ class InfrastructureConfig(BaseModel):
         default=None,
         description="Ruta o referencia al descriptor que consumira TNLCM",
     )
+    component: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description="Componentes y sus valores (ej: component.base para plantilla base)",
+    )
     parameters: Dict[str, Any] = Field(
         default_factory=dict,
         description="Parametros extra para el despliegue",
     )
+
+    def tnlcm_template_ref(self) -> str | None:
+        """Devuelve la referencia seleccionada para el template TNLCM."""
+        for key in ("template_tnlcm", "template", "descriptor", "descriptor_path"):
+            value = self.parameters.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        if self.descriptor_path:
+            return self.descriptor_path.strip()
+        return None
+
+    def tnlcm_data_values(self) -> dict[str, Any]:
+        """Devuelve el DataDescriptor bruto que se usará para poblar overlays.
+
+        Busca en este orden:
+        1. component.* (todas las subsecciones dict presentes)
+        2. parameters.data_descriptor
+        3. parameters.values
+        4. parameters.data
+        5. parameters completo
+        """
+        if self.component and isinstance(self.component, dict):
+            merged_components: dict[str, Any] = {}
+            for component_values in self.component.values():
+                if isinstance(component_values, dict):
+                    for key, value in component_values.items():
+                        merged_components[key] = value
+            if merged_components:
+                return merged_components
+
+        # Luego buscar en parameters
+        candidate: Any = None
+        for key in ("data_descriptor", "values", "data"):
+            value = self.parameters.get(key)
+            if isinstance(value, dict):
+                candidate = value
+                break
+        if candidate is None:
+            candidate = self.parameters
+
+        if not isinstance(candidate, dict):
+            return {}
+
+        reserved = {
+            "template_tnlcm",
+            "template",
+            "descriptor",
+            "descriptor_path",
+            "data_descriptor",
+            "values",
+            "data",
+        }
+        return {key: value for key, value in candidate.items() if key not in reserved}
 
 
 class ExperimentConfig(BaseModel):
@@ -109,6 +166,12 @@ class DatasetDescriptor(BaseModel):
     auto_start_elcm: bool = Field(
         default=True, description="Si True, inicia automáticamente ELCM al completar TNLCM"
     )
+
+    def tnlcm_template_ref(self) -> str | None:
+        return self.infrastructure.tnlcm_template_ref()
+
+    def tnlcm_data_values(self) -> dict[str, Any]:
+        return self.infrastructure.tnlcm_data_values()
 
 
 

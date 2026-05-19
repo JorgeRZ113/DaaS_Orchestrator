@@ -8,6 +8,7 @@ import httpx
 from app.config import settings
 from app.models import ExperimentConfig
 from app.utils.telemetry import telemetry
+from app.utils.ytt_renderer import resolve_template_path
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +146,9 @@ async def upload_test_cases(
             if not testcase_path:
                 continue
 
-            resolved_path = _resolve_examples_path(testcase_path)
+            resolved_path = testcase_path if Path(testcase_path).exists() else _resolve_examples_path(
+                testcase_path
+            )
             if not resolved_path:
                 logger.warning(f"Could not resolve testcase path: {testcase_path}")
                 continue
@@ -212,11 +215,17 @@ async def run_experiment(
     experiment: ExperimentConfig,
     elcm_base_url: str | None = None,
     execution_id: str | None = None,
+    exp_descriptor_path: str | None = None,
 ) -> str:
-    """Launch Exp_Desc.json in ELCM and return execution_id."""
+    """Launch the experiment descriptor in ELCM and return execution_id."""
 
-    # Experiment descriptor is fixed to JSON under examples.
-    exp_descriptor_path = _resolve_examples_path("Exp_Desc.json")
+    # Prefer the migrated descriptor under templates/ELCM, with legacy fallback.
+    if not exp_descriptor_path:
+        resolved_template = resolve_template_path("ELCM/template_experiment_descriptor.json", category="ELCM")
+        if resolved_template:
+            exp_descriptor_path = str(resolved_template)
+        else:
+            exp_descriptor_path = _resolve_examples_path("Exp_Desc.json")
     if not exp_descriptor_path:
         raise ValueError("Experiment descriptor path could not be resolved")
 

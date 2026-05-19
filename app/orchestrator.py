@@ -226,6 +226,7 @@ async def _handle_elcm_start_timeout(execution_id: str, timeout_seconds: int) ->
 async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> None:
     """Phase 1: validate + deploy TN, then activate the WireGuard tunnel automatically."""
     from .artifacts import build_tnlcm_raw_report_artifact, build_tnlcm_summary_artifact
+    from .generators import generate_tnlcm_descriptor
     from .tnlcm import (
         deploy_trial_network,
         download_trial_network_report,
@@ -251,6 +252,11 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         if descriptor.dataset.output != "logs":
             raise ValueError("Only dataset.output='logs' is supported")
 
+        _update(execution_id, status=ExecutionState.validating, message="Generating TNLCM descriptor")
+        tnlcm_descriptor_path = await generate_tnlcm_descriptor(
+            descriptor.infrastructure, execution_id
+        )
+
         _update(execution_id, status=ExecutionState.deploying, message="Deploying Trial Network")
         logger.info(f"[{execution_id}] Deploying TN: {descriptor.infrastructure.name}")
 
@@ -267,7 +273,19 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             execution_id=execution_id,
         )
 
-        tn_id = await deploy_trial_network(descriptor.infrastructure, execution_id=execution_id)
+        try:
+            tn_id = await deploy_trial_network(
+                descriptor.infrastructure,
+                execution_id=execution_id,
+                generated_descriptor_path=tnlcm_descriptor_path,
+            )
+        except TypeError as exc:
+            if "generated_descriptor_path" not in str(exc):
+                raise
+            tn_id = await deploy_trial_network(
+                descriptor.infrastructure,
+                execution_id=execution_id,
+            )
 
         tnlcm_create_timer.stop(status="success")
         telemetry.log_event(
@@ -287,7 +305,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         summary_report_path = await build_tnlcm_summary_artifact(
             execution_id, tn_id, report_summary
         )
-        report_artifacts = [raw_report_path, summary_report_path]
+        report_artifacts = [tnlcm_descriptor_path, raw_report_path, summary_report_path]
 
         tn_init_summary = report_summary
         wireguard_config = None
@@ -425,6 +443,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
 async def run_elcm_phase(execution_id: str) -> None:
     """Phase 2: run ELCM and always cleanup TN at the end."""
     from .artifacts import build_artifacts
+    from .generators import generate_experiment_descriptor, generate_testcase
     from .elcm import (
         TnLogsNotFoundError,
         collect_results,
@@ -473,19 +492,48 @@ async def run_elcm_phase(execution_id: str) -> None:
         if not testcase_list:
             raise ValueError("At least one testcase is required")
 
-        for index, testcase in enumerate(testcase_list, start=1):
-            _update(
-                execution_id,
-                message=f"Uploading testcase {index}/{len(testcase_list)}: {testcase}",
-            )
-            await upload_test_cases(
-                [testcase], elcm_base_url=elcm_base_url, execution_id=execution_id
-            )
+        generated_testcase_paths: list[str] = []
+        for index, testcase_ref in enumerate(testcase_list):
+            try:
+                testcase_path = await generate_testcase(testcase_ref, execution_id, output_index=index)
+            except Exception as exc:
+                logger.warning(
+                    "[%s] Failed to generate testcase %s: %s. Using original reference.",
+                    execution_id,
+                    testcase_ref,
+                    exc,
+                )
+                testcase_path = testcase_ref
+            generated_testcase_paths.append(testcase_path)
 
-        _update(execution_id, message="Launching Exp_Desc.json")
-        elcm_execution_id = await run_experiment(
-            descriptor.experiment, elcm_base_url=elcm_base_url, execution_id=execution_id
+        _update(execution_id, message="Generating Experiment Descriptor")
+        experiment_descriptor_path = await generate_experiment_descriptor(
+            descriptor.experiment,
+            generated_testcase_paths,
+            execution_id,
         )
+
+        _update(execution_id, message="Uploading TestCases")
+        await upload_test_cases(
+            generated_testcase_paths, elcm_base_url=elcm_base_url, execution_id=execution_id
+        )
+
+        _update(execution_id, message="Launching experiment descriptor")
+        try:
+            elcm_execution_id = await run_experiment(
+                descriptor.experiment,
+                elcm_base_url=elcm_base_url,
+                execution_id=execution_id,
+                exp_descriptor_path=experiment_descriptor_path,
+            )
+        except TypeError as exc:
+            if "exp_descriptor_path" not in str(exc):
+                raise
+            elcm_execution_id = await run_experiment(
+                descriptor.experiment,
+                elcm_base_url=elcm_base_url,
+                execution_id=execution_id,
+            )
         experiment_ids = [elcm_execution_id]
         _update(execution_id, elcm_execution_id=elcm_execution_id)
 
@@ -560,7 +608,9 @@ async def run_elcm_phase(execution_id: str) -> None:
             "logs": execution_logs,
         }
         artifact_paths = await build_artifacts(execution_id, tn_id, elcm_execution_id, results)
-        merged_artifacts = list(dict.fromkeys([*record.artifacts, *artifact_paths]))
+        merged_artifacts = list(
+            dict.fromkeys([*record.artifacts, *generated_testcase_paths, experiment_descriptor_path, *artifact_paths])
+        )
         _update(
             execution_id,
             status=ExecutionState.completed,

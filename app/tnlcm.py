@@ -757,9 +757,12 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
 
 def _legacy_multipart_from_infra(
     infra: InfrastructureConfig,
+    descriptor_path: str | None = None,
 ) -> tuple[dict[str, str], dict[str, tuple[str, bytes, str]]]:
-    descriptor_ref = infra.parameters.get("descriptor") or _resolve_examples_path(
-        infra.descriptor_path
+    descriptor_ref = (
+        descriptor_path
+        or infra.parameters.get("descriptor")
+        or _resolve_examples_path(infra.descriptor_path)
     )
     reference_type = infra.parameters.get("library_reference_type")
     reference_value = infra.parameters.get("library_reference_value")
@@ -820,6 +823,7 @@ async def deploy_trial_network(
     infra: InfrastructureConfig,
     redeploy_attempt: int = 0,
     execution_id: str | None = None,
+    generated_descriptor_path: str | None = None,
 ) -> str:
     """Create TN and trigger activate. Returns tn_id."""
     from app.utils.telemetry import telemetry
@@ -841,7 +845,15 @@ async def deploy_trial_network(
 
         # Preferred endpoint from project steps
         try:
-            form_data, form_files = _legacy_multipart_from_infra(infra)
+            try:
+                form_data, form_files = _legacy_multipart_from_infra(
+                    infra,
+                    descriptor_path=generated_descriptor_path,
+                )
+            except TypeError as exc:
+                if "descriptor_path" not in str(exc):
+                    raise
+                form_data, form_files = _legacy_multipart_from_infra(infra)
             response = await client.post(
                 f"{settings.tnlcm_url}/api/v1/trial-network/legacy",
                 data=form_data,
@@ -943,7 +955,10 @@ async def deploy_trial_network(
             )
             await _recover_tn_with_destroy_purge(tn_id)
             return await deploy_trial_network(
-                infra, redeploy_attempt=redeploy_attempt + 1, execution_id=execution_id
+                infra,
+                redeploy_attempt=redeploy_attempt + 1,
+                execution_id=execution_id,
+                generated_descriptor_path=generated_descriptor_path,
             )
 
         telemetry.log_event(

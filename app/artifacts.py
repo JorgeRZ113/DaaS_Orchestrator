@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from app.config import settings
@@ -19,6 +20,32 @@ def _artifact_root_dir() -> str:
 
 def _artifact_base_dir(execution_id: str) -> str:
     return os.path.join(_artifact_root_dir(), execution_id)
+
+
+def _artifact_generated_dir(execution_id: str) -> str:
+    return os.path.join(_artifact_base_dir(execution_id), "archivos_generados")
+
+
+def persist_generated_artifacts(
+    execution_id: str,
+    tnlcm_descriptor_path: str | None = None,
+    experiment_descriptor_path: str | None = None,
+    testcase_paths: list[str] | None = None,
+) -> list[str]:
+    """Register generated artifact paths for later traceability checks."""
+    _ensure_dir(_artifact_generated_dir(execution_id))
+
+    paths: list[str] = []
+    for candidate in [tnlcm_descriptor_path, experiment_descriptor_path]:
+        if candidate and Path(candidate).exists():
+            paths.append(candidate)
+
+    if testcase_paths:
+        for testcase_path in testcase_paths:
+            if testcase_path and Path(testcase_path).exists():
+                paths.append(testcase_path)
+
+    return list(dict.fromkeys(paths))
 
 
 def _format_timestamp_human() -> str:
