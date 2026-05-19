@@ -39,13 +39,15 @@ async def test_generate_tnlcm_descriptor_creates_yaml_in_generated_dir():
 
 @pytest.mark.asyncio
 async def test_generate_testcase_and_experiment_descriptor():
+    templates_dir = Path(__file__).resolve().parents[1] / "templates" / "ELCM" / "TestCase"
+
     testcase_one = await generators.generate_testcase(
-        "TPL_Run_Message.yml",
+        str(templates_dir / "TPL_Run_Message.yml"),
         execution_id="exec-elcm",
         output_index=0,
     )
     testcase_two = await generators.generate_testcase(
-        "TPL_Run_Dummy.yml",
+        str(templates_dir / "TPL_Run_Dummy.yml"),
         execution_id="exec-elcm",
         output_index=1,
     )
