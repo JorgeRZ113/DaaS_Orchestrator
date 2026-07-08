@@ -128,6 +128,8 @@ def _candidate_paths(template_ref: str, category: str | None = None) -> list[Pat
                 category_dir = root / category
                 candidates.extend(
                     [
+                        category_dir / "templates" / alias_ref,
+                        category_dir / "templates" / alias_ref.name,
                         category_dir / alias_ref,
                         category_dir / alias_ref.name,
                         category_dir / "legacy" / alias_ref.name,

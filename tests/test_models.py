@@ -87,6 +87,11 @@ def test_dataset_descriptor_auto_groups_flat_component_fields() -> None:
 
 
 def test_dataset_descriptor_extracts_flat_mongodb_fields_only_if_editable() -> None:
+    # Fields declared in the overlay (regardless of their default value) are
+    # accepted here; whether they are actually mandatory/optional is decided
+    # later by COMPONENT_PARAMETER_MAPPING at generation time, not here (see
+    # overlay_editable_fields_for_template docstring). Only fields that are
+    # not declared in the overlay at all get dropped.
     descriptor = DatasetDescriptor(
         infrastructure={
             "name": "tn-demo-mongo",
@@ -94,7 +99,7 @@ def test_dataset_descriptor_extracts_flat_mongodb_fields_only_if_editable() -> N
                 "mongodb": {
                     "user": "mongo-user",
                     "password": "mongo-pass",
-                    "version": "9.0",
+                    "not_an_overlay_field": "should-be-dropped",
                 }
             },
         },
@@ -105,7 +110,7 @@ def test_dataset_descriptor_extracts_flat_mongodb_fields_only_if_editable() -> N
 
     assert values["mongodb"]["user"] == "mongo-user"
     assert values["mongodb"]["password"] == "mongo-pass"
-    assert "version" not in values["mongodb"]
+    assert "not_an_overlay_field" not in values["mongodb"]
 
 
 def test_build_tnlcm_values_normalizes_overlay_aliases() -> None:

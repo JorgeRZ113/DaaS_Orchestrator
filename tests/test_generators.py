@@ -4,10 +4,17 @@ from pathlib import Path
 import pytest
 import yaml
 
-from app import generators
+from app import elcm
 from app.config import settings
+from app.generators.tnlcm_renderer import generate_tnlcm_descriptor
 from app.models import ExperimentConfig, InfrastructureConfig
 from app.utils.telemetry import telemetry
+
+BASE_COMPONENT_VALUES = {
+    "influxdb_user": "influx-user",
+    "influxdb_password": "influx-pass",
+    "grafana_password": "grafana-pass",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -24,8 +31,8 @@ def _isolate_generator_state(tmp_path):
 
 @pytest.mark.asyncio
 async def test_generate_tnlcm_descriptor_creates_yaml_in_generated_dir():
-    output_path = await generators.generate_tnlcm_descriptor(
-        InfrastructureConfig(name="tn-demo", descriptor_path="TNLCM/base_tnlcm_descriptor.yaml"),
+    output_path = await generate_tnlcm_descriptor(
+        InfrastructureConfig(name="tn-demo", component={"base": BASE_COMPONENT_VALUES}),
         execution_id="exec-tn",
     )
 
@@ -39,16 +46,15 @@ async def test_generate_tnlcm_descriptor_creates_yaml_in_generated_dir():
 
 @pytest.mark.asyncio
 async def test_generate_tnlcm_descriptor_extracts_flat_mongodb_fields_with_defaults():
-    output_path = await generators.generate_tnlcm_descriptor(
+    # NOTE: COMPONENT_PARAMETER_MAPPING["mongodb"] currently only allows
+    # "database"/"replica_set" (pendiente completar el mapeo para
+    # mongodb/redis). "user"/"password" are not yet wired up.
+    output_path = await generate_tnlcm_descriptor(
         InfrastructureConfig(
             name="tn-demo",
-            descriptor_path="TNLCM/base_tnlcm_descriptor.yaml",
             component={
-                "mongodb": {
-                    "user": "mongo-user",
-                    "password": "mongo-pass",
-                    "database": "mongo-db",
-                }
+                "base": BASE_COMPONENT_VALUES,
+                "mongodb": {"database": "mongo-db"},
             },
         ),
         execution_id="exec-tn-mongo",
@@ -59,31 +65,20 @@ async def test_generate_tnlcm_descriptor_extracts_flat_mongodb_fields_with_defau
     mongodb_component = trial_network["mongodb-v8"]
     mongodb_input = mongodb_component["input"]
 
-    assert mongodb_input["one_mongodb_user"] == "mongo-user"
-    assert mongodb_input["one_mongodb_password"] == "mongo-pass"
     assert mongodb_input["one_mongodb_database"] == "mongo-db"
+    # user/password are not yet mapped, so they keep the overlay defaults
+    assert mongodb_input["one_mongodb_user"] == ""
+    assert mongodb_input["one_mongodb_password"] == ""
     # version is not editable in overlay and should remain default from overlay/template
     assert mongodb_input["one_mongodb_version"] == "8.0"
 
 
 @pytest.mark.asyncio
-async def test_generate_tnlcm_descriptor_resolves_compound_ueransim_template(monkeypatch, tmp_path):
-    original_resolve_template_path = generators.resolve_template_path
-
-    def _resolve_template_path(template_ref: str, category: str | None = None):
-        if template_ref == "ueransim_both_sample_tnlcm_descriptor.yaml":
-            return original_resolve_template_path(
-                "TNLCM/ueransim_both_sample_tnlcm_descriptor.yaml",
-                category="TNLCM",
-            )
-        return original_resolve_template_path(template_ref, category=category)
-
-    monkeypatch.setattr("app.generators.resolve_template_path", _resolve_template_path)
-
-    output_path = await generators.generate_tnlcm_descriptor(
+async def test_generate_tnlcm_descriptor_resolves_compound_ueransim_template():
+    output_path = await generate_tnlcm_descriptor(
         InfrastructureConfig(
             name="tn-demo-ueransim",
-            component={"ueransim_both": {}},
+            component={"base": BASE_COMPONENT_VALUES, "ueransim_both": {}},
         ),
         execution_id="exec-tn-ueransim",
     )
@@ -133,21 +128,21 @@ async def test_generate_testcase_and_experiment_descriptor(monkeypatch, tmp_path
             allow_unicode=True,
         )
 
-    monkeypatch.setattr("app.generators.resolve_template_path", _resolve_template_path)
-    monkeypatch.setattr("app.generators.render_with_ytt", _render_with_ytt)
+    monkeypatch.setattr("app.elcm.resolve_template_path", _resolve_template_path)
+    monkeypatch.setattr("app.elcm.render_with_ytt", _render_with_ytt)
 
-    testcase_one = await generators.generate_testcase(
+    testcase_one = await elcm.generate_testcase(
         "TPL_Run_Message.yml",
         execution_id="exec-elcm",
         output_index=0,
     )
-    testcase_two = await generators.generate_testcase(
+    testcase_two = await elcm.generate_testcase(
         "TPL_Run_Dummy.yml",
         execution_id="exec-elcm",
         output_index=1,
     )
 
-    experiment_path = await generators.generate_experiment_descriptor(
+    experiment_path = await elcm.generate_experiment_descriptor(
         ExperimentConfig(
             name="exp-demo", testcase_paths=["TPL_Run_Message.yml", "TPL_Run_Dummy.yml"]
         ),

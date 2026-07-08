@@ -62,7 +62,7 @@ COMPONENT_PARAMETER_MAPPING: dict[str, dict[str, list[str]]] = {
         "optional": ["gnb_linked_5gcore"],
     },
     "ueransim_both": {
-        "npm install -g @anthropic-ai/claude-code": [],
+        "required": [],
         "optional": ["gnb_linked_5gcore"],
     },
     "ueransim_split": {
