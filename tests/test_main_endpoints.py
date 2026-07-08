@@ -180,7 +180,11 @@ def test_post_execution_accepts_flat_component_template_fields(monkeypatch) -> N
                 "library_reference_value": "develop",
             },
         },
-        "experiment": {"name": "exp-demo", "testcase_paths": ["TestCase_ping.yml"], "ues_paths": []},
+        "experiment": {
+            "name": "exp-demo",
+            "testcase_paths": ["TestCase_ping.yml"],
+            "ues_paths": [],
+        },
         "dataset": {"output": "logs"},
         "auto_start_elcm": True,
     }
@@ -211,7 +215,11 @@ def test_post_execution_rejects_unknown_flat_component_field(monkeypatch) -> Non
                 "library_reference_value": "develop",
             },
         },
-        "experiment": {"name": "exp-demo", "testcase_paths": ["TestCase_ping.yml"], "ues_paths": []},
+        "experiment": {
+            "name": "exp-demo",
+            "testcase_paths": ["TestCase_ping.yml"],
+            "ues_paths": [],
+        },
         "dataset": {"output": "logs"},
         "auto_start_elcm": True,
     }
@@ -247,7 +255,11 @@ def test_post_execution_accepts_flat_mongodb_fields_without_version(monkeypatch)
                 "library_reference_value": "develop",
             },
         },
-        "experiment": {"name": "exp-demo", "testcase_paths": ["TestCase_ping.yml"], "ues_paths": []},
+        "experiment": {
+            "name": "exp-demo",
+            "testcase_paths": ["TestCase_ping.yml"],
+            "ues_paths": [],
+        },
         "dataset": {"output": "logs"},
         "auto_start_elcm": True,
     }
@@ -257,5 +269,3 @@ def test_post_execution_accepts_flat_mongodb_fields_without_version(monkeypatch)
     assert response.status_code == 202
     body = response.json()
     assert body["execution_id"] == "tn-demo-mongo"
-
-

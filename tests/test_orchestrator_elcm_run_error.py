@@ -78,6 +78,7 @@ async def test_run_elcm_phase_run_error_is_propagated_without_retry(monkeypatch,
         message="TN deployment completed",
     )
     from app.artifacts import persist_dataset_descriptor
+
     persist_dataset_descriptor(execution_id, descriptor)
 
     await orchestrator.run_elcm_phase(execution_id)
@@ -134,6 +135,7 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
         message="TN deployment completed",
     )
     from app.artifacts import persist_dataset_descriptor
+
     persist_dataset_descriptor(execution_id, descriptor)
 
     await orchestrator.run_elcm_phase(execution_id)
@@ -204,6 +206,7 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
         message="TN deployment completed",
     )
     from app.artifacts import persist_dataset_descriptor
+
     persist_dataset_descriptor(execution_id, descriptor)
 
     await orchestrator.run_elcm_phase(execution_id)

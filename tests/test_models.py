@@ -20,7 +20,13 @@ def test_dataset_descriptor_merges_all_component_sections() -> None:
             "name": "tn-demo",
             "descriptor_path": "TNLCM/base_tnlcm_descriptor.yaml",
             "component": {
-                "base": {"monitoring": {"influxdb_user": "admin", "influxdb_password": "adminadmin", "grafana_password": "adminadmin"}},
+                "base": {
+                    "monitoring": {
+                        "influxdb_user": "admin",
+                        "influxdb_password": "adminadmin",
+                        "grafana_password": "adminadmin",
+                    }
+                },
                 "open5gs": {"open5gs": {"vm_size": "large"}},
                 "network": {"network": {"n2_first_ip": "10.20.20.1"}},
             },
@@ -95,9 +101,7 @@ def test_dataset_descriptor_extracts_flat_mongodb_fields_only_if_editable() -> N
         experiment={"name": "exp-demo", "testcase_paths": ["TestCase_ping.yml"]},
     )
 
-    values = descriptor.tnlcm_data_values(
-        template_ref="TNLCM/mongodb_sample_tnlcm_descriptor.yaml"
-    )
+    values = descriptor.tnlcm_data_values(template_ref="TNLCM/mongodb_sample_tnlcm_descriptor.yaml")
 
     assert values["mongodb"]["user"] == "mongo-user"
     assert values["mongodb"]["password"] == "mongo-pass"
