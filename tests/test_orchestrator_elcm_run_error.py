@@ -14,14 +14,13 @@ from app.models import (
 
 @pytest.fixture(autouse=True)
 def _isolate_orchestrator_state(monkeypatch, tmp_path):
-    previous_artifacts_dir = settings.artifacts_dir
-    previous_executions = orchestrator.executions.copy()
-    previous_descriptors = orchestrator.execution_descriptors.copy()
-    previous_watchdogs = orchestrator.elcm_start_watchdogs.copy()
+    from app.config import settings
 
+    previous_artifacts_dir = settings.artifacts_dir
     settings.artifacts_dir = str(tmp_path)
+    previous_executions = orchestrator.executions.copy()
+
     orchestrator.executions.clear()
-    orchestrator.execution_descriptors.clear()
     orchestrator.elcm_start_watchdogs.clear()
 
     monkeypatch.setattr(orchestrator, "_save_executions_to_disk", lambda: None)
@@ -32,13 +31,9 @@ def _isolate_orchestrator_state(monkeypatch, tmp_path):
         task.cancel()
 
     orchestrator.executions.clear()
-    orchestrator.execution_descriptors.clear()
     orchestrator.elcm_start_watchdogs.clear()
     settings.artifacts_dir = previous_artifacts_dir
-
     orchestrator.executions.update(previous_executions)
-    orchestrator.execution_descriptors.update(previous_descriptors)
-    orchestrator.elcm_start_watchdogs.update(previous_watchdogs)
 
 
 @pytest.mark.asyncio
@@ -84,8 +79,10 @@ async def test_run_elcm_phase_run_error_is_propagated_without_retry(monkeypatch,
         vpn_status="UP",
         message="TN deployment completed",
     )
-    orchestrator.execution_descriptors[execution_id] = descriptor
+    from app.artifacts import persist_dataset_descriptor
+    persist_dataset_descriptor(execution_id, descriptor)
 
+    down_tunnel_called = False
     await orchestrator.run_elcm_phase(execution_id)
 
     record = orchestrator.executions[execution_id]
@@ -139,8 +136,10 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
         vpn_status="UP",
         message="TN deployment completed",
     )
-    orchestrator.execution_descriptors[execution_id] = descriptor
+    from app.artifacts import persist_dataset_descriptor
+    persist_dataset_descriptor(execution_id, descriptor)
 
+    down_tunnel_called = False
     await orchestrator.run_elcm_phase(execution_id)
 
     record = orchestrator.executions[execution_id]
@@ -208,8 +207,10 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
         vpn_status="UP",
         message="TN deployment completed",
     )
-    orchestrator.execution_descriptors[execution_id] = descriptor
+    from app.artifacts import persist_dataset_descriptor
+    persist_dataset_descriptor(execution_id, descriptor)
 
+    down_tunnel_called = False
     await orchestrator.run_elcm_phase(execution_id)
 
     record = orchestrator.executions[execution_id]

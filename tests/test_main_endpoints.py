@@ -153,3 +153,109 @@ def test_post_execution_returns_409_when_tnlcm_deploy_is_busy(monkeypatch) -> No
 
     assert response.status_code == 409
     assert "curso" in response.json()["detail"]
+
+
+def test_post_execution_accepts_flat_component_template_fields(monkeypatch) -> None:
+    async def _ok_record(descriptor):
+        return ExecutionRecord(
+            execution_id=descriptor.infrastructure.name,
+            status=ExecutionState.pending,
+            message="accepted",
+        )
+
+    monkeypatch.setattr("app.main.create_tnlcm_execution", _ok_record)
+
+    payload = {
+        "infrastructure": {
+            "name": "tn-demo-test",
+            "component": {
+                "base": {
+                    "influxdb_user": "admin",
+                    "influxdb_password": "adminadmin",
+                    "grafana_password": "adminadmin",
+                }
+            },
+            "parameters": {
+                "library_reference_type": "branch",
+                "library_reference_value": "develop",
+            },
+        },
+        "experiment": {"name": "exp-demo", "testcase_paths": ["TestCase_ping.yml"], "ues_paths": []},
+        "dataset": {"output": "logs"},
+        "auto_start_elcm": True,
+    }
+
+    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["execution_id"] == "tn-demo-test"
+
+
+def test_post_execution_rejects_unknown_flat_component_field(monkeypatch) -> None:
+    async def _ok_record(descriptor):
+        return ExecutionRecord(
+            execution_id=descriptor.infrastructure.name,
+            status=ExecutionState.pending,
+            message="accepted",
+        )
+
+    monkeypatch.setattr("app.main.create_tnlcm_execution", _ok_record)
+
+    payload = {
+        "infrastructure": {
+            "name": "tn-demo-test",
+            "component": {"base": {"influxdb_user": "admin", "unknown_field": "x"}},
+            "parameters": {
+                "library_reference_type": "branch",
+                "library_reference_value": "develop",
+            },
+        },
+        "experiment": {"name": "exp-demo", "testcase_paths": ["TestCase_ping.yml"], "ues_paths": []},
+        "dataset": {"output": "logs"},
+        "auto_start_elcm": True,
+    }
+
+    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert any("component.base.unknown_field" in item for item in detail["invalid_fields"])
+
+
+def test_post_execution_accepts_flat_mongodb_fields_without_version(monkeypatch) -> None:
+    async def _ok_record(descriptor):
+        return ExecutionRecord(
+            execution_id=descriptor.infrastructure.name,
+            status=ExecutionState.pending,
+            message="accepted",
+        )
+
+    monkeypatch.setattr("app.main.create_tnlcm_execution", _ok_record)
+
+    payload = {
+        "infrastructure": {
+            "name": "tn-demo-mongo",
+            "component": {
+                "mongodb": {
+                    "user": "mongo-user",
+                    "password": "mongo-pass",
+                }
+            },
+            "parameters": {
+                "library_reference_type": "branch",
+                "library_reference_value": "develop",
+            },
+        },
+        "experiment": {"name": "exp-demo", "testcase_paths": ["TestCase_ping.yml"], "ues_paths": []},
+        "dataset": {"output": "logs"},
+        "auto_start_elcm": True,
+    }
+
+    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["execution_id"] == "tn-demo-mongo"
+
+

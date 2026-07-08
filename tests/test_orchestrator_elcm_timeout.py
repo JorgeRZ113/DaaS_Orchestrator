@@ -8,16 +8,20 @@ from app.models import (
     InfrastructureConfig,
 )
 from app import orchestrator
+from app.artifacts import persist_dataset_descriptor
 
 
 @pytest.fixture(autouse=True)
-def _isolate_orchestrator_state(monkeypatch):
+def _isolate_orchestrator_state(monkeypatch, tmp_path):
+    from app.config import settings
+
+    previous_artifacts_dir = settings.artifacts_dir
+    settings.artifacts_dir = str(tmp_path)
+
     previous_executions = orchestrator.executions.copy()
-    previous_descriptors = orchestrator.execution_descriptors.copy()
     previous_watchdogs = orchestrator.elcm_start_watchdogs.copy()
 
     orchestrator.executions.clear()
-    orchestrator.execution_descriptors.clear()
     orchestrator.elcm_start_watchdogs.clear()
 
     # Keep tests pure and avoid touching the real executions.json on every _update.
@@ -29,11 +33,11 @@ def _isolate_orchestrator_state(monkeypatch):
         task.cancel()
 
     orchestrator.executions.clear()
-    orchestrator.execution_descriptors.clear()
     orchestrator.elcm_start_watchdogs.clear()
 
+    settings.artifacts_dir = previous_artifacts_dir
+
     orchestrator.executions.update(previous_executions)
-    orchestrator.execution_descriptors.update(previous_descriptors)
     orchestrator.elcm_start_watchdogs.update(previous_watchdogs)
 
 
@@ -91,7 +95,9 @@ async def test_start_elcm_requires_completed_state():
         tn_id=execution_id,
         message="Deploying",
     )
-    orchestrator.execution_descriptors[execution_id] = descriptor
+    from app.artifacts import persist_dataset_descriptor
+
+    persist_dataset_descriptor(execution_id, descriptor)
 
     with pytest.raises(ValueError, match="COMPLETED"):
         await orchestrator.start_elcm_phase(execution_id)
