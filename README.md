@@ -1,21 +1,29 @@
-# tfgjorge
+# tfgjorge - DaaS Orchestrator
 
-Orquestador API para ejecutar un flujo en tres fases:
+Orquestador API unificado para automatizar el pipeline completo de generación de datasets en redes 5G/6G:
 
-1. `TNLCM`: despliegue y preparacion de Trial Network.
-2. `ELCM` (TestCases): generacion y subida de casos de prueba.
-3. `ELCM` (Experiment): ejecucion de experimentos y recogida de logs.
+1. **TNLCM** (Trial Network Lifecycle Manager): Despliegue y preparación automática de Trial Network
+2. **VPN WireGuard**: Activación automática tras TNLCM, desactivación en cleanup
+3. **ELCM** (Experiment Lifecycle Manager): Generación, subida y ejecución de test cases + experimentos
 
-## Descripcion
+## Descripción General
 
-Este servicio expone endpoints HTTP para crear ejecuciones, consultar su estado y recuperar detalle de resultados. El flujo objetivo es reproducible y guiado por descriptores y plantillas separadas por dominio en `templates/`.
+Servicio HTTP que expone un **endpoint unificado `/executions`** para orquestar todo el flujo automáticamente (por defecto) o paso a paso (con control manual). 
 
-## Objetivo del proyecto
+El flujo es reproducible, guiado por:
+- **Descriptores TNLCM** renderizados con `ytt` desde `templates/TNLCM/`
+- **Templates ELCM** desde `templates/ELCM/`
+- **Contrato de componentes** validado contra campos editables del overlay
 
-- Automatizar el pipeline `TNLCM -> WireGuard -> ELCM`.
-- Mantener `execution_id` determinista y persistente.
-- Mejorar robustez con reintentos y recuperacion automatica.
-- Dejar trazabilidad de estados y artefactos.
+## Objetivo del Proyecto
+
+- **API unificada** (`POST /executions`) que ejecuta TNLCM + ELCM automático (defecto) o solo TNLCM con control manual
+- **Validación centralizada** de payload con `extract_component_template_values()` que soporta formatos plano y anidado
+- **Persistencia determinista**: `execution_id` derivado del `infrastructure.name`, reproducible
+- **Reintentos automáticos**: Recuperación ante fallos transitorios de TNLCM (ej. `activate` con backoff)
+- **VPN WireGuard automática**: Activación tras TNLCM, desactivación en cleanup ELCM
+- **Telemetría granular**: Métricas por fase (TNLCM create/activate, ELCM total) con `execution_id` para correlación
+- **Persistencia de artefactos**: `DatasetDescriptor` guardado inmediatamente en `artifacts/<execution_id>/`
 
 ## Requisitos
 
@@ -63,16 +71,21 @@ TELEMETRY_REPORT_ARTIFACTS=true
 
 Nota: la ventana máxima para disparar `POST /executions/{execution_id}/elcm` tras completar TNLCM se define como constante interna en `app/orchestrator.py` (`ELCM_START_TIMEOUT_SECONDS`). Si se supera, el orquestador cancela la ejecución y ejecuta `destroy/purge` automático. **Con `auto_start_elcm=true` (defecto), esto no es un problema ya que ELCM se dispara automáticamente.**
 
-- `examples` y su uso en endpoints
+## Estructura de Archivos Clave
 
-| Archivo | Uso | Donde se referencia |
-|---|---|---|
-| `templates/TNLCM/` | Plantillas TNLCM | `infrastructure.descriptor_path` en `POST /executions` |
-| `templates/ELCM/TestCase/` | Fragmentos y bases de TestCase | `experiment.testcase_paths` en `POST /executions` |
-| `templates/ELCM/template_experiment_descriptor.json` | Descriptor base para `/experiment/run` interno de ELCM | Cargado automáticamente durante fase ELCM |
-| `examples/EXECUTIONS_EXAMPLES.md` | Ejemplos completos de payloads y flujos | Referencia de uso de la API |
+| Ruta | Propósito |
+|---|---|
+| `templates/TNLCM/` | Templates renderizables con `ytt` para TNLCM. Base: `base_tnlcm_descriptor.yaml`; componentes: `<nombre>_sample_tnlcm_descriptor.yaml` |
+| `templates/TNLCM/overlays/` | Overlays TNLCM que definen campos editables por template |
+| `templates/ELCM/TestCase/` | Fragmentos y bases de TestCase para experimentos |
+| `templates/ELCM/template_experiment_descriptor.json` | Descriptor base para `/experiment/run` dentro de ELCM |
+| `app/utils/component_contract.py` | **NUEVO**: Extractor centralizado para normalizar y validar `component.<template>.<field>` |
+| `app/orchestrator.py` | Orquestador principal: TNLCM + ELCM + WireGuard automático |
+| `app/generators.py` | Generadores de descriptores TNLCM y ELCM con `ytt` |
+| `app/artifacts.py` | Persistencia de ejecuciones y artefactos |
+| `examples/` | Ejemplos de payloads y casos de uso |
 
-Nota: En el descriptor de experimento, `TestCases` debe contener nombres lógicos (ej. `testcase_001`), no rutas absolutas.
+**Nota importante**: En descriptores de experimento, `TestCases` debe contener nombres lógicos (ej. `testcase_001`), no rutas absolutas.
 
 ## Endpoints actuales (resumen)
 
@@ -137,13 +150,19 @@ Header requerido para endpoints de ejecucion:
 ### `GET /executions/{execution_id}/detail`
 - Devuelve detalle completo (incluye ids y artifacts).
 
-## Payloads (A: minimo viable)
+## Payloads: Formato y Validación
 
-### Para `POST /executions` (Nuevo: Endpoint Unificado)
+### Contrato Canónico del Payload
 
-Payload mínimo (ejecución completa automática):
+El formato canónico es: `component.<template>.<field> = value`
 
-```text
+- `<template>`: Identificador del descriptor (`base`, `mongodb`, etc.)
+- `<field>`: Nombre del campo editable (ej. `influxdb_user`)
+- Los campos se validan contra el overlay TNLCM de cada template
+
+**Ejemplo mínimo (autocompletar con defaults):**
+
+```json
 {
   "infrastructure": {
     "name": "tn-demo"
@@ -156,26 +175,24 @@ Payload mínimo (ejecución completa automática):
 }
 ```
 
-Payload recomendado (con descriptor base y component):
+**Ejemplo con componente base (formato plano recomendado):**
 
 ```json
 {
   "infrastructure": {
     "name": "tn-demo-base",
-    "descriptor_path": "tnlcm_descriptor_base.yaml",
+    "descriptor_path": "base_tnlcm_descriptor.yaml",
     "component": {
       "base": {
-        "monitoring": {
-          "influxdb_version": "2.7.11",
-          "influxdb_user": "admin",
-          "influxdb_password": "adminadmin",
-          "influxdb_org": "testing",
-          "influxdb_bucket": "testing",
-          "influxdb_token": "default-token-testing",
-          "grafana_version": "11.6.0",
-          "grafana_password": "adminadmin",
-          "prometheus_version": "2.54.3"
-        }
+        "influxdb_version": "2.7.11",
+        "influxdb_user": "admin",
+        "influxdb_password": "adminadmin",
+        "influxdb_org": "testing",
+        "influxdb_bucket": "testing",
+        "influxdb_token": "default-token-testing",
+        "grafana_version": "11.6.0",
+        "grafana_password": "adminadmin",
+        "prometheus_version": "2.54.3"
       }
     },
     "parameters": {
@@ -185,9 +202,7 @@ Payload recomendado (con descriptor base y component):
   },
   "experiment": {
     "name": "exp-demo",
-    "testcase_paths": [
-      "TestCase_ping.yml"
-    ],
+    "testcase_paths": ["TestCase_ping.yml"],
     "ues_paths": []
   },
   "dataset": {
@@ -197,26 +212,71 @@ Payload recomendado (con descriptor base y component):
 }
 ```
 
-**Nuevo campo `component`:**
-- Contiene bloques por descriptor (ej: `component.base` para `tnlcm_descriptor_base.yaml`)
-- Los valores dentro de `component.<nombre>` se mapean a `@data.values` en la plantilla ytt
-- Alternativa: puede usar `parameters.data_descriptor` o `parameters.values` (retrocompatible)
+### Formatos Soportados de `component`
 
-**Nuevo campo `auto_start_elcm`:**
-- `true` (defecto): TNLCM + ELCM automático secuencial
-- `false`: Solo TNLCM, luego disparar ELCM manualmente con `POST /executions/{execution_id}/elcm`
+El validador centralizado (`app/utils/component_contract.py`) acepta dos formatos:
 
-### Para `POST /executions/{execution_id}/elcm`
+#### 1. **Formato Plano (CANÓNICO, Recomendado)**
 
-- Sin body.
-- Solo `execution_id` en path + header `x-api-key`.
+```json
+"component": {
+  "base": {
+    "influxdb_user": "admin",
+    "influxdb_password": "secret",
+    "grafana_version": "11.6.0"
+  }
+}
+```
 
-### Para `POST /login`
+- Campos directos mapeados automáticamente a sus secciones en el overlay
+- Más legible, menos anidación
+- **Recomendado para nuevas integraciones**
 
-- Sin body.
-- Solo header `x-api-key`.
-- Devuelve preview del token (no expone el token completo).
-- Los tokens obtenidos se guardan en memoria y se usan automáticamente en todas las llamadas TNLCM posteriores.
+#### 2. **Formato Anidado (RETROCOMPATIBILIDAD)**
+
+```json
+"component": {
+  "base": {
+    "monitoring": {
+      "influxdb_user": "admin",
+      "influxdb_password": "secret",
+      "grafana_version": "11.6.0"
+    }
+  }
+}
+```
+
+- Agrupa campos por secciones del overlay (ej. `monitoring`, `storage`)
+- Soportado para compatibilidad con payloads antiguos
+- Convertido internamente a formato plano durante extracción
+
+### Validación de Componentes
+
+Durante `POST /executions`:
+
+1. Se resuelve el template TNLCM para el componente (ej. `base_tnlcm_descriptor.yaml`)
+2. Se carga el overlay TNLCM del template para obtener campos editables
+3. Se usa `extract_component_template_values()` para normalizar y validar campos
+4. Se rechazan con error `400` los campos no editables
+
+**Errores posibles:**
+
+```json
+{
+  "detail": {
+    "invalid_fields": [
+      "component.base.unknown_field: field not allowed",
+      "component.mongodb.missing_template: template not found",
+      "component.redis.storage.unknown: field not allowed"
+    ]
+  }
+}
+```
+
+### Campo `auto_start_elcm`
+
+- `true` (defecto): Ejecuta automáticamente TNLCM + ELCM secuencial
+- `false`: Solo ejecuta TNLCM, requiere llamar manualmente a `POST /executions/{execution_id}/elcm`
 
 ## Flujo de uso recomendado
 
@@ -271,6 +331,35 @@ Si necesitas control granular:
 7. Se destruye la TN.
 8. Ejecución completada.
 
+## Arquitectura de Componentes y Validación
+
+### Extractor Centralizado (`app/utils/component_contract.py`)
+
+El módulo `extract_component_template_values()` centraliza la lógica de:
+1. **Normalización**: Convierte formato plano → estrutura sección/campo
+2. **Validación**: Verifica contra campos editables del overlay TNLCM
+3. **Reutilización**: Se usa en `app/main.py` (validación) y `app/generators.py` (extracción durante render)
+
+**Consumidores:**
+
+| Módulo | Uso |
+|---|---|
+| `app/main.py` | Validación en `_validate_components_or_raise()` dentro de `POST /executions` |
+| `app/generators.py` | Extracción de campos editables antes de render `ytt` en `generate_tnlcm_descriptor()` |
+
+**Ventajas de centralización:**
+- Evita duplicación de lógica validación ↔ generación
+- Garantiza comportamiento consistente en ambos puntos
+- Facilita mantenimiento y pruebas
+
+### Overlays TNLCM
+
+Cada template TNLCM tiene un overlay que define qué campos pueden ser editados por el payload:
+
+- **Ubicación**: `templates/TNLCM/overlays/<template_name>.yaml`
+- **Estructura**: Define secciones y campos editables (ej. `monitoring: [influxdb_user, influxdb_password, ...]`)
+- **Carga**: Automática mediante `overlay_editable_fields_for_template()` en `app/utils/ytt_renderer.py`
+
 ## Automatizacion WireGuard
 
 - Implementacion en `app/utils/wireguard.py`.
@@ -323,17 +412,71 @@ Reglas de interpretación:
 | 2026-04 | Automatizacion de WireGuard: `<tn_id>.conf`, activacion automatica tras TNLCM y desactivacion obligatoria en cleanup ELCM |
 | 2026-04 | Refactor de WireGuard a `app/utils` con helper dedicado `app/utils/wireguard_helper.py` |
 | 2026-05 | **Telemetría Orchestrator-Céntrica**: Métricas granulares de fase (TNLCM create/activate, ELCM total, ejecución end-to-end) |
-| 2026-05 | **API Unificada**: Endpoint `/executions` unificado con `auto_start_elcm` (defecto `true`) para flujo automático TNLCM+ELCM; remover `/executions/tnlcm` redundante |
+| 2026-05 | **API Unificada**: Endpoint `/executions` unificado con `auto_start_elcm` (defecto `true`) para flujo automático TNLCM+ELCM |
 | 2026-05 | Rediseño del resumen TNLCM: claves fijas `tn_init`/`monitoring`/`elcm` y componentes auxiliares ordenados |
-| 2026-05-17 | Convertidos templates TNLCM base a `ytt` (`@ytt:data` / `@data.values`) y añadida documentación sobre qué valores debe contener el `DataDescriptor` para cada descriptor TNLCM |
+| 2026-05-17 | Convertidos templates TNLCM base a `ytt` (`@ytt:data` / `@data.values`) y añadida documentación sobre qué valores debe contener el `DataDescriptor` |
+| **2026-05-30** | **Extractor Centralizado**: Módulo `app/utils/component_contract.py` con `extract_component_template_values()` para normalizar y validar campos `component.<template>.<field>` contra editables del overlay; soporta formatos plano y anidado con retrocompatibilidad |
 
 ## Uso con Postman
 
 - Coleccion: `API_JSON/DaaS.postman_collection.json`
 - Variables: `baseUrl`, `apiKey`, `executionId`
 
+## Debugging y Tests
+
+Ejecutar suite completa de tests (74 tests):
+
+```bash
+python -m pytest tests/ -v
+```
+
+Ejecutar tests de un módulo específico:
+
+```bash
+python -m pytest tests/test_main_endpoints.py -v
+python -m pytest tests/test_generators.py -v
+```
+
+Los tests validan:
+- Validación de payload con `extract_component_template_values()`
+- Generación de descriptores TNLCM con múltiples componentes
+- Flujos de orquestación TNLCM + ELCM
+- Reintentos y recuperación ante fallos
+
+## Información Sobre Documentación del Proyecto
+
+### Documentación Vigente
+
+- **Este README**: Punto de entrada principal, contrato de API y payloads actualizados
+- **`docs/INFORME_TNLCM.md`**: Guía rápida para ejecutar pruebas TNLCM
+- **`docs/INFORME_ELCM.md`**: Guía rápida para ejecutar pruebas ELCM
+- **`docs/CI_CD_VARIABLES.md`**: Variables de deployment y configuración
+- **`Recursos/300526_Resumen.md`**: Documentación técnica detallada archivo por archivo (SI EXISTE)
+
+### Documentación Legacy (NO Usar)
+
+Los siguientes archivos contienen snapshots históricos de fases anteriores del desarrollo. **NO se recomiendan para nuevas implementaciones**:
+
+- `docs/UNIFIED_EXECUTIONS_API.md` - Documentación de fase de unificación (desalineada con estado actual)
+- `docs/TELEMETRY.md` - Telemetría anterior a refactor (módulo movido a `app/utils/telemetry.py`)
+- `docs/TNLCM_MASKS_SUMMARY.md` - Modelo de máscaras TNLCM obsoleto
+- `docs/TNLCM_MASKS_INTEGRATION.md` - Propuesta de arquitectura superada
+- `docs/CHANGES_UNIFIED_EXECUTIONS_API.md` - Changelog de fase de unificación
+- `docs/RESUMEN_IMPLEMENTACION_API_UNIFICADA.md` - Resumen histórico
+- `docs/TELEMETRY_REFACTOR.md` - Changelog de refactor de telemetría
+- `docs/CHANGELOG_TELEMETRY_REFACTOR.md` - Más changelog histórico
+- `docs/RESUMEN_VISUAL.txt` - Snapshot visual histórico
+- `docs/INDEX_MASKS.md` - Índice vacío
+
+**Recomendación:** Si necesitas historiacomprender las decisiones de diseño, revisá `Recursos/` donde se centraliza la documentación técnica en profundidad.
+
 ## Soporte
 
 Si necesitas validar el flujo completo, usa primero la coleccion Postman y revisa el endpoint de detalle para inspeccionar artifacts y errores:
 
 - `GET /executions/{execution_id}/detail`
+
+Para problemas de validación de componentes, consulta la sección "Validación de Componentes" arriba y revisa los overlays TNLCM en `templates/TNLCM/overlays/`.
+
+Para entender en detalle la arquitectura del extractor de componentes, ver `app/utils/component_contract.py` y sus consumidores en `app/main.py` y `app/generators.py`.
+
