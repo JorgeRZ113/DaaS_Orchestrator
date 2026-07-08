@@ -95,8 +95,6 @@ async def test_start_elcm_requires_completed_state():
         tn_id=execution_id,
         message="Deploying",
     )
-    from app.artifacts import persist_dataset_descriptor
-
     persist_dataset_descriptor(execution_id, descriptor)
 
     with pytest.raises(ValueError, match="COMPLETED"):

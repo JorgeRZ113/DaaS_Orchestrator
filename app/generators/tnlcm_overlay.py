@@ -21,7 +21,6 @@ from typing import Any
 
 import yaml
 
-from app.models import InfrastructureConfig
 from app.utils.custom_yaml import _wrap_strings_in_quotes
 
 logger = logging.getLogger(__name__)
@@ -149,8 +148,6 @@ def _load_overlay_yaml(overlay_path: Path) -> dict[str, Any]:
     lines = content.split("\n")
     body_start = 0
     for i, line in enumerate(lines):
-        line_no_spaces = line.strip().replace(" ", "")
-
         if line.strip().startswith("#@data/values") or line.strip().startswith("@data/values"):
             # Encontrar la línea '---' después de la cabecera
             for j in range(i + 1, len(lines)):

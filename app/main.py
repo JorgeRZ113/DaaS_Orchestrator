@@ -10,8 +10,8 @@ from app.models import (
     DatasetDescriptor,
     ExecutionRecord,
     ExecutionResponse,
+    InfrastructureConfig,
 )
-from fastapi import HTTPException
 from app.orchestrator import (
     TnlcmDeploymentInProgressError,
     create_tnlcm_execution,
@@ -255,7 +255,7 @@ async def post_execution(descriptor: DatasetDescriptor):
     from app.utils.ytt_renderer import resolve_template_path, overlay_editable_fields_for_template
     from app.generators.tnlcm_overlay import InvalidDataDescriptorError
 
-    def _validate_components_or_raise(infra: "InfrastructureConfig") -> None:
+    def _validate_components_or_raise(infra: InfrastructureConfig) -> None:
         comps = infra.component or {}
         invalids: list[str] = []
         

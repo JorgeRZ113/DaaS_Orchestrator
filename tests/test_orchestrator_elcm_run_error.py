@@ -14,8 +14,6 @@ from app.models import (
 
 @pytest.fixture(autouse=True)
 def _isolate_orchestrator_state(monkeypatch, tmp_path):
-    from app.config import settings
-
     previous_artifacts_dir = settings.artifacts_dir
     settings.artifacts_dir = str(tmp_path)
     previous_executions = orchestrator.executions.copy()
@@ -82,7 +80,6 @@ async def test_run_elcm_phase_run_error_is_propagated_without_retry(monkeypatch,
     from app.artifacts import persist_dataset_descriptor
     persist_dataset_descriptor(execution_id, descriptor)
 
-    down_tunnel_called = False
     await orchestrator.run_elcm_phase(execution_id)
 
     record = orchestrator.executions[execution_id]
@@ -139,7 +136,6 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
     from app.artifacts import persist_dataset_descriptor
     persist_dataset_descriptor(execution_id, descriptor)
 
-    down_tunnel_called = False
     await orchestrator.run_elcm_phase(execution_id)
 
     record = orchestrator.executions[execution_id]
@@ -210,7 +206,6 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
     from app.artifacts import persist_dataset_descriptor
     persist_dataset_descriptor(execution_id, descriptor)
 
-    down_tunnel_called = False
     await orchestrator.run_elcm_phase(execution_id)
 
     record = orchestrator.executions[execution_id]

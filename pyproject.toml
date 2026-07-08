@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "MVP de capa de orquestación DaaS para 6G-SANDBOX"
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [
+    { name = "Jorge Ramirez Zotano", email = "jorgeramirezzotano@uma@.es" },
+]
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -25,6 +28,9 @@ dev = [
     "ruff",
     "black",
 ]
+
+[project.scripts]
+daas-orchestrator = "app.main:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

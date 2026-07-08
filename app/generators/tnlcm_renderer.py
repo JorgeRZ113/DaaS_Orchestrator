@@ -19,9 +19,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import time
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -308,7 +306,7 @@ async def generate_tnlcm_descriptor(
         RuntimeError: Si YTT falla
     """
     timer = _timer(execution_id, "tnlcm_descriptor")
-    generated_dir = _ensure_generated_dir(execution_id)
+    _ensure_generated_dir(execution_id)
 
     components = infra.component or {}
     if not isinstance(components, dict) or "base" not in components:
