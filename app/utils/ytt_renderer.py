@@ -12,14 +12,50 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+_TEMPLATE_ALIAS_STEMS: dict[str, tuple[str, ...]] = {
+    "base": (
+        "base_tnlcm_descriptor",
+        "tnlcm_descriptor_base",
+        "base",
+    ),
+    "base_tnlcm_descriptor": (
+        "base_tnlcm_descriptor",
+        "tnlcm_descriptor_base",
+        "base",
+    ),
+    "tnlcm_descriptor_base": (
+        "base_tnlcm_descriptor",
+        "tnlcm_descriptor_base",
+        "base",
+    ),
+}
+
 _OVERLAY_SECTION_ALIASES: dict[str, dict[str, str]] = {
     "vnet_sample_tnlcm_descriptor": {"vnet": "network"},
     "vm_kvm_sample_tnlcm_descriptor": {"vm_kvm": "vm"},
     "loadcore_agent_sample_tnlcm_descriptor_open5gs_vm": {"loadcore_agent": "loadcore"},
     "upf_p4_sw_sample_tnlcm_descriptor": {"upf_p4_sw": "upf"},
-    "ueransim_sample_tnlcm_descriptor_open5gs_vm_both": {"ueransim_both": "ueransim"},
-    "ueransim_sample_tnlcm_descriptor_open5gs_vm_split": {"ueransim_split": "ueransim"},
+    "ueransim_both_sample_tnlcm_descriptor_open5gs_vm": {"ueransim_both": "ueransim"},
+    "ueransim_split_sample_tnlcm_descriptor_open5gs_vm": {"ueransim_split": "ueransim"},
 }
+
+
+def _normalize_asset_key(value: str) -> str:
+    name = Path(value).name.lower()
+    for suffix in (".overlay.yaml", ".yaml", ".yml", ".json"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return re.sub(r"[-\s]+", "_", name)
+
+
+def _asset_match_key(path: Path) -> str:
+    name = path.name
+    if name.endswith(".overlay.yaml"):
+        name = name.removesuffix(".overlay.yaml")
+    else:
+        name = path.stem
+    return _normalize_asset_key(name)
 
 
 @dataclass(frozen=True)
@@ -55,6 +91,8 @@ def _candidate_paths(template_ref: str, category: str | None = None) -> list[Pat
         category_dir = root / category
         candidates.extend(
             [
+                category_dir / "templates" / ref,
+                category_dir / "templates" / ref.name,
                 category_dir / ref,
                 category_dir / ref.name,
                 category_dir / "legacy" / ref.name,
@@ -71,6 +109,40 @@ def _candidate_paths(template_ref: str, category: str | None = None) -> list[Pat
         ]
     )
 
+    alias_stems = _TEMPLATE_ALIAS_STEMS.get(ref.stem, ())
+    if alias_stems:
+        alias_names: list[str] = []
+        for alias_stem in alias_stems:
+            alias_names.extend(
+                [
+                    f"{alias_stem}.yaml",
+                    f"{alias_stem}.yml",
+                    f"{alias_stem}",
+                    f"TNLCM/{alias_stem}.yaml",
+                    f"TNLCM/{alias_stem}.yml",
+                ]
+            )
+        for alias_name in alias_names:
+            alias_ref = Path(alias_name)
+            if category:
+                category_dir = root / category
+                candidates.extend(
+                    [
+                        category_dir / alias_ref,
+                        category_dir / alias_ref.name,
+                        category_dir / "legacy" / alias_ref.name,
+                    ]
+                )
+            candidates.extend(
+                [
+                    root / alias_ref,
+                    root / alias_ref.name,
+                    _repo_root() / alias_ref,
+                    _repo_root() / "examples" / alias_ref.name,
+                    _repo_root() / "examples" / alias_ref,
+                ]
+            )
+
     seen: set[str] = set()
     unique_candidates: list[Path] = []
     for candidate in candidates:
@@ -84,8 +156,39 @@ def _candidate_paths(template_ref: str, category: str | None = None) -> list[Pat
 
 def resolve_template_path(template_ref: str, category: str | None = None) -> Path | None:
     for candidate in _candidate_paths(template_ref, category=category):
-        if candidate.exists() and candidate.is_file():
+        if candidate.exists() and candidate.is_file() and not candidate.name.endswith(".overlay.yaml"):
             return candidate.resolve()
+
+    if category:
+        root = templates_root_dir()
+        category_dir = root / category
+        if category_dir.exists():
+            ref_norm = _normalize_asset_key(Path(template_ref).name or Path(template_ref).stem)
+            search_dirs = [category_dir]
+            templates_dir = category_dir / "templates"
+            if templates_dir.exists():
+                search_dirs.insert(0, templates_dir)
+            legacy_dir = category_dir / "legacy"
+            if legacy_dir.exists():
+                search_dirs.append(legacy_dir)
+
+            matches: list[Path] = []
+            for search_dir in search_dirs:
+                for path in search_dir.rglob("*"):
+                    if not path.is_file():
+                        continue
+                    if path.name.endswith(".overlay.yaml"):
+                        continue
+                    if path.suffix.lower() not in {".yaml", ".yml", ".json"}:
+                        continue
+                    candidate_norm = _asset_match_key(path)
+                    if candidate_norm == ref_norm or candidate_norm.startswith(ref_norm) or ref_norm.startswith(candidate_norm):
+                        matches.append(path.resolve())
+
+            if matches:
+                matches.sort(key=lambda item: (len(item.name), str(item)))
+                return matches[0]
+
     return None
 
 
@@ -93,7 +196,12 @@ def _overlay_file_paths(category: str | None = None) -> list[Path]:
     root = templates_root_dir()
     search_dirs = [root]
     if category:
-        search_dirs = [root / category]
+        # Para TNLCM, priorizar templates/TNLCM/overlays/ y luego templates/TNLCM/
+        category_dir = root / category
+        search_dirs = [category_dir]
+        overlays_subdir = category_dir / "overlays"
+        if overlays_subdir.exists():
+            search_dirs.insert(0, overlays_subdir)
     paths: list[Path] = []
     for search_dir in search_dirs:
         if search_dir.exists():
@@ -153,7 +261,7 @@ def _load_overlay_defaults(overlay_path: Path) -> dict[str, Any]:
     body_lines = []
     for line in body.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("@data/values"):
+        if not stripped or stripped.startswith("@data/values") or stripped.startswith("#@data/values"):
             continue
         body_lines.append(line)
     parsed = yaml.safe_load("\n".join(body_lines).strip())
@@ -196,6 +304,10 @@ def resolve_overlay_chain(template_ref: str, category: str | None = None) -> lis
         raise FileNotFoundError(f"Template not found: {template_ref}")
 
     overlay_path = template_path.with_name(f"{template_path.stem}.overlay.yaml")
+    if category:
+        category_overlay = templates_root_dir() / category / "overlays" / overlay_path.name
+        if category_overlay.exists():
+            overlay_path = category_overlay
     if not overlay_path.exists():
         return []
 
@@ -265,6 +377,36 @@ def build_tnlcm_values(
     return merged
 
 
+def overlay_editable_fields_for_template(template_ref: str, category: str | None = None) -> dict[str, set]:
+    """Return a mapping section -> set(field_names) for every field declared in the
+    overlay chain, regardless of its default value.
+
+    This helps callers know which keys from a provided `component` are allowed
+    to override. A field is editable whether the overlay leaves it empty ("",
+    a required field with no default) or ships a real default value (an
+    optional field): whether it is actually mandatory or optional is decided
+    later by COMPONENT_PARAMETER_MAPPING, not by this function.
+    If no overlay is present for the template, returns an empty dict.
+    """
+    editable: dict[str, set] = {}
+    try:
+        chain = resolve_overlay_chain(template_ref, category=category)
+    except FileNotFoundError:
+        return {}
+
+    for spec in chain:
+        defaults = spec.defaults or {}
+        if not isinstance(defaults, dict):
+            continue
+        for section, section_defaults in defaults.items():
+            if not isinstance(section_defaults, dict):
+                continue
+            for key in section_defaults:
+                editable.setdefault(section, set()).add(key)
+
+    return editable
+
+
 def _resolve_data_value(values: dict[str, Any], path: str) -> Any:
     current: Any = values
     for part in path.split("."):
@@ -289,7 +431,7 @@ def _ytt_inline_repr(value: Any) -> str:
 
 
 def _render_ytt_expressions(template_text: str, values: dict[str, Any]) -> str:
-    pattern = re.compile(r"@data\.value(?:s)?\.([A-Za-z0-9_.-]+)")
+    pattern = re.compile(r"@data\.values?\.([A-Za-z0-9_.-]+)")
 
     def replace(match: re.Match[str]) -> str:
         value = _resolve_data_value(values, match.group(1))
@@ -351,11 +493,3 @@ def render_with_ytt(values: dict[str, Any] | None, template_ref: str, category: 
     if isinstance(parsed, str):
         return parsed
     return yaml.safe_dump(parsed, sort_keys=False, allow_unicode=True)
-
-
-
-
-
-
-
-
