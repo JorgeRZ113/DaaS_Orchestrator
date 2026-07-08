@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
+from app.models import DatasetDescriptor
 from app.utils.telemetry import telemetry
 
 logger = logging.getLogger(__name__)
@@ -190,3 +191,36 @@ async def build_telemetry_report_artifact(
 
     logger.info(f"[{execution_id}] telemetry report generated: {telemetry_path}")
     return telemetry_path
+
+
+def persist_dataset_descriptor(execution_id: str, descriptor: DatasetDescriptor) -> str:
+    """
+    Persists the DatasetDescriptor to a JSON file in the artifact directory.
+
+    Excludes temporary fields like descriptor_path (only needed for template resolution during generation).
+    """
+    base_dir = _artifact_base_dir(execution_id)
+    _ensure_dir(base_dir)
+    descriptor_path = os.path.join(base_dir, "dataset_descriptor.json")
+
+    # Exclude descriptor_path: it's only used for template resolution during generation,
+    # not needed in persisted state (descriptor is already generated/available)
+    descriptor_dict = descriptor.model_dump(
+        exclude={"infrastructure": {"descriptor_path"}},
+        exclude_none=False
+    )
+
+    with open(descriptor_path, "w", encoding="utf-8") as f:
+        json.dump(descriptor_dict, f, indent=2)
+
+    logger.info(f"[{execution_id}] dataset_descriptor.json saved")
+    return descriptor_path
+
+
+def load_dataset_descriptor(execution_id: str) -> DatasetDescriptor:
+    """Loads a previously persisted DatasetDescriptor from the artifact directory."""
+    descriptor_path = os.path.join(_artifact_base_dir(execution_id), "dataset_descriptor.json")
+    if not os.path.exists(descriptor_path):
+        raise FileNotFoundError(f"Descriptor not found for execution {execution_id}")
+    with open(descriptor_path, "r", encoding="utf-8") as f:
+        return DatasetDescriptor.model_validate_json(f.read())

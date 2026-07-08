@@ -66,12 +66,7 @@ def _activate_retry_delay_seconds(attempt_number: int) -> int:
     return TNLCM_ACTIVATE_RETRY_BASE_DELAY + ((attempt_number - 1) * TNLCM_ACTIVATE_RETRY_INCREMENT)
 
 
-async def _activate_with_backoff(
-    request_call,
-    tn_id: str,
-    endpoint_label: str,
-    execution_id: str | None = None,
-) -> None:
+async def _activate_with_backoff(request_call, tn_id: str, endpoint_label: str, execution_id: str | None = None, ) -> None:
     from app.utils.telemetry import telemetry
 
     activate_timer = telemetry.start_timer("tnlcm", "activate", execution_id=execution_id)
@@ -755,10 +750,7 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
     return result
 
 
-def _legacy_multipart_from_infra(
-    infra: InfrastructureConfig,
-    descriptor_path: str | None = None,
-) -> tuple[dict[str, str], dict[str, tuple[str, bytes, str]]]:
+def _legacy_multipart_from_infra(infra: InfrastructureConfig, descriptor_path: str | None = None, ) -> tuple[dict[str, str], dict[str, tuple[str, bytes, str]]]:
     descriptor_ref = (
         descriptor_path
         or infra.parameters.get("descriptor")

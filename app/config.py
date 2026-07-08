@@ -138,3 +138,22 @@ def reload_mutable_settings() -> dict[str, list[str]]:
             "updated_fields": updated_fields,
             "non_reloadable_fields": sorted(NON_RELOADABLE_SETTING_FIELDS),
         }
+
+
+# ===== TNLCM Component Field Mappings =====
+# Mapa central que traduce nombres de campos del DataDescriptor (body HTTP) a nombres del overlay TNLCM.
+# Formato: componente -> sección -> campo_body -> campo_overlay
+TNLCM_COMPONENT_FIELD_MAPS: dict[str, dict[str, dict[str, str]]] = {
+    "base": {
+        "monitoring": {
+            "user": "influxdb_user",
+            "password": "influxdb_password",
+            "grafana_password": "grafana_password",
+        },
+        "tn_init": {},
+        "elcm": {},
+    },
+    # Añade mapeos para otros componentes según sea necesario
+    # "mongodb": { ... },
+    # "open5gs_vm": { ... },
+}

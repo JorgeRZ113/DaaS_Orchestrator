@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from app.config import settings
+from app.generators.tnlcm_renderer import generate_tnlcm_descriptor
 from app.models import DatasetDescriptor, ExecutionRecord, ExecutionState
 from app.utils.telemetry import telemetry
 
@@ -23,7 +24,6 @@ ELCM_START_TIMEOUT_SECONDS = 300
 
 # In-memory state for MVP
 executions: dict[str, ExecutionRecord] = {}
-execution_descriptors: dict[str, DatasetDescriptor] = {}
 elcm_start_watchdogs: dict[str, asyncio.Task[None]] = {}
 _tnlcm_deploy_guard = threading.Lock()
 _tnlcm_deploy_in_progress: str | None = None
@@ -226,7 +226,6 @@ async def _handle_elcm_start_timeout(execution_id: str, timeout_seconds: int) ->
 async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> None:
     """Phase 1: validate + deploy TN, then activate the WireGuard tunnel automatically."""
     from .artifacts import build_tnlcm_raw_report_artifact, build_tnlcm_summary_artifact
-    from .generators import generate_tnlcm_descriptor
     from .tnlcm import (
         deploy_trial_network,
         download_trial_network_report,
@@ -329,6 +328,9 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         _update(execution_id, elcm_base_url=elcm_url)
         logger.info(f"[{execution_id}] ELCM URL extracted from report: {elcm_url}")
 
+        record_for_artifacts = executions[execution_id]
+        merged_report_artifacts = list(dict.fromkeys([*record_for_artifacts.artifacts, *report_artifacts]))
+
         try:
             up_tunnel(tn_id, vpn_conf_path)
         except WireGuardManualDeploymentRequired as vpn_error:
@@ -341,7 +343,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
                 execution_id,
                 status=ExecutionState.completed,
                 tn_id=tn_id,
-                artifacts=report_artifacts,
+                artifacts=merged_report_artifacts,
                 vpn_interface=tn_id,
                 vpn_conf_path=vpn_conf_path,
                 vpn_status="MANUAL_REQUIRED",
@@ -371,7 +373,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             execution_id,
             status=ExecutionState.completed,
             tn_id=tn_id,
-            artifacts=report_artifacts,
+            artifacts=merged_report_artifacts,
             message="TN deployment completed with automatic WireGuard tunnel",
         )
         tnlcm_phase_timer.stop(status="success")
@@ -442,9 +444,10 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
 
 async def run_elcm_phase(execution_id: str) -> None:
     """Phase 2: run ELCM and always cleanup TN at the end."""
-    from .artifacts import build_artifacts
-    from .generators import generate_experiment_descriptor, generate_testcase
+    from .artifacts import build_artifacts, load_dataset_descriptor
     from .elcm import (
+        generate_experiment_descriptor,
+        generate_testcase,
         TnLogsNotFoundError,
         collect_results,
         get_experiment_status,
@@ -455,7 +458,7 @@ async def run_elcm_phase(execution_id: str) -> None:
     from .utils.wireguard import down_tunnel
 
     record = executions[execution_id]
-    descriptor = execution_descriptors[execution_id]
+    descriptor = load_dataset_descriptor(execution_id)
     tn_id = record.tn_id
     elcm_base_url = record.elcm_base_url
 
@@ -739,13 +742,16 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
 
     _cancel_elcm_start_timeout(execution_id)
     try:
+        from .artifacts import persist_dataset_descriptor
+        descriptor_path = persist_dataset_descriptor(execution_id, descriptor)
+
         record = ExecutionRecord(
             execution_id=execution_id,
             status=ExecutionState.pending,
             message="Execution created",
+            artifacts=[descriptor_path],
         )
         executions[execution_id] = record
-        execution_descriptors[execution_id] = descriptor
         logger.debug(
             "[%s] STATUS NONE -> %s | %s", execution_id, record.status.value, record.message
         )
@@ -779,11 +785,17 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
 
 
 async def start_elcm_phase(execution_id: str) -> ExecutionRecord:
+    from .artifacts import load_dataset_descriptor
+
     record = get_execution(execution_id)
     if not record:
         raise ValueError("Execution not found")
-    if execution_id not in execution_descriptors:
+
+    try:
+        load_dataset_descriptor(execution_id)
+    except FileNotFoundError:
         raise ValueError("Descriptor not found for execution")
+
     if not record.tn_id:
         raise ValueError("TNLCM phase is not ready yet (tn_id missing)")
     if record.status != ExecutionState.completed:

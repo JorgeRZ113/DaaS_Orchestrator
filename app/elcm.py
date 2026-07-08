@@ -8,7 +8,7 @@ import httpx
 from app.config import settings
 from app.models import ExperimentConfig
 from app.utils.telemetry import telemetry
-from app.utils.ytt_renderer import resolve_template_path
+from app.utils.ytt_renderer import render_with_ytt, resolve_template_path
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +112,61 @@ def _resolve_examples_path(path_or_name: str | None) -> str | None:
         return str(candidate)
 
     return str((_examples_base_dir() / candidate).resolve())
+
+
+def _generated_dir(execution_id: str) -> Path:
+    base = Path(settings.artifacts_dir)
+    if not base.is_absolute():
+        base = Path.cwd() / base
+    generated_dir = base / execution_id / "archivos_generados"
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    return generated_dir
+
+
+def _save_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+async def generate_testcase(testcase_ref: str, execution_id: str, output_index: int = 0) -> str:
+    """Renderiza un testcase ELCM y lo guarda como testcase_XXX.yml."""
+    template_path = resolve_template_path(testcase_ref, category="ELCM")
+    if template_path is None:
+        raise FileNotFoundError(f"TestCase template not found: {testcase_ref}")
+
+    testcase_name = f"testcase_{output_index + 1:03d}"
+    values = {
+        "ExecutionId": execution_id,
+        "execution_id": execution_id,
+        "testcase_name": testcase_name,
+        "testcase_ref": Path(testcase_ref).name,
+    }
+    rendered = render_with_ytt(values, str(template_path), category="ELCM")
+
+    output_path = _generated_dir(execution_id) / f"{testcase_name}.yml"
+    _save_text(output_path, rendered)
+    return str(output_path)
+
+
+async def generate_experiment_descriptor(
+    experiment: ExperimentConfig,
+    testcase_paths: list[str],
+    execution_id: str,
+) -> str:
+    """Construye el descriptor JSON de ELCM con nombres lógicos de testcase."""
+    template_path = resolve_template_path("ELCM/template_experiment_descriptor.json", category="ELCM")
+    if template_path is None:
+        raise FileNotFoundError("Experiment descriptor template not found: ELCM/template_experiment_descriptor.json")
+
+    payload = json.loads(template_path.read_text(encoding="utf-8"))
+    payload["Application"] = experiment.name
+    payload["TestCases"] = [Path(path).stem for path in testcase_paths if path]
+    if experiment.ues_paths:
+        payload["UEs"] = experiment.ues_paths
+
+    output_path = _generated_dir(execution_id) / "experiment_descriptor.json"
+    _save_text(output_path, json.dumps(payload, indent=4, ensure_ascii=False))
+    return str(output_path)
 
 
 def _extract_experiment_id(data: dict[str, Any]) -> str | None:

@@ -11,6 +11,7 @@ from app.models import (
     ExecutionRecord,
     ExecutionResponse,
 )
+from fastapi import HTTPException
 from app.orchestrator import (
     TnlcmDeploymentInProgressError,
     create_tnlcm_execution,
@@ -18,6 +19,7 @@ from app.orchestrator import (
     start_elcm_phase,
 )
 from app.utils.telemetry import format_duration_display, telemetry
+from app.utils.component_contract import extract_component_template_values
 
 logging.basicConfig(
     level=settings.log_level,
@@ -58,6 +60,18 @@ app = FastAPI(
 @app.get("/health", tags=["health"])
 async def health():
     return {"status": "ok", "env": settings.app_env}
+
+
+def main() -> None:
+    """Punto de entrada de consola (`daas-orchestrator`) para arrancar Uvicorn."""
+    import uvicorn
+
+    uvicorn.run(
+        "app.main:app",
+        host=settings.app_host,
+        port=settings.app_port,
+        reload=settings.app_env == "dev",
+    )
 
 
 @app.post(
@@ -237,6 +251,52 @@ async def post_execution(descriptor: DatasetDescriptor):
     Si descriptor.auto_start_elcm=true (por defecto), ELCM se inicia automáticamente
     al completar TNLCM. Establecer auto_start_elcm=false para control manual del flujo.
     """
+    # Explicit validation: ensure client did not supply disallowed fields in components
+    from app.utils.ytt_renderer import resolve_template_path, overlay_editable_fields_for_template
+    from app.generators.tnlcm_overlay import InvalidDataDescriptorError
+
+    def _validate_components_or_raise(infra: "InfrastructureConfig") -> None:
+        comps = infra.component or {}
+        invalids: list[str] = []
+        
+        for comp_key, comp_values in (comps.items() if isinstance(comps, dict) else []):
+            if not isinstance(comp_values, dict) or not comp_values:
+                # empty dict or non-dict is acceptable (empty means include defaults)
+                continue
+
+            # Resolve template path for this component
+            candidate = "base_tnlcm_descriptor.yaml" if comp_key == "base" else f"{comp_key}_sample_tnlcm_descriptor.yaml"
+            comp_template = resolve_template_path(candidate, category="TNLCM")
+
+            if comp_template is None:
+                invalids.append(f"component.{comp_key}: template not found")
+                continue
+
+            # Obtener campos editables del overlay
+            allowed = overlay_editable_fields_for_template(str(comp_template), category="TNLCM")
+            editable_by_section: dict[str, set[str]] = {
+                section: set(fields) for section, fields in allowed.items()
+            }
+
+            # Usar extractor centralizado para normalizar y validar campos
+            _, component_invalids = extract_component_template_values(
+                comp_key=comp_key,
+                comp_values=comp_values,
+                editable_by_section=editable_by_section,
+            )
+            invalids.extend(component_invalids)
+
+        if invalids:
+            raise HTTPException(status_code=400, detail={"invalid_fields": invalids})
+
+    # Run validation before proceeding
+    try:
+        _validate_components_or_raise(descriptor.infrastructure)
+    except HTTPException:
+        raise
+    except InvalidDataDescriptorError as exc:
+        raise HTTPException(status_code=400, detail={"invalid_fields": exc.invalid_fields})
+
     execution_id = descriptor.infrastructure.name.strip()
     telemetry.increment_counter(
         "requests_total", labels={"service": "orchestrator", "operation": "create"}
