@@ -9,7 +9,7 @@ description = "MVP de capa de orquestación DaaS para 6G-SANDBOX"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "Jorge Ramirez Zotano", email = "jorgeramirezzotano@uma@.es" },
+    { name = "Jorge Ramirez Zotano", email = "jorgeramirezzotano@uma.es" },
 ]
 dependencies = [
     "fastapi",
