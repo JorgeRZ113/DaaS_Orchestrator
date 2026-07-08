@@ -1,0 +1,8 @@
+#! Overlay para `xrext_sample_tnlcm_descriptor.yaml`
+#! Component: xrext
+#! Depends on:
+
+#@ data/values
+---
+xrext:
+  external_server: "10.182.32.52"

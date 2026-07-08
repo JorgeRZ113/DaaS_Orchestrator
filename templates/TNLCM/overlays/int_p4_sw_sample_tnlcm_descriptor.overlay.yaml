@@ -1,0 +1,10 @@
+#! Overlay para `int_p4_sw_sample_tnlcm_descriptor.yaml`
+#! Component: int_p4_sw
+#! Depends on: vnet, vm_kvm
+
+#@ data/values
+---
+int_switches:
+  collector_networks: []
+  collector_interface: ""
+  collector_port: 0

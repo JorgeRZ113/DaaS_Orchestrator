@@ -1,8 +1,8 @@
-# Overlay para `vnet_sample_tnlcm_descriptor.yaml`
-# Component: vnet
-# Depends on:
+#! Overlay para `vnet_sample_tnlcm_descriptor.yaml`
+#! Component: vnet
+#! Depends on:
 
-@data/values
+#@ data/values
 ---
 vnet:
   gw: "10.20.30.5"
@@ -10,4 +10,3 @@ vnet:
   netmask: 24
   first_ip: "10.20.30.30"
   address_size: 100
-

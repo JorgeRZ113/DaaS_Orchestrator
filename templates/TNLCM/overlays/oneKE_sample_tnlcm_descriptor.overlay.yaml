@@ -1,0 +1,18 @@
+#! Overlay para `oneKE_sample_tnlcm_descriptor.yaml`
+#! Component: oneKE
+#! Depends on: vnet
+
+#@ data/values
+---
+oneKE:
+  external_vnet: "tn_vxlan"
+  internal_vnet: "vnet-internal"
+  worker_nodes: 3            #! Default value is 1
+  version: "131"
+  #! multus: true             #! Default value
+  #! cni_plugin: "canal"      #! Default value
+  #! metallb: true            #! Default value
+  metallb_range: "10.21.12.200-10.21.12.240"
+  #! longhorn: true           #! Default value
+  #! traefik: false           #! Default value
+  #! nginx_passthough: false  #! Default value

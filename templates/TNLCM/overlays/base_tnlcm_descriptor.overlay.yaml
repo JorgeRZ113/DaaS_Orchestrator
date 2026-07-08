@@ -1,8 +1,8 @@
-# Overlay para `base_tnlcm_descriptor.yaml` (monitoreo)
-# Component: monitoring
-# Depends on: tn_init, elcm
+#! Overlay para `base_tnlcm_descriptor.yaml` (monitoreo)
+#! Component: monitoring
+#! Depends on: tn_init, elcm
 
-@data/values
+#@ data/values
 ---
 monitoring:
   influxdb_version: "2.7.11"

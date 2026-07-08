@@ -1,0 +1,14 @@
+#@ load("@ytt:data", "data")
+---
+trial_network:
+  tn_init:
+    type: "tn_init"
+    dependencies: []
+    input:
+      one_vxlan_first_ip: #@ data.values.network_vxlan.first_ip
+      one_vxlan_address_size: #@ data.values.network_vxlan.address_size
+      one_bastion_vpn_clients: #@ data.values.bastion.vpn_clients
+      one_bastion_vpn_allowedips: #@ data.values.bastion.vpn_allowedips
+      one_bastion_routemanager_add: #@ data.values.bastion.routemanager_add
+      one_bastion_fw_exceptions: #@ data.values.bastion.fw_exceptions
+      one_bastion_nat_exceptions: #@ data.values.bastion.nat_exceptions

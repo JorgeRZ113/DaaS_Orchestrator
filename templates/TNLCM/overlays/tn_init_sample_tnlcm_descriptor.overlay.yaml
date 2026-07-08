@@ -1,8 +1,8 @@
-# Overlay para `tn_init_sample_tnlcm_descriptor.yaml`
-# Component: tn_init
-# Depends on:
+#! Overlay para `tn_init_sample_tnlcm_descriptor.yaml`
+#! Component: tn_init
+#! Depends on:
 
-@data/values
+#@ data/values
 ---
 network_vxlan:
   first_ip: ""
@@ -14,4 +14,3 @@ bastion:
   routemanager_add: []
   fw_exceptions: []
   nat_exceptions: []
-
