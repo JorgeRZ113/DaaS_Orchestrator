@@ -28,6 +28,7 @@ El flujo es reproducible, guiado por:
 ## Requisitos
 
 - Python `>=3.10`.
+- Binario [`ytt`](https://carvel.dev/ytt/) `v0.55.1` instalado y accesible en el `PATH` (misma versión que instala el pipeline de CI, ver `.gitlab-ci.yml`).
 - Dependencias definidas en `pyproject.toml`.
 - Acceso de red a TNLCM y ELCM configurados en `.env`.
 

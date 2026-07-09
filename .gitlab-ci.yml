@@ -44,6 +44,12 @@ lint:
 
 pytest:
   stage: test
+  before_script:
+    - python -m pip install --upgrade pip
+    - python -m pip install -e ".[dev]"
+    - python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/carvel-dev/ytt/releases/download/v0.55.1/ytt-linux-amd64', '/usr/local/bin/ytt')"
+    - chmod +x /usr/local/bin/ytt
+    - ytt --version
   script:
     - python -m pytest -q --maxfail=1 --disable-warnings --cov=app --cov-report=term-missing
 
