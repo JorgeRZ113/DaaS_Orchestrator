@@ -1,0 +1,265 @@
+{
+  "info": {
+    "_postman_id": "c0d4f4e1-3e6a-4e06-a7fb-9b7c0f2c9c01",
+    "name": "DaaS Orchestrator - API Unificada",
+    "description": "🚀 FLUJO UNIFICADO DaaS (Data as a Service)\n\n🔐 Paso previo opcional (TNLCM):\n0. POST /tnlcm/token/refresh → obtiene access_token con TNLCM_USER/TNLCM_PASSWORD\n\n📍 FLUJO PRINCIPAL - POST /executions:\n1. POST /executions → Ejecuta TNLCM y, por defecto, ELCM automáticamente\n2. GET /executions/{id} → Consulta estado y progreso\n3. GET /executions/{id}/detail → Consulta detalle completo\n\n🧭 Modo manual (si auto_start_elcm=false):\n- TNLCM completa la red y deja la ejecución lista\n- POST /executions/{id}/elcm → Ejecuta ELCM manualmente\n\n✅ El execution_id se guarda automáticamente en {{executionId}}\n⚠️  Usa auto_start_elcm=false solo si quieres separar TNLCM y ELCM manualmente",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "✅ Verifica que el servidor está activo\nRespuesta: 200 OK si todo funciona correctamente"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Executions",
+      "item": [
+        {
+          "name": "POST /executions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "  const data = pm.response.json();",
+                  "  if (data.execution_id) pm.collectionVariables.set('executionId', data.execution_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo-full\",\n    \"descriptor_path\": \"tn_descriptor_elcm.yaml\",\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"develop\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  },\n  \"auto_start_elcm\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/executions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions"
+              ]
+            },
+            "description": "Endpoint unificado: inicia TNLCM y, por defecto, también ELCM automáticamente. Usa auto_start_elcm=false si quieres dejar ELCM para una llamada manual posterior."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /executions/{execution_id}/elcm",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/elcm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "elcm"
+              ]
+            },
+            "description": "🔥 MODO MANUAL DE ELCM\n\n⚠️ REQUISITOS:\n✅ La ejecución debe existir\n✅ TNLCM debe haber terminado correctamente\n✅ Si usas el flujo manual, la VPN debe estar disponible\n\n📋 Qué hace automáticamente:\n1. Sube test cases a ELCM\n2. Lanza experimento con descriptor Exp_Desc.json\n3. Polling cada 10s hasta \"Finished\" (timeout 1h)\n4. Recoge logs de ejecución\n5. Si logs no están listos, reintenta según la lógica del backend\n6. Al finalizar: cleanup automático de TN\n\n📊 Resultado:\n• Logs guardados en ./artifacts/{id}/\n• Estados ELCM: Running → Finished → Completed\n• Si error: status=failed, message con detalles\n\n❌ Error 400 Bad Request:\nSignifica execution_id no existe en memoria o la TN no está lista\n→ Crea nueva ejecución con POST /executions (auto_start_elcm=false si quieres control manual)"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /executions/{execution_id}",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}"
+              ]
+            },
+            "description": "📊 Consulta estado de ejecución unificada (TNLCM + ELCM)\n\n🔄 Estados posibles:\n• pending: Ejecución creada\n• validating: Validando descriptor\n• deploying: Creando infraestructura\n• completed: TNLCM o ejecución finalizada\n• running_experiment: ELCM en progreso\n• collecting: Recopilando logs\n• failed: Error en alguna fase\n\n💡 Úsalo para monitorear:\n1. Después de POST /executions → Espera status=completed\n2. Si auto_start_elcm=false, después de POST /executions/{id}/elcm → Espera status=completed"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /executions/{execution_id}/detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/detail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "detail"
+              ]
+            },
+            "description": "📋 Información detallada de la ejecución\n\nRetorna:\n• Status actual\n• Trial Network ID (tn_id)\n• ELCM Execution ID (si está en fase 2)\n• Artefactos generados (paths)\n• Mensajes de error (si aplica)\n• Timestamps de cada fase\n\nÚsalo para debugging o auditoría completa"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Config",
+      "item": [
+        {
+          "name": "POST /login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "login"
+              ]
+            },
+            "description": "Recarga en caliente solo variables mutables del .env en la instancia actual del backend (renombrado desde /config/reload)."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /register",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/register?username=jorge&password=jorge&email=jorgeramirezzotano@uma.es&org=uma",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "register"
+              ],
+              "query": [
+                { "key": "username", "value": "jorge" },
+                { "key": "password", "value": "jorge" },
+                { "key": "email", "value": "jorgeramirezzotano@uma.es" },
+                { "key": "org", "value": "uma" }
+              ]
+            },
+            "description": "Registra usuario en TNLCM (sin auth) y devuelve access/refresh token. Todos los parámetros se pasan por query string."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST /tnlcm/token/refresh",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tnlcm/token/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tnlcm",
+                "token",
+                "refresh"
+              ]
+            },
+            "description": "🔐 Refresca el token de TNLCM con TNLCM_USER/TNLCM_PASSWORD configurados en el backend.\n\nÚsalo cuando cambie el token o antes de lanzar TNLCM si no existe token válido.\n\nRespuesta esperada:\n- message\n- token_preview"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "apiKey",
+      "value": "changeme"
+    },
+    {
+      "key": "executionId",
+      "value": ""
+    }
+  ]
+}

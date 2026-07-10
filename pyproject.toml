@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "daas-orchestrator"
+version = "0.1.0"
+description = "MVP de capa de orquestación DaaS para 6G-SANDBOX"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Jorge Ramirez Zotano", email = "jorgeramirezzotano@uma.es" },
+]
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "pyyaml",
+    "python-dotenv",
+    "httpx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "ruff",
+    "black",
+]
+
+[project.scripts]
+daas-orchestrator = "app.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

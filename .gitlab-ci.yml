@@ -1,0 +1,65 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+stages:
+  - lint
+  - test
+  - build
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  APP_ENV: "test"
+  API_KEY: "ci-test-key"
+  LOG_LEVEL: "INFO"
+  # URLs can be overridden in GitLab CI/CD Variables by maintainers.
+  TNLCM_URL: "http://localhost:5000"
+  TNLCM_USER: "dummy"
+  TNLCM_PASSWORD: "dummy"
+  ELCM_URL: "http://localhost:8080"
+  EXECUTIONS_FILE: "$CI_PROJECT_DIR/.cache/executions.json"
+  ARTIFACTS_DIR: "$CI_PROJECT_DIR/.cache/artifacts"
+  EXAMPLES_DIR: "$CI_PROJECT_DIR/examples"
+
+default:
+  image: python:3.11-slim
+  interruptible: true
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/pip
+  before_script:
+    - python -m pip install --upgrade pip
+    - python -m pip install -e ".[dev]"
+
+lint:
+  stage: lint
+  script:
+    - python -m ruff check app tests
+    - python -m black --check tests
+
+pytest:
+  stage: test
+  before_script:
+    - python -m pip install --upgrade pip
+    - python -m pip install -e ".[dev]"
+    - python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/carvel-dev/ytt/releases/download/v0.55.1/ytt-linux-amd64', '/usr/local/bin/ytt')"
+    - chmod +x /usr/local/bin/ytt
+    - ytt --version
+  script:
+    - python -m pytest -q --maxfail=1 --disable-warnings --cov=app --cov-report=term-missing
+
+build:
+  stage: build
+  script:
+    - python -m pip install build
+    - python -m build
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - dist/

@@ -1,0 +1,12 @@
+#! Overlay para `loadcore_agent_sample_tnlcm_descriptor.yaml`
+#! Component: loadcore_agent
+
+#@ data/values
+---
+loadcore_agent:
+  networks:
+    - "tn_vxlan"
+    - "vnet-n2"
+  hugepages: true
+
+

@@ -1,0 +1,32 @@
+Version: 2
+Name: TC_V2_BASE_TEMPLATE
+Description: "Base V2 template for ELCM projects"
+Standard: True
+Distributed: False
+
+Sequence:
+  # 1) Execution start and basic traceability
+  - Order: 10
+    Task: Run.Message
+    Config:
+      Severity: INFO
+      Message: "START | ExecutionId=@{ExecutionId} | TempFolder=@{TempFolder}"
+
+  # 2) Reference KPI
+  - Order: 20
+    Task: Run.Evaluate
+    Config:
+      Key: KPI_ExampleScore
+      Expression: "(@{ExecutionId}.0 * 0.7) + (@{ExecutionId}.0 * 0.3)"
+
+  # 4) Template end (neutral endpoint)
+  - Order: 30
+    Task: Run.Dummy
+    Config:
+      Stage: "END"
+      Note: "Base template end"
+
+Dashboard: {}
+KPIs:
+  example:
+    - KPI_ExampleScore

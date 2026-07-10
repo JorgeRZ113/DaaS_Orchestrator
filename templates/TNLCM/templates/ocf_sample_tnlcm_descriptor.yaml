@@ -1,0 +1,38 @@
+#@ load("@ytt:data", "data")
+---
+trial_network:
+    #! No necesita TN_init, porque se incluye en la base (tnlcm_descriptor_base.yaml)
+    vnet-internal:
+      type: "vnet"
+      name: "internal"
+      dependencies:
+        - "tn_init"
+      input:
+        one_vnet_first_ip: "10.10.10.1"
+        one_vnet_netmask: 24
+        one_vnet_address_size: 100
+        one_vnet_gw: "10.10.10.1"
+    ocf-openCapif:
+      type: "ocf"
+      name: "openCapif"
+      dependencies:
+        - "oneKE-k8s"
+      input:
+        ocf_one_oneKE: #@ data.values.ocf.one_oneKE
+        ocf_any_branch: #@ data.values.ocf.branch
+    oneKE-k8s:
+      type: "oneKE"
+      name: "k8s"
+      dependencies:
+        - "tn_init"
+        - "vnet-internal"
+      input:
+        one_oneKE_internal_vnet: "vnet-internal"
+        one_oneKE_version: "131"
+        #! one_oneKE_multus: true         #! Default value
+        #! one_oneKE_cni_plugin: "canal"  #! Default value
+        #! one_oneKE_metallb: true        #! Default value
+        one_oneKE_metallb_range: "10.10.10.200-10.10.10.240"
+        #! one_oneKE_longhorn: true       #! Default value
+        #! one_oneKE_traefik: false       #! Default value
+        one_oneKE_nginx_passthough: true

@@ -1,0 +1,10 @@
+#! Overlay para `vm_kvm_sample_tnlcm_descriptor.yaml`
+#! Component: vm_kvm
+#! Depends on:
+
+#@ data/values
+---
+vm_kvm:
+  size: "small" #! extra_large, large, medium, small, very_small
+
+

@@ -1,0 +1,20 @@
+{
+    "Version": "2.1.0",
+    "UserId": 1,
+    "ExperimentType": "Standard",
+    "TestCases": [
+        "# Lista de TestCases a ejecutar en el experimento"
+    ],
+    "UEs": [ "# UEs con definicion de las varaibles" ],
+    "Slice": null,
+    "NSs": [],
+    "ExclusiveExecution": false,
+    "Scenario": [],
+    "Automated": true,
+    "ReservationTime": null,
+    "Application": "# Descripción de la aplicación a ejecutar en el experimento",
+    "Parameters": {},
+    "Remote": null,
+    "RemoteDescriptor": null,
+    "Extra": {}
+}

@@ -1,0 +1,10 @@
+#@ load("@ytt:data", "data")
+---
+trial_network:
+    #! No necesita TN_init, porque se incluye en la base (tnlcm_descriptor_base.yaml)
+    xrext-nokia:
+      type: "xrext"
+      name: "nokia"
+      dependencies: ["tn_init"]
+      input:
+        one_xrext_external_server: #@ data.values.xrext.external_server

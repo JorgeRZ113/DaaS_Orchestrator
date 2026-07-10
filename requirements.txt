@@ -1,0 +1,7 @@
+# Runtime dependencies (aligned with pyproject.toml)
+fastapi
+uvicorn[standard]
+pydantic
+pyyaml
+python-dotenv
+httpx

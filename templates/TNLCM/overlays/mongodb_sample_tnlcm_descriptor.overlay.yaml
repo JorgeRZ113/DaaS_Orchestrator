@@ -1,0 +1,13 @@
+#! Overlay para `sample_tnlcm_descriptor.yaml`
+#! Component: mongodb
+#! Depends on:
+
+#@ data/values
+---
+mongodb:
+  version: "8.0"
+  user: ""
+  password: ""
+  database: ""
+  express_user: ""
+  express_password: ""

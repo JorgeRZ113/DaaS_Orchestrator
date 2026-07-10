@@ -1,0 +1,12 @@
+#! Overlay para `vnet_sample_tnlcm_descriptor.yaml`
+#! Component: vnet
+#! Depends on:
+
+#@ data/values
+---
+vnet:
+  gw: "10.20.30.5"
+  dns: "1.1.1.1 1.0.0.1"
+  netmask: 24
+  first_ip: "10.20.30.30"
+  address_size: 100
