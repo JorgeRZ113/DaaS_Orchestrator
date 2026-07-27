@@ -291,7 +291,6 @@ class ServiceHealth(BaseModel):
 
     alive: bool
     url: Optional[str] = None
-    detail: str = ""
 
 
 class ServicesHealthResponse(BaseModel):
@@ -308,7 +307,6 @@ class ServiceProbe(BaseModel):
     # influxdb | grafana | prometheus | elcm
     service: str
     healthy: bool
-    detail: str = ""
 
 
 class ComponentsHealthResponse(BaseModel):

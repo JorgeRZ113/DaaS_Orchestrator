@@ -24,7 +24,7 @@
                 "services"
               ]
             },
-            "description": "🩺 Liveness del propio orquestador (DaaS) y de TNLCM (sin auth).\n\nSondea la URL base de TNLCM: cualquier respuesta HTTP (incluidos 401/404) cuenta como 'vivo'; solo un error de conexión/timeout lo marca caído.\n\nRespuesta 200 OK:\n{\n  \"status\": \"ok\" | \"fallen\",\n  \"orchestrator\": {\"alive\": true, \"detail\": \"running\"},\n  \"tnlcm\": {\"alive\": true, \"url\": \"...\", \"detail\": \"HTTP 200\"}\n}\n\nstatus = 'fallen' si TNLCM no responde."
+            "description": "🩺 Liveness del propio orquestador (DaaS) y de TNLCM (sin auth).\n\nSondea la URL base de TNLCM: cualquier respuesta HTTP (incluidos 401/404) cuenta como 'vivo'; solo un error de conexión/timeout lo marca caído.\n\nRespuesta 200 OK:\n{\n  \"status\": \"ok\" | \"fallen\",\n  \"orchestrator\": {\"alive\": true},\n  \"tnlcm\": {\"alive\": true, \"url\": \"...\"}\n}\n\nstatus = 'fallen' si TNLCM no responde."
           },
           "response": []
         },
@@ -49,7 +49,7 @@
                 "components"
               ]
             },
-            "description": "🩺 Health HTTP de los servicios fijos monitorizables (requiere x-api-key).\n\nComprueba InfluxDB (/health), Grafana (/api/health), Prometheus (/-/healthy) y ELCM (/) según el diccionario estático KNOWN_SERVICES del backend (IP/puerto/ruta). No necesita tn_id, body ni token TNLCM.\n\n⚠️ Requiere alcanzar las IP:puerto de cada servicio (normalmente vía túnel WireGuard); sin VPN 'healthy=false' puede ser un falso negativo.\n\nRespuesta 200 OK:\n{\n  \"status\": \"ok\" | \"fallen\",\n  \"services\": [\n    {\"service\": \"influxdb\", \"healthy\": true, \"detail\": \"HTTP 200\"},\n    {\"service\": \"grafana\", \"healthy\": true, \"detail\": \"HTTP 200\"},\n    {\"service\": \"prometheus\", \"healthy\": false, \"detail\": \"HTTP 503\"},\n    {\"service\": \"elcm\", \"healthy\": true, \"detail\": \"HTTP 200\"}\n  ],\n  \"note\": \"...\"\n}\n\nstatus = 'fallen' si algún servicio no está sano. La respuesta no expone IPs ni puertos."
+            "description": "🩺 Health HTTP de los servicios fijos monitorizables (requiere x-api-key).\n\nComprueba InfluxDB (/health), Grafana (/api/health), Prometheus (/-/healthy) y ELCM (/) según el diccionario estático KNOWN_SERVICES del backend (IP/puerto/ruta). No necesita tn_id, body ni token TNLCM.\n\n⚠️ Requiere alcanzar las IP:puerto de cada servicio (normalmente vía túnel WireGuard); sin VPN 'healthy=false' puede ser un falso negativo.\n\nRespuesta 200 OK:\n{\n  \"status\": \"ok\" | \"fallen\",\n  \"services\": [\n    {\"service\": \"influxdb\", \"healthy\": true},\n    {\"service\": \"grafana\", \"healthy\": true},\n    {\"service\": \"prometheus\", \"healthy\": false},\n    {\"service\": \"elcm\", \"healthy\": true}\n  ],\n  \"note\": \"...\"\n}\n\nstatus = 'fallen' si algún servicio no está sano. La respuesta no expone IPs ni puertos."
           },
           "response": []
         }
@@ -90,7 +90,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo-full\",\n    \"descriptor_path\": \"tn_descriptor_elcm.yaml\",\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"develop\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  },\n  \"auto_start_elcm\": true,\n  \"ephemeral_tn\": false\n}",
+              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn_deveop_20_3\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"adminadmin\"\n      }\n    },\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"fix/uma-test-raul-oneke-onevm-path\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  },\n  \"auto_start_elcm\": true,\n  \"ephemeral_tn\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
