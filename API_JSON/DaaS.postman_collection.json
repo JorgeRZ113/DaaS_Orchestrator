@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c0d4f4e1-3e6a-4e06-a7fb-9b7c0f2c9c01",
     "name": "DaaS Orchestrator - API Unificada",
-    "description": "🚀 FLUJO UNIFICADO DaaS (Data as a Service)\n\n🔐 Paso previo opcional (TNLCM):\n0. POST /tnlcm/token/refresh → obtiene access_token con TNLCM_USER/TNLCM_PASSWORD\n\n📍 FLUJO PRINCIPAL - POST /executions:\n1. POST /executions → Ejecuta TNLCM y, por defecto, ELCM automáticamente\n2. GET /executions/{id} → Consulta estado y progreso\n3. GET /executions/{id}/detail → Consulta detalle completo\n\n🧭 Modo manual (si auto_start_elcm=false):\n- TNLCM completa la red y deja la ejecución lista\n- POST /executions/{id}/elcm → Ejecuta ELCM manualmente\n\n✅ El execution_id se guarda automáticamente en {{executionId}}\n⚠️  Usa auto_start_elcm=false solo si quieres separar TNLCM y ELCM manualmente",
+    "description": "🚀 FLUJO UNIFICADO DaaS (Data as a Service) — TN PERSISTENTE MULTI-EXPERIMENTO\n\n🔐 Paso previo opcional (TNLCM):\n0. POST /tnlcm/token/refresh → obtiene access_token con TNLCM_USER/TNLCM_PASSWORD\n\n📍 FLUJO PRINCIPAL - POST /executions:\n1. POST /executions → Despliega la Trial Network (TNLCM + VPN) y, según flags, lanza el primer experimento\n2. GET /executions/{id} → Consulta estado y progreso\n3. GET /executions/{id}/detail → Consulta detalle completo (incluye historial de experimentos)\n\n♻️ CICLO DE VIDA (la TN se queda VIVA por defecto):\nMatriz de comportamiento según los flags del DataDescriptor:\n• auto_start_elcm=false → Despliega y se queda en TN_READY. NO borra nada. Espera llamadas manuales a /elcm. (ephemeral_tn se ignora en este modo)\n• auto_start_elcm=true + ephemeral_tn=false (HABITUAL) → Despliega, lanza el 1er experimento y vuelve a TN_READY. Acepta más /elcm o el borrado manual.\n• auto_start_elcm=true + ephemeral_tn=true (UN SOLO USO) → Despliega, lanza el 1er experimento y borra la TN automáticamente (DESTROYED).\n\n🧪 Inyectar experimentos (TN viva):\n- POST /executions/{id}/elcm con body {\"experiment\": {...}} → lanza un experimento sobre la TN. Repetible N veces (uno a la vez). Cada experimento debe tener un NOMBRE ÚNICO.\n\n🗑️ Borrado manual (deleted + purged):\n- DELETE /executions/{id}/tn → destruye la TN cuando tú decidas.\n\n🔄 Estados: PENDING → VALIDATING → DEPLOYING → TN_READY ⇄ RUNNING_EXPERIMENT/COLLECTING → DESTROYING → DESTROYED (o FAILED)\n\n✅ El execution_id se guarda automáticamente en {{executionId}}",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -10,20 +10,46 @@
       "name": "Health",
       "item": [
         {
-          "name": "GET /health",
+          "name": "GET /health/services",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/health",
+              "raw": "{{baseUrl}}/health/services",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
-                "health"
+                "health",
+                "services"
               ]
             },
-            "description": "✅ Verifica que el servidor está activo\nRespuesta: 200 OK si todo funciona correctamente"
+            "description": "🩺 Liveness del propio orquestador (DaaS) y de TNLCM (sin auth).\n\nSondea la URL base de TNLCM: cualquier respuesta HTTP (incluidos 401/404) cuenta como 'vivo'; solo un error de conexión/timeout lo marca caído.\n\nRespuesta 200 OK:\n{\n  \"status\": \"ok\" | \"fallen\",\n  \"orchestrator\": {\"alive\": true, \"detail\": \"running\"},\n  \"tnlcm\": {\"alive\": true, \"url\": \"...\", \"detail\": \"HTTP 200\"}\n}\n\nstatus = 'fallen' si TNLCM no responde."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /health/components",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/health/components",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health",
+                "components"
+              ]
+            },
+            "description": "🩺 Health HTTP de los servicios fijos monitorizables (requiere x-api-key).\n\nComprueba InfluxDB (/health), Grafana (/api/health), Prometheus (/-/healthy) y ELCM (/) según el diccionario estático KNOWN_SERVICES del backend (IP/puerto/ruta). No necesita tn_id, body ni token TNLCM.\n\n⚠️ Requiere alcanzar las IP:puerto de cada servicio (normalmente vía túnel WireGuard); sin VPN 'healthy=false' puede ser un falso negativo.\n\nRespuesta 200 OK:\n{\n  \"status\": \"ok\" | \"fallen\",\n  \"services\": [\n    {\"service\": \"influxdb\", \"healthy\": true, \"detail\": \"HTTP 200\"},\n    {\"service\": \"grafana\", \"healthy\": true, \"detail\": \"HTTP 200\"},\n    {\"service\": \"prometheus\", \"healthy\": false, \"detail\": \"HTTP 503\"},\n    {\"service\": \"elcm\", \"healthy\": true, \"detail\": \"HTTP 200\"}\n  ],\n  \"note\": \"...\"\n}\n\nstatus = 'fallen' si algún servicio no está sano. La respuesta no expone IPs ni puertos."
           },
           "response": []
         }
@@ -64,7 +90,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo-full\",\n    \"descriptor_path\": \"tn_descriptor_elcm.yaml\",\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"develop\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  },\n  \"auto_start_elcm\": true\n}",
+              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo-full\",\n    \"descriptor_path\": \"tn_descriptor_elcm.yaml\",\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"develop\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  },\n  \"auto_start_elcm\": true,\n  \"ephemeral_tn\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -80,7 +106,7 @@
                 "executions"
               ]
             },
-            "description": "Endpoint unificado: inicia TNLCM y, por defecto, también ELCM automáticamente. Usa auto_start_elcm=false si quieres dejar ELCM para una llamada manual posterior."
+            "description": "Despliega la Trial Network (TNLCM + VPN). El comportamiento posterior depende de dos flags:\n\n• auto_start_elcm (default true): si true, lanza automáticamente el 1er experimento definido en \"experiment\". Si false, la TN queda en TN_READY esperando llamadas manuales a /elcm y \"experiment\" es opcional.\n\n• ephemeral_tn (default false): SOLO aplica con auto_start_elcm=true. Si true, la TN es de un solo uso y se borra automáticamente tras el 1er experimento. Si false (habitual), la TN se queda viva para recibir más experimentos. Se IGNORA cuando auto_start_elcm=false.\n\n⚠️ Ya NO hay borrado automático por defecto: la TN persiste hasta un DELETE /executions/{id}/tn (o el borrado del modo efímero)."
           },
           "response": []
         },
@@ -93,8 +119,22 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
               }
             ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
             "url": {
               "raw": "{{baseUrl}}/executions/{{executionId}}/elcm",
               "host": [
@@ -106,7 +146,33 @@
                 "elcm"
               ]
             },
-            "description": "🔥 MODO MANUAL DE ELCM\n\n⚠️ REQUISITOS:\n✅ La ejecución debe existir\n✅ TNLCM debe haber terminado correctamente\n✅ Si usas el flujo manual, la VPN debe estar disponible\n\n📋 Qué hace automáticamente:\n1. Sube test cases a ELCM\n2. Lanza experimento con descriptor Exp_Desc.json\n3. Polling cada 10s hasta \"Finished\" (timeout 1h)\n4. Recoge logs de ejecución\n5. Si logs no están listos, reintenta según la lógica del backend\n6. Al finalizar: cleanup automático de TN\n\n📊 Resultado:\n• Logs guardados en ./artifacts/{id}/\n• Estados ELCM: Running → Finished → Completed\n• Si error: status=failed, message con detalles\n\n❌ Error 400 Bad Request:\nSignifica execution_id no existe en memoria o la TN no está lista\n→ Crea nueva ejecución con POST /executions (auto_start_elcm=false si quieres control manual)"
+            "description": "🧪 INYECTAR UN EXPERIMENTO sobre la TN viva\n\nLanza un experimento ELCM sobre la Trial Network ya desplegada. Se puede llamar tantas veces como experimentos quieras ejecutar (uno a la vez). La TN NO se borra al terminar: vuelve a TN_READY.\n\n📥 Body:\n{\n  \"experiment\": {\n    \"name\": \"exp-demo\",          // ⚠️ ÚNICO por TN (no repetir nombres)\n    \"testcase_paths\": [\"TestCase_ping.yml\"],\n    \"ues_paths\": []\n  }\n}\n\n📋 Qué hace automáticamente:\n1. Sube los test cases a ELCM\n2. Lanza el experimento\n3. Polling cada 10s hasta \"Finished\" (timeout 1h)\n4. Recoge logs y genera artefactos en ./artifacts/{id}/\n5. Vuelve a TN_READY (la TN sigue viva)\n\n🔢 Respuestas:\n• 202 Accepted → experimento aceptado y en marcha\n• 404 Not Found → el execution_id no existe\n• 409 Conflict → ya hay un experimento en curso, la TN no está lista (TN_READY), o el nombre de experimento ya se usó en esta TN"
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /executions/{execution_id}/tn",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/tn",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "tn"
+              ]
+            },
+            "description": "🗑️ BORRADO MANUAL DE LA TN (deleted + purged)\n\nDesencadena el bloque de borrado de la Trial Network cuando tú decidas. Baja el túnel WireGuard y ejecuta destroy + purge en TNLCM. El campo tn_id de la respuesta indica qué Trial Network se está borrando.\n\n🔄 Transición: TN_READY (o FAILED con tn_id) → DESTROYING → DESTROYED\n\n🔢 Respuestas:\n• 202 Accepted → borrado lanzado\n• 404 Not Found → el execution_id no existe o no tiene tn_id asociado\n• 409 Conflict → hay un experimento en curso (espera a que termine), o el borrado ya se lanzó/completó\n\n💡 Se puede reintentar desde estado FAILED si un borrado previo falló."
           },
           "response": []
         },
@@ -131,7 +197,7 @@
                 "{{executionId}}"
               ]
             },
-            "description": "📊 Consulta estado de ejecución unificada (TNLCM + ELCM)\n\n🔄 Estados posibles:\n• pending: Ejecución creada\n• validating: Validando descriptor\n• deploying: Creando infraestructura\n• completed: TNLCM o ejecución finalizada\n• running_experiment: ELCM en progreso\n• collecting: Recopilando logs\n• failed: Error en alguna fase\n\n💡 Úsalo para monitorear:\n1. Después de POST /executions → Espera status=completed\n2. Si auto_start_elcm=false, después de POST /executions/{id}/elcm → Espera status=completed"
+            "description": "📊 Consulta estado de ejecución unificada (TNLCM + ELCM)\n\n🔄 Estados posibles:\n• PENDING: Ejecución creada\n• VALIDATING: Validando descriptor\n• DEPLOYING: Creando infraestructura\n• TN_READY: TN viva y en reposo, lista para recibir experimentos (/elcm) o el borrado\n• RUNNING_EXPERIMENT: Experimento ELCM en progreso\n• COLLECTING: Recopilando logs\n• DESTROYING: Borrado de la TN en curso\n• DESTROYED: TN destruida y purgada (estado terminal)\n• FAILED: Error en alguna fase (la TN puede seguir viva; el error queda registrado)\n\n💡 Úsalo para monitorear:\n1. Tras POST /executions → Espera status=TN_READY (o DESTROYED si ephemeral_tn=true)\n2. Tras POST /executions/{id}/elcm → RUNNING_EXPERIMENT y de vuelta a TN_READY al terminar\n3. Tras DELETE /executions/{id}/tn → DESTROYING → DESTROYED"
           },
           "response": []
         },
