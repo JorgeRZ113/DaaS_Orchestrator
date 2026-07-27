@@ -21,12 +21,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Versiones fijadas del linter/formatter: garantizan que CI y local apliquen
+# EXACTAMENTE las mismas reglas. Sin fijar, el CI instalaba la última ruff
+# (0.16.x amplió el set de reglas por defecto) y rompía el job de lint con
+# código que localmente pasaba. Ver también la versión fijada de ytt en CLAUDE.md §5.
 dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
-    "ruff",
-    "black",
+    "ruff==0.15.20",
+    "black==26.5.1",
 ]
 
 [project.scripts]
