@@ -66,7 +66,12 @@ def _activate_retry_delay_seconds(attempt_number: int) -> int:
     return TNLCM_ACTIVATE_RETRY_BASE_DELAY + ((attempt_number - 1) * TNLCM_ACTIVATE_RETRY_INCREMENT)
 
 
-async def _activate_with_backoff(request_call, tn_id: str, endpoint_label: str, execution_id: str | None = None, ) -> None:
+async def _activate_with_backoff(
+    request_call,
+    tn_id: str,
+    endpoint_label: str,
+    execution_id: str | None = None,
+) -> None:
     from app.utils.telemetry import telemetry
 
     activate_timer = telemetry.start_timer("tnlcm", "activate", execution_id=execution_id)
@@ -344,9 +349,7 @@ def _headers() -> dict[str, str]:
     """Build headers using the token stored in memory by /login."""
     token = _tnlcm_access_token.strip() if _tnlcm_access_token else ""
     if not token:
-        raise ValueError(
-            "TNLCM access token is not loaded in memory. Call /login first."
-        )
+        raise ValueError("TNLCM access token is not loaded in memory. Call /login first.")
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
@@ -595,7 +598,9 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
         return fallback.strip()
 
     def _component_ips(interfaces: dict[str, str]) -> list[str]:
-        return _ordered_unique([str(value).strip() for value in interfaces.values() if str(value).strip()])
+        return _ordered_unique(
+            [str(value).strip() for value in interfaces.values() if str(value).strip()]
+        )
 
     def _component_ports(raw_text: str) -> list[int]:
         ports_found = re.findall(r"available on port\s+(\d+)", raw_text, flags=re.IGNORECASE)
@@ -612,15 +617,23 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
         interfaces = _parse_interfaces(block)
         ips = _component_ips(interfaces)
         ports = _component_ports(block)
-        usernames = re.findall(r"\*\*(?:Username|user)\*\*:\s*`([^`]+)`", block, flags=re.IGNORECASE)
-        passwords = re.findall(r"\*\*(?:Password|password)\*\*:\s*`([^`]+)`", block, flags=re.IGNORECASE)
+        usernames = re.findall(
+            r"\*\*(?:Username|user)\*\*:\s*`([^`]+)`", block, flags=re.IGNORECASE
+        )
+        passwords = re.findall(
+            r"\*\*(?:Password|password)\*\*:\s*`([^`]+)`", block, flags=re.IGNORECASE
+        )
 
         credentials = _prune_none_values(
             {
                 "username": usernames[0].strip() if usernames else None,
                 "password": passwords[0].strip() if passwords else None,
-                "usernames": _ordered_unique([username.strip() for username in usernames if username.strip()]),
-                "passwords": _ordered_unique([password.strip() for password in passwords if password.strip()]),
+                "usernames": _ordered_unique(
+                    [username.strip() for username in usernames if username.strip()]
+                ),
+                "passwords": _ordered_unique(
+                    [password.strip() for password in passwords if password.strip()]
+                ),
                 "organization": _extract_label_value(block, "Organization"),
                 "bucket": _extract_label_value(block, "Bucket"),
                 "token": _extract_label_value(block, "Token"),
@@ -634,7 +647,9 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
                 "opennebula_vnet_id": _maybe_int(_extract_label_value(block, "OpenNebula VNet ID")),
                 "vm_memory_mib": _maybe_int(_extract_label_value(block, "VM memory")),
                 "vm_vcpus": _maybe_int(_extract_label_value(block, "VM VCPUs")),
-                "vm_available_storage_gib": _maybe_int(_extract_label_value(block, "VM available storage")),
+                "vm_available_storage_gib": _maybe_int(
+                    _extract_label_value(block, "VM available storage")
+                ),
                 "vxlan_subnet": _extract_label_value(block, "VXLAN subnet"),
                 "vxlan_first_ip": _extract_label_value(block, "VXLAN first IP"),
                 "vxlan_address_size": _maybe_int(_extract_label_value(block, "VXLAN address size")),
@@ -737,7 +752,11 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
             if wireguard_client_config and not result["wireguard_client_config"]:
                 result["wireguard_client_config"] = wireguard_client_config
 
-            technitium_data = component_data.get("extra_info", {}).get("technitium_dns") if component_data.get("extra_info") else None
+            technitium_data = (
+                component_data.get("extra_info", {}).get("technitium_dns")
+                if component_data.get("extra_info")
+                else None
+            )
             if technitium_data and not result["technitium_dns"]:
                 result["technitium_dns"] = technitium_data
         elif category == "monitoring" and result["monitoring"] is None:
@@ -750,7 +769,10 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
     return result
 
 
-def _legacy_multipart_from_infra(infra: InfrastructureConfig, descriptor_path: str | None = None, ) -> tuple[dict[str, str], dict[str, tuple[str, bytes, str]]]:
+def _legacy_multipart_from_infra(
+    infra: InfrastructureConfig,
+    descriptor_path: str | None = None,
+) -> tuple[dict[str, str], dict[str, tuple[str, bytes, str]]]:
     descriptor_ref = (
         descriptor_path
         or infra.parameters.get("descriptor")
