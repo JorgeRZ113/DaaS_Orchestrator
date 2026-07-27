@@ -19,17 +19,12 @@ def _isolate_orchestrator_state(monkeypatch, tmp_path):
     previous_executions = orchestrator.executions.copy()
 
     orchestrator.executions.clear()
-    orchestrator.elcm_start_watchdogs.clear()
 
     monkeypatch.setattr(orchestrator, "_save_executions_to_disk", lambda: None)
 
     yield
 
-    for task in orchestrator.elcm_start_watchdogs.values():
-        task.cancel()
-
     orchestrator.executions.clear()
-    orchestrator.elcm_start_watchdogs.clear()
     settings.artifacts_dir = previous_artifacts_dir
     orchestrator.executions.update(previous_executions)
 
@@ -70,25 +65,23 @@ async def test_run_elcm_phase_run_error_is_propagated_without_retry(monkeypatch,
 
     orchestrator.executions[execution_id] = ExecutionRecord(
         execution_id=execution_id,
-        status=ExecutionState.completed,
+        status=ExecutionState.tn_ready,
         tn_id=execution_id,
         elcm_base_url="http://192.168.199.3:5000",
         vpn_interface=execution_id,
         vpn_status="UP",
         message="TN deployment completed",
     )
-    from app.artifacts import persist_dataset_descriptor
 
-    persist_dataset_descriptor(execution_id, descriptor)
-
-    await orchestrator.run_elcm_phase(execution_id)
+    await orchestrator.run_elcm_phase(execution_id, descriptor.experiment)
 
     record = orchestrator.executions[execution_id]
     assert call_count["run_experiment"] == 1
-    assert record.status == ExecutionState.failed
+    # La TN sigue viva tras un experimento fallido: vuelve a TN_READY con el error registrado
+    assert record.status == ExecutionState.tn_ready
     assert "descriptor invalido" in (record.error or "")
     assert "Corrija lo indicado por el error" in (record.error or "")
-    assert "Error:" in record.message
+    assert "failed" in record.message
     assert "ELCM phase finalization completed" in caplog.text
 
 
@@ -127,23 +120,20 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
 
     orchestrator.executions[execution_id] = ExecutionRecord(
         execution_id=execution_id,
-        status=ExecutionState.completed,
+        status=ExecutionState.tn_ready,
         tn_id=execution_id,
         elcm_base_url="http://192.168.199.3:5000",
         vpn_interface=execution_id,
         vpn_status="UP",
         message="TN deployment completed",
     )
-    from app.artifacts import persist_dataset_descriptor
 
-    persist_dataset_descriptor(execution_id, descriptor)
-
-    await orchestrator.run_elcm_phase(execution_id)
+    await orchestrator.run_elcm_phase(execution_id, descriptor.experiment)
 
     record = orchestrator.executions[execution_id]
     assert call_count["upload_test_cases"] == 1
     assert call_count["run_experiment"] == 0
-    assert record.status == ExecutionState.failed
+    assert record.status == ExecutionState.tn_ready
     assert "user_id ausente/invalido" in (record.error or "")
     assert "Corrija lo indicado por el mensaje de error" in (record.error or "")
 
@@ -198,21 +188,18 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
 
     orchestrator.executions[execution_id] = ExecutionRecord(
         execution_id=execution_id,
-        status=ExecutionState.completed,
+        status=ExecutionState.tn_ready,
         tn_id=execution_id,
         elcm_base_url="http://192.168.199.3:5000",
         vpn_interface=execution_id,
         vpn_status="UP",
         message="TN deployment completed",
     )
-    from app.artifacts import persist_dataset_descriptor
 
-    persist_dataset_descriptor(execution_id, descriptor)
-
-    await orchestrator.run_elcm_phase(execution_id)
+    await orchestrator.run_elcm_phase(execution_id, descriptor.experiment)
 
     record = orchestrator.executions[execution_id]
     assert call_count["get_tn_status"] == 0
-    assert record.status == ExecutionState.failed
+    assert record.status == ExecutionState.tn_ready
     assert "not found" in (record.error or "").lower()
     assert "hay que repetirlo" in (record.error or "").lower()

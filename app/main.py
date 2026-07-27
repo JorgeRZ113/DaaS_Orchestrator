@@ -6,17 +6,24 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 
 from app.config import reload_mutable_settings, settings
+from app.health import check_components, check_services
 from app.models import (
+    ComponentsHealthResponse,
     DatasetDescriptor,
+    ElcmExperimentRequest,
     ExecutionRecord,
     ExecutionResponse,
     InfrastructureConfig,
+    ServicesHealthResponse,
 )
 from app.orchestrator import (
+    ExecutionConflictError,
+    ExecutionNotFoundError,
     TnlcmDeploymentInProgressError,
     create_tnlcm_execution,
     get_execution,
     start_elcm_phase,
+    start_tn_teardown,
 )
 from app.utils.telemetry import format_duration_display, telemetry
 from app.utils.component_contract import extract_component_template_values
@@ -39,6 +46,7 @@ def to_execution_response(record: ExecutionRecord) -> ExecutionResponse:
         execution_id=record.execution_id,
         status=record.status,
         message=record.message,
+        tn_id=record.tn_id,
     )
 
 
@@ -57,9 +65,31 @@ app = FastAPI(
 )
 
 
-@app.get("/health", tags=["health"])
-async def health():
-    return {"status": "ok", "env": settings.app_env}
+@app.get(
+    "/health/services",
+    response_model=ServicesHealthResponse,
+    tags=["health"],
+)
+async def health_services() -> ServicesHealthResponse:
+    """Liveness del propio orquestador y de TNLCM (sin auth)."""
+    result = await check_services()
+    return ServicesHealthResponse(**result)
+
+
+@app.get(
+    "/health/components",
+    response_model=ComponentsHealthResponse,
+    tags=["health"],
+    dependencies=[Depends(verify_api_key)],
+)
+async def health_components() -> ComponentsHealthResponse:
+    """Health HTTP de los servicios fijos (requiere API key).
+
+    Comprueba InfluxDB, Grafana, Prometheus y ELCM según el diccionario estático
+    `KNOWN_SERVICES` (IP/puerto/ruta). No necesita tn_id ni token.
+    """
+    result = await check_components()
+    return ComponentsHealthResponse(**result)
 
 
 def main() -> None:
@@ -258,14 +288,18 @@ async def post_execution(descriptor: DatasetDescriptor):
     def _validate_components_or_raise(infra: InfrastructureConfig) -> None:
         comps = infra.component or {}
         invalids: list[str] = []
-        
+
         for comp_key, comp_values in (comps.items() if isinstance(comps, dict) else []):
             if not isinstance(comp_values, dict) or not comp_values:
                 # empty dict or non-dict is acceptable (empty means include defaults)
                 continue
 
             # Resolve template path for this component
-            candidate = "base_tnlcm_descriptor.yaml" if comp_key == "base" else f"{comp_key}_sample_tnlcm_descriptor.yaml"
+            candidate = (
+                "base_tnlcm_descriptor.yaml"
+                if comp_key == "base"
+                else f"{comp_key}_sample_tnlcm_descriptor.yaml"
+            )
             comp_template = resolve_template_path(candidate, category="TNLCM")
 
             if comp_template is None:
@@ -354,16 +388,45 @@ async def post_execution(descriptor: DatasetDescriptor):
     tags=["executions"],
     dependencies=[Depends(verify_api_key)],
 )
-async def post_execution_elcm(execution_id: str):
-    """Dispara manualmente la fase ELCM y cleanup final de la TN.
+async def post_execution_elcm(execution_id: str, request: ElcmExperimentRequest):
+    """Lanza un experimento ELCM sobre la TN viva de la ejecucion.
 
-    Útil cuando descriptor.auto_start_elcm=false. Si ELCM ya está en progreso,
-    devuelve el estado actual sin error.
+    Puede llamarse tantas veces como experimentos se quieran ejecutar (uno a
+    la vez). Cada experimento debe tener un nombre unico dentro de la TN.
+
+    Respuestas: 202 experimento aceptado; 404 la ejecucion no existe;
+    409 hay un experimento en curso, la TN no esta lista o el nombre esta repetido.
     """
     try:
-        record = await start_elcm_phase(execution_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        record = start_elcm_phase(execution_id, request.experiment)
+    except ExecutionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ExecutionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return to_execution_response(record)
+
+
+@app.delete(
+    "/executions/{execution_id}/tn",
+    response_model=ExecutionResponse,
+    status_code=202,
+    tags=["executions"],
+    dependencies=[Depends(verify_api_key)],
+)
+async def delete_execution_tn(execution_id: str):
+    """Dispara el bloque de borrado de la TN (deleted + purged) bajo demanda.
+
+    La respuesta indica en `tn_id` que Trial Network se esta borrando.
+
+    Respuestas: 202 borrado lanzado; 404 la ejecucion no existe o no tiene TN;
+    409 hay un experimento en curso o el borrado ya se lanzo/completo.
+    """
+    try:
+        record = start_tn_teardown(execution_id)
+    except ExecutionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ExecutionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return to_execution_response(record)
 
 

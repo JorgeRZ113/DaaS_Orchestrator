@@ -1,15 +1,20 @@
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 
 class ExecutionState(str, Enum):
     pending = "PENDING"
     validating = "VALIDATING"
     deploying = "DEPLOYING"
+    tn_ready = "TN_READY"
     running_experiment = "RUNNING_EXPERIMENT"
     collecting = "COLLECTING"
+    destroying = "DESTROYING"
+    destroyed = "DESTROYED"
+    # Estado legacy: se conserva para poder deserializar executions.json
+    # antiguos, pero el pipeline ya no lo produce (ver TN_READY/DESTROYED).
     completed = "COMPLETED"
     failed = "FAILED"
     cancelled = "CANCELLED"
@@ -64,7 +69,6 @@ class ActivateRequest(TNIdRequest):
     )
 
 
-
 class InfrastructureConfig(BaseModel):
     name: str = Field(..., description="Nombre del escenario o TN")
     descriptor_path: Optional[str] = Field(
@@ -109,25 +113,25 @@ class InfrastructureConfig(BaseModel):
             from app.utils.ytt_renderer import overlay_editable_fields_for_template
 
             allowed = overlay_editable_fields_for_template(template_ref, category="TNLCM")
-            
+
             # Build reverse mapping: field -> section
             field_to_section: dict[str, str] = {}
             for section, fields in allowed.items():
                 for field in fields:
                     field_to_section[field] = section
-            
+
             merged: dict[str, Any] = {}
             # Iterate user-provided components and pick section keys that the
             # overlay actually allows to override (and only the editable fields)
             for comp_values in self.component.values():
                 if not isinstance(comp_values, dict):
                     continue
-                
+
                 # Normalize: if user sends fields directly (not in a sub-dict),
                 # group them under their section
                 normalized: dict[str, dict[str, Any]] = {}
                 ungrouped_fields: dict[str, Any] = {}
-                
+
                 for section, section_values in comp_values.items():
                     # If value is a dict, treat it as a section
                     if section not in allowed:
@@ -142,23 +146,23 @@ class InfrastructureConfig(BaseModel):
                         # Value is not a dict but section name matches -> skip
                         # (section should contain a dict of fields)
                         continue
-                    
+
                     # It's a known section with a dict of fields
                     editable_fields = allowed.get(section, set())
                     filtered = {k: v for k, v in section_values.items() if k in editable_fields}
                     if filtered:
                         normalized.setdefault(section, {}).update(filtered)
-                
+
                 # Group ungrouped scalar fields under their sections
                 for field_name, field_value in ungrouped_fields.items():
                     if field_name in field_to_section:
                         section = field_to_section[field_name]
                         normalized.setdefault(section, {})[field_name] = field_value
-                
+
                 # Merge normalized data
                 for section, fields in normalized.items():
                     merged.setdefault(section, {}).update(fields)
-            
+
             if merged:
                 return merged
 
@@ -201,8 +205,8 @@ class ExperimentConfig(BaseModel):
     )
 
 
-class RunExperimentRequest(BaseModel):
-    descriptor: ExperimentConfig
+class ElcmExperimentRequest(BaseModel):
+    experiment: ExperimentConfig
 
 
 class DatasetRequest(BaseModel):
@@ -214,11 +218,28 @@ class DatasetRequest(BaseModel):
 
 class DatasetDescriptor(BaseModel):
     infrastructure: InfrastructureConfig
-    experiment: ExperimentConfig
+    experiment: Optional[ExperimentConfig] = Field(
+        default=None,
+        description="Experimento inicial; obligatorio solo si auto_start_elcm=True",
+    )
     dataset: DatasetRequest = Field(default_factory=DatasetRequest)
     auto_start_elcm: bool = Field(
         default=True, description="Si True, inicia automáticamente ELCM al completar TNLCM"
     )
+    ephemeral_tn: bool = Field(
+        default=False,
+        description=(
+            "Si True (y auto_start_elcm=True), la TN es de un solo uso: se borra "
+            "automáticamente tras el primer experimento. Ignorado si auto_start_elcm=False."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_experiment_for_auto_start(self) -> "DatasetDescriptor":
+        """Con auto-start el experimento inicial debe venir en el descriptor."""
+        if self.auto_start_elcm and self.experiment is None:
+            raise ValueError("experiment is required when auto_start_elcm is true")
+        return self
 
     def tnlcm_template_ref(self) -> str | None:
         return self.infrastructure.tnlcm_template_ref()
@@ -227,11 +248,23 @@ class DatasetDescriptor(BaseModel):
         return self.infrastructure.tnlcm_data_values(template_ref=template_ref)
 
 
+class ExperimentRun(BaseModel):
+    """Registro de un experimento individual ejecutado sobre la TN."""
+
+    name: str
+    elcm_execution_id: Optional[str] = None
+    status: Literal["RUNNING", "FINISHED", "FAILED"] = "RUNNING"
+    error: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+
 
 class ExecutionRecord(BaseModel):
     execution_id: str
     status: ExecutionState
     message: str = ""
+    ephemeral_tn: bool = False
+    experiments: List[ExperimentRun] = Field(default_factory=list)
     tn_id: Optional[str] = None
     vpn_interface: Optional[str] = None
     vpn_conf_path: Optional[str] = None
@@ -250,3 +283,37 @@ class ExecutionResponse(BaseModel):
     execution_id: str
     status: ExecutionState
     message: str = ""
+    tn_id: Optional[str] = None
+
+
+class ServiceHealth(BaseModel):
+    """Estado de liveness de un servicio individual (orquestador o TNLCM)."""
+
+    alive: bool
+    url: Optional[str] = None
+    detail: str = ""
+
+
+class ServicesHealthResponse(BaseModel):
+    """Respuesta del health de servicios: orquestador propio + TNLCM."""
+
+    status: Literal["ok", "fallen"]
+    orchestrator: ServiceHealth
+    tnlcm: ServiceHealth
+
+
+class ServiceProbe(BaseModel):
+    """Resultado del health HTTP de un servicio fijo."""
+
+    # influxdb | grafana | prometheus | elcm
+    service: str
+    healthy: bool
+    detail: str = ""
+
+
+class ComponentsHealthResponse(BaseModel):
+    """Salud de los servicios fijos monitorizables (InfluxDB/Grafana/Prometheus/ELCM)."""
+
+    status: Literal["ok", "fallen"]
+    services: List[ServiceProbe] = Field(default_factory=list)
+    note: str = ""

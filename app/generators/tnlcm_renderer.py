@@ -112,9 +112,7 @@ def _resolve_template_path_strict(comp_key: str) -> Path:
     template_path = templates_dir / template_filename
 
     if not template_path.exists():
-        raise FileNotFoundError(
-            f"Missing template: {template_filename} in {templates_dir}"
-        )
+        raise FileNotFoundError(f"Missing template: {template_filename} in {templates_dir}")
 
     return template_path.resolve()
 
@@ -148,9 +146,7 @@ def _resolve_overlay_path_strict(comp_key: str) -> Path:
     overlay_path = overlays_dir / overlay_filename
 
     if not overlay_path.exists():
-        raise FileNotFoundError(
-            f"Missing overlay: {overlay_filename} in {overlays_dir}"
-        )
+        raise FileNotFoundError(f"Missing overlay: {overlay_filename} in {overlays_dir}")
 
     return overlay_path.resolve()
 
@@ -254,8 +250,8 @@ async def merge_rendered_templates(
     # Fase 3: FUSION FINAL Y FORMATEO DE COMILLAS / NULLS
     # Usar safe_load_all para leer todos los documentos YAML generados por YTT
     parsed_documents = list(yaml.safe_load_all(merged_content))
-    
-    # NUEVO: Crear un diccionario maestro donde unificaremos todo
+
+    # NUEVO: Crear un diccionario maestro donde unificaremos all
     final_merged_dict = {"trial_network": {}}
 
     for doc in parsed_documents:
@@ -355,7 +351,9 @@ async def generate_tnlcm_descriptor(
             logger.error(f"[{execution_id}] File not found for component {comp_key}: {e}")
             raise
         except ValueError as e:
-            logger.error(f"[{execution_id}] Invalid component or data descriptor for {comp_key}: {e}")
+            logger.error(
+                f"[{execution_id}] Invalid component or data descriptor for {comp_key}: {e}"
+            )
             raise
         except InvalidDataDescriptorError as e:
             logger.error(f"[{execution_id}] Invalid data descriptor for component {comp_key}: {e}")
@@ -385,4 +383,3 @@ async def generate_tnlcm_descriptor(
     timer.stop(status="success")
 
     return str(final_path)
-

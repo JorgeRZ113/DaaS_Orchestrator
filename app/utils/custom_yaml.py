@@ -1,13 +1,18 @@
 import yaml
 
+
 class QuotedString(str):
     """Clase personalizada para forzar comillas dobles en PyYAML."""
+
     pass
 
+
 def quoted_string_representer(dumper, data):
-    return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='"')
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style='"')
+
 
 yaml.SafeDumper.add_representer(QuotedString, quoted_string_representer)
+
 
 def _wrap_strings_in_quotes(data):
     """

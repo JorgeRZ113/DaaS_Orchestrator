@@ -206,8 +206,7 @@ def persist_dataset_descriptor(execution_id: str, descriptor: DatasetDescriptor)
     # Exclude descriptor_path: it's only used for template resolution during generation,
     # not needed in persisted state (descriptor is already generated/available)
     descriptor_dict = descriptor.model_dump(
-        exclude={"infrastructure": {"descriptor_path"}},
-        exclude_none=False
+        exclude={"infrastructure": {"descriptor_path"}}, exclude_none=False
     )
 
     with open(descriptor_path, "w", encoding="utf-8") as f:

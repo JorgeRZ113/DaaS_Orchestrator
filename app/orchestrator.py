@@ -3,11 +3,19 @@ import json
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Coroutine
 
 from app.config import settings
 from app.generators.tnlcm_renderer import generate_tnlcm_descriptor
-from app.models import DatasetDescriptor, ExecutionRecord, ExecutionState
+from app.models import (
+    DatasetDescriptor,
+    ExecutionRecord,
+    ExecutionState,
+    ExperimentConfig,
+    ExperimentRun,
+)
 from app.utils.telemetry import telemetry
 
 logger = logging.getLogger(__name__)
@@ -17,16 +25,49 @@ class TnlcmDeploymentInProgressError(RuntimeError):
     """Raised when a TNLCM deployment is already running."""
 
 
+class ExecutionNotFoundError(LookupError):
+    """Raised when the referenced execution_id does not exist."""
+
+
+class ExecutionConflictError(RuntimeError):
+    """Raised when the execution state does not allow the requested operation (HTTP 409)."""
+
+
 # ELCM phase timing constants (kept local to orchestration flow)
 ELCM_POLL_INTERVAL_SECONDS = 10
 ELCM_EXECUTION_TIMEOUT_SECONDS = 3600
-ELCM_START_TIMEOUT_SECONDS = 300
 
 # In-memory state for MVP
 executions: dict[str, ExecutionRecord] = {}
-elcm_start_watchdogs: dict[str, asyncio.Task[None]] = {}
 _tnlcm_deploy_guard = threading.Lock()
 _tnlcm_deploy_in_progress: str | None = None
+
+# Registro de background tasks (§8.2): retiene la referencia y loguea fallos.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background_task(coro: Coroutine, *, name: str) -> asyncio.Task:
+    """Lanza una task supervisada: retiene la referencia y loguea excepciones."""
+    task = asyncio.create_task(coro, name=name)
+    _background_tasks.add(task)
+
+    def _on_done(finished: asyncio.Task) -> None:
+        _background_tasks.discard(finished)
+        if not finished.cancelled() and finished.exception() is not None:
+            logger.error(
+                "Background task %s failed: %s",
+                name,
+                finished.exception(),
+                exc_info=finished.exception(),
+            )
+
+    task.add_done_callback(_on_done)
+    return task
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 
 # Persistencia en archivos
 EXECUTIONS_FILE = Path(settings.executions_file)
@@ -91,6 +132,19 @@ def _update(execution_id: str, **kwargs) -> None:
     _save_executions_to_disk()  # Guarda cambios inmediatamente
 
 
+def _set_experiment_run_fields(execution_id: str, name: str, **kwargs) -> None:
+    """Actualiza el ExperimentRun mas reciente con ese nombre y persiste."""
+    record = executions.get(execution_id)
+    if not record:
+        return
+    for run in reversed(record.experiments):
+        if run.name == name:
+            for key, value in kwargs.items():
+                setattr(run, key, value)
+            break
+    _save_executions_to_disk()
+
+
 async def _persist_telemetry_report_best_effort(execution_id: str, stage: str) -> str | None:
     """Persist telemetry report without interrupting orchestration on I/O failures."""
     from .artifacts import build_telemetry_report_artifact
@@ -116,8 +170,8 @@ async def _persist_telemetry_report_best_effort(execution_id: str, stage: str) -
     return telemetry_path
 
 
-def _get_testcases(descriptor: DatasetDescriptor) -> list[str]:
-    ordered = descriptor.experiment.testcase_paths
+def _get_testcases(experiment: ExperimentConfig) -> list[str]:
+    ordered = experiment.testcase_paths
 
     unique: list[str] = []
     seen: set[str] = set()
@@ -127,12 +181,6 @@ def _get_testcases(descriptor: DatasetDescriptor) -> list[str]:
         seen.add(tc)
         unique.append(tc)
     return unique
-
-
-def _cancel_elcm_start_timeout(execution_id: str) -> None:
-    task = elcm_start_watchdogs.pop(execution_id, None)
-    if task and not task.done():
-        task.cancel()
 
 
 def _acquire_tnlcm_deploy_slot(execution_id: str) -> None:
@@ -159,70 +207,6 @@ def _release_tnlcm_deploy_slot(execution_id: str) -> None:
                 pass
 
 
-def _schedule_elcm_start_timeout(execution_id: str) -> None:
-    _cancel_elcm_start_timeout(execution_id)
-    timeout_seconds = ELCM_START_TIMEOUT_SECONDS
-    elcm_start_watchdogs[execution_id] = asyncio.create_task(
-        _elcm_start_timeout_watchdog(execution_id, timeout_seconds)
-    )
-    logger.info(
-        "[%s] ELCM trigger timeout watchdog scheduled: %ss",
-        execution_id,
-        timeout_seconds,
-    )
-
-
-async def _elcm_start_timeout_watchdog(execution_id: str, timeout_seconds: int) -> None:
-    try:
-        await asyncio.sleep(timeout_seconds)
-        await _handle_elcm_start_timeout(execution_id, timeout_seconds)
-    except asyncio.CancelledError:
-        logger.debug("[%s] ELCM trigger timeout watchdog cancelled", execution_id)
-        raise
-    finally:
-        task = elcm_start_watchdogs.get(execution_id)
-        if task is asyncio.current_task():
-            if execution_id in elcm_start_watchdogs:
-                del elcm_start_watchdogs[execution_id]
-
-
-async def _handle_elcm_start_timeout(execution_id: str, timeout_seconds: int) -> None:
-    from .tnlcm import destroy_trial_network
-    from .utils.wireguard import down_tunnel
-
-    record = executions.get(execution_id)
-    if not record or record.status != ExecutionState.completed or not record.tn_id:
-        return
-
-    timeout_error = (
-        f"ELCM phase was not triggered within {timeout_seconds} seconds after TN deployment"
-    )
-    logger.warning("[%s] %s. Starting automatic cleanup.", execution_id, timeout_error)
-
-    vpn_interface = record.vpn_interface or record.tn_id
-    if vpn_interface and record.vpn_status in {"UP", "DOWN_ERROR"}:
-        try:
-            down_tunnel(vpn_interface, record.vpn_conf_path)
-            _update(execution_id, vpn_status="DOWN", vpn_error=None)
-        except Exception as vpn_error:
-            logger.error("[%s] WireGuard timeout cleanup failed: %s", execution_id, vpn_error)
-            _update(execution_id, vpn_status="DOWN_ERROR", vpn_error=str(vpn_error))
-
-    cleanup_message = "ELCM trigger timeout exceeded; TN was destroyed/purged automatically."
-    try:
-        await destroy_trial_network(record.tn_id)
-    except Exception as cleanup_error:
-        logger.warning("[%s] Timeout cleanup failed: %s", execution_id, cleanup_error)
-        cleanup_message = f"{cleanup_message} Cleanup warning: {cleanup_error}"
-
-    _update(
-        execution_id,
-        status=ExecutionState.cancelled,
-        error=timeout_error,
-        message=cleanup_message,
-    )
-
-
 async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> None:
     """Phase 1: validate + deploy TN, then activate the WireGuard tunnel automatically."""
     from .artifacts import build_tnlcm_raw_report_artifact, build_tnlcm_summary_artifact
@@ -236,7 +220,6 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
 
     tn_id: str | None = None
     vpn_conf_path: str | None = None
-    _cancel_elcm_start_timeout(execution_id)
 
     # Timer para TNLCM total
     tnlcm_phase_timer = telemetry.start_timer(
@@ -251,7 +234,9 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         if descriptor.dataset.output != "logs":
             raise ValueError("Only dataset.output='logs' is supported")
 
-        _update(execution_id, status=ExecutionState.validating, message="Generating TNLCM descriptor")
+        _update(
+            execution_id, status=ExecutionState.validating, message="Generating TNLCM descriptor"
+        )
         tnlcm_descriptor_path = await generate_tnlcm_descriptor(
             descriptor.infrastructure, execution_id
         )
@@ -329,7 +314,9 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         logger.info(f"[{execution_id}] ELCM URL extracted from report: {elcm_url}")
 
         record_for_artifacts = executions[execution_id]
-        merged_report_artifacts = list(dict.fromkeys([*record_for_artifacts.artifacts, *report_artifacts]))
+        merged_report_artifacts = list(
+            dict.fromkeys([*record_for_artifacts.artifacts, *report_artifacts])
+        )
 
         try:
             up_tunnel(tn_id, vpn_conf_path)
@@ -341,7 +328,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             logger.warning(f"[{execution_id}] {manual_message}: {vpn_error}")
             _update(
                 execution_id,
-                status=ExecutionState.completed,
+                status=ExecutionState.tn_ready,
                 tn_id=tn_id,
                 artifacts=merged_report_artifacts,
                 vpn_interface=tn_id,
@@ -361,7 +348,6 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
                 status="manual_required",
             )
             await _persist_telemetry_report_best_effort(execution_id, "tnlcm_manual_required")
-            _schedule_elcm_start_timeout(execution_id)
             return
 
         # Wait 1 second for WireGuard VPN to be fully activated before calling other components
@@ -371,7 +357,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
 
         _update(
             execution_id,
-            status=ExecutionState.completed,
+            status=ExecutionState.tn_ready,
             tn_id=tn_id,
             artifacts=merged_report_artifacts,
             message="TN deployment completed with automatic WireGuard tunnel",
@@ -391,13 +377,16 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         )
         await _persist_telemetry_report_best_effort(execution_id, "tnlcm_completed")
 
-        # Auto-start ELCM if configured
-        if descriptor.auto_start_elcm:
-            _cancel_elcm_start_timeout(execution_id)
+        # Auto-start del primer experimento si esta configurado. ephemeral_tn
+        # solo aplica en este camino: con auto_start_elcm=False se ignora y la
+        # TN queda viva en TN_READY hasta que llegue /elcm o el borrado manual.
+        if descriptor.auto_start_elcm and descriptor.experiment is not None:
             logger.info(f"[{execution_id}] Auto-starting ELCM phase")
-            asyncio.create_task(run_elcm_phase(execution_id))
-        else:
-            _schedule_elcm_start_timeout(execution_id)
+            _begin_experiment(
+                execution_id,
+                descriptor.experiment,
+                ephemeral=descriptor.ephemeral_tn,
+            )
 
         logger.info(
             f"[{execution_id}] TN {tn_id} deployment completed with active WireGuard tunnel."
@@ -442,9 +431,19 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         _release_tnlcm_deploy_slot(execution_id)
 
 
-async def run_elcm_phase(execution_id: str) -> None:
-    """Phase 2: run ELCM and always cleanup TN at the end."""
-    from .artifacts import build_artifacts, load_dataset_descriptor
+async def run_elcm_phase(
+    execution_id: str,
+    experiment: ExperimentConfig,
+    *,
+    ephemeral: bool = False,
+) -> None:
+    """Phase 2: run one ELCM experiment over the live TN.
+
+    La TN no se toca al terminar: queda en TN_READY para aceptar mas
+    experimentos. Solo si `ephemeral=True` (TN de un solo uso) se encadena
+    `run_teardown_phase` al finalizar el experimento.
+    """
+    from .artifacts import build_artifacts
     from .elcm import (
         generate_experiment_descriptor,
         generate_testcase,
@@ -454,11 +453,9 @@ async def run_elcm_phase(execution_id: str) -> None:
         run_experiment,
         upload_test_cases,
     )
-    from .tnlcm import destroy_trial_network, get_tn_status
-    from .utils.wireguard import down_tunnel
+    from .tnlcm import get_tn_status
 
     record = executions[execution_id]
-    descriptor = load_dataset_descriptor(execution_id)
     tn_id = record.tn_id
     elcm_base_url = record.elcm_base_url
 
@@ -488,17 +485,21 @@ async def run_elcm_phase(execution_id: str) -> None:
 
     try:
         _update(
-            execution_id, status=ExecutionState.running_experiment, message="Running experiments"
+            execution_id,
+            status=ExecutionState.running_experiment,
+            message=f"Running experiment '{experiment.name}'",
         )
 
-        testcase_list = _get_testcases(descriptor)
+        testcase_list = _get_testcases(experiment)
         if not testcase_list:
             raise ValueError("At least one testcase is required")
 
         generated_testcase_paths: list[str] = []
         for index, testcase_ref in enumerate(testcase_list):
             try:
-                testcase_path = await generate_testcase(testcase_ref, execution_id, output_index=index)
+                testcase_path = await generate_testcase(
+                    testcase_ref, execution_id, output_index=index
+                )
             except Exception as exc:
                 logger.warning(
                     "[%s] Failed to generate testcase %s: %s. Using original reference.",
@@ -511,7 +512,7 @@ async def run_elcm_phase(execution_id: str) -> None:
 
         _update(execution_id, message="Generating Experiment Descriptor")
         experiment_descriptor_path = await generate_experiment_descriptor(
-            descriptor.experiment,
+            experiment,
             generated_testcase_paths,
             execution_id,
         )
@@ -524,7 +525,7 @@ async def run_elcm_phase(execution_id: str) -> None:
         _update(execution_id, message="Launching experiment descriptor")
         try:
             elcm_execution_id = await run_experiment(
-                descriptor.experiment,
+                experiment,
                 elcm_base_url=elcm_base_url,
                 execution_id=execution_id,
                 exp_descriptor_path=experiment_descriptor_path,
@@ -533,12 +534,15 @@ async def run_elcm_phase(execution_id: str) -> None:
             if "exp_descriptor_path" not in str(exc):
                 raise
             elcm_execution_id = await run_experiment(
-                descriptor.experiment,
+                experiment,
                 elcm_base_url=elcm_base_url,
                 execution_id=execution_id,
             )
-        experiment_ids = [elcm_execution_id]
+        experiment_ids = list(dict.fromkeys([*record.experiment_ids, elcm_execution_id]))
         _update(execution_id, elcm_execution_id=elcm_execution_id)
+        _set_experiment_run_fields(
+            execution_id, experiment.name, elcm_execution_id=elcm_execution_id
+        )
 
         # Poll until terminal status using configurable ELCM timing.
         exp_done = False
@@ -612,13 +616,23 @@ async def run_elcm_phase(execution_id: str) -> None:
         }
         artifact_paths = await build_artifacts(execution_id, tn_id, elcm_execution_id, results)
         merged_artifacts = list(
-            dict.fromkeys([*record.artifacts, *generated_testcase_paths, experiment_descriptor_path, *artifact_paths])
+            dict.fromkeys(
+                [
+                    *record.artifacts,
+                    *generated_testcase_paths,
+                    experiment_descriptor_path,
+                    *artifact_paths,
+                ]
+            )
+        )
+        _set_experiment_run_fields(
+            execution_id, experiment.name, status="FINISHED", finished_at=_utc_now_iso()
         )
         _update(
             execution_id,
-            status=ExecutionState.completed,
+            status=ExecutionState.tn_ready,
             artifacts=merged_artifacts,
-            message="ELCM phase completed. TN cleanup done.",
+            message=f"Experiment '{experiment.name}' finished. TN still alive.",
         )
         elcm_phase_timer.stop(status="success")
         telemetry.log_event(
@@ -647,58 +661,37 @@ async def run_elcm_phase(execution_id: str) -> None:
         telemetry.increment_counter(
             "errors_total", labels={"service": "orchestrator", "operation": "elcm_phase"}
         )
-        _update(execution_id, status=ExecutionState.failed, error=str(exc), message=f"Error: {exc}")
+        _set_experiment_run_fields(
+            execution_id,
+            experiment.name,
+            status="FAILED",
+            error=str(exc),
+            finished_at=_utc_now_iso(),
+        )
+        # La TN sigue viva: se vuelve a TN_READY para permitir reintentar otro
+        # experimento o lanzar el borrado manual. El error queda registrado.
+        _update(
+            execution_id,
+            status=ExecutionState.tn_ready,
+            error=str(exc),
+            message=f"Experiment '{experiment.name}' failed: {exc}. TN still alive.",
+        )
 
     finally:
-        _cancel_elcm_start_timeout(execution_id)
-        vpn_interface = record.vpn_interface or tn_id
-        if vpn_interface:
-            try:
-                logger.info(
-                    f"[{execution_id}] Cleanup: deactivating WireGuard tunnel {vpn_interface}"
-                )
-                down_tunnel(vpn_interface, record.vpn_conf_path)
-                _update(execution_id, vpn_status="DOWN", vpn_error=None)
-            except Exception as vpn_error:
-                logger.error(f"[{execution_id}] WireGuard deactivation failed: {vpn_error}")
-                _update(execution_id, vpn_status="DOWN_ERROR", vpn_error=str(vpn_error))
-
-        try:
-            logger.info(f"[{execution_id}] Cleanup: destroying TN {tn_id}")
-            await destroy_trial_network(tn_id)
-        except Exception as cleanup_error:
-            logger.warning(f"[{execution_id}] Cleanup failed: {cleanup_error}")
-
         final_record = executions.get(execution_id)
         final_stage = (
             "elcm_completed"
-            if final_record and final_record.status == ExecutionState.completed
+            if final_record and final_record.status == ExecutionState.tn_ready
             else "elcm_finalized"
         )
         await _persist_telemetry_report_best_effort(execution_id, final_stage)
         logger.info("[%s] ELCM phase finalization completed", execution_id)
 
-        # Cerrar timer global de ejecución
-        execution_timer = getattr(final_record, "_execution_timer", None)
-        if execution_timer is not None:
-            final_status = (
-                "success"
-                if final_record and final_record.status == ExecutionState.completed
-                else "failed"
-            )
-            execution_timer.stop(status=final_status)
-            telemetry.log_event(
-                "info",
-                "orchestrator_execution.completed",
-                service="orchestrator",
-                operation="create",
-                execution_id=execution_id,
-                status=final_status,
-            )
-            telemetry.increment_counter(
-                "orchestrator_execution_total",
-                labels={"service": "orchestrator", "status": final_status},
-            )
+        # TN de un solo uso: encadenar el bloque de borrado tras el experimento
+        # automatico, tanto si termino bien como si fallo.
+        if ephemeral:
+            logger.info("[%s] ephemeral_tn=true: chaining TN teardown", execution_id)
+            await run_teardown_phase(execution_id)
 
 
 async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionRecord:
@@ -740,15 +733,17 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
     except Exception:
         pass
 
-    _cancel_elcm_start_timeout(execution_id)
     try:
         from .artifacts import persist_dataset_descriptor
+
         descriptor_path = persist_dataset_descriptor(execution_id, descriptor)
 
         record = ExecutionRecord(
             execution_id=execution_id,
             status=ExecutionState.pending,
             message="Execution created",
+            # ephemeral_tn solo aplica con auto-start; en manual se ignora
+            ephemeral_tn=descriptor.auto_start_elcm and descriptor.ephemeral_tn,
             artifacts=[descriptor_path],
         )
         executions[execution_id] = record
@@ -766,7 +761,9 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
         # Store execution timer for later closure at end of orchestration
         setattr(executions[execution_id], "_execution_timer", execution_timer)
 
-        asyncio.create_task(run_tnlcm_phase(execution_id, descriptor))
+        _spawn_background_task(
+            run_tnlcm_phase(execution_id, descriptor), name=f"tnlcm:{execution_id}"
+        )
         return record
     except Exception:
         execution_timer.stop(status="error")
@@ -784,24 +781,163 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
         raise
 
 
-async def start_elcm_phase(execution_id: str) -> ExecutionRecord:
-    from .artifacts import load_dataset_descriptor
+def _begin_experiment(
+    execution_id: str,
+    experiment: ExperimentConfig,
+    *,
+    ephemeral: bool = False,
+) -> ExecutionRecord:
+    """Valida y arranca un experimento sobre la TN viva.
 
-    record = get_execution(execution_id)
+    La transicion TN_READY -> RUNNING_EXPERIMENT se hace aqui de forma
+    sincrona (sin ceder el control al event loop), de modo que dos peticiones
+    concurrentes a /elcm no puedan solapar experimentos sobre la misma TN.
+    """
+    record = executions.get(execution_id)
     if not record:
-        raise ValueError("Execution not found")
+        raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+    if record.status in {ExecutionState.running_experiment, ExecutionState.collecting}:
+        raise ExecutionConflictError(
+            "An experiment is already running on this TN; wait for it to finish"
+        )
+    if record.status != ExecutionState.tn_ready:
+        raise ExecutionConflictError(
+            f"TN is not ready for experiments (status: {record.status.value})"
+        )
+    if not record.tn_id:
+        raise ExecutionConflictError("TNLCM phase is not ready yet (tn_id missing)")
+    if any(run.name == experiment.name for run in record.experiments):
+        raise ExecutionConflictError(
+            f"Experiment name '{experiment.name}' was already used on this TN; "
+            "each experiment must have a unique name"
+        )
+
+    record.experiments.append(ExperimentRun(name=experiment.name, started_at=_utc_now_iso()))
+    _update(
+        execution_id,
+        status=ExecutionState.running_experiment,
+        message=f"Experiment '{experiment.name}' accepted",
+    )
+    _spawn_background_task(
+        run_elcm_phase(execution_id, experiment, ephemeral=ephemeral),
+        name=f"elcm:{execution_id}:{experiment.name}",
+    )
+    return executions[execution_id]
+
+
+def start_elcm_phase(execution_id: str, experiment: ExperimentConfig) -> ExecutionRecord:
+    """Lanza un experimento manual sobre la TN viva (endpoint /elcm).
+
+    ephemeral_tn no aplica en el camino manual: la TN queda viva al terminar.
+    """
+    return _begin_experiment(execution_id, experiment, ephemeral=False)
+
+
+async def run_teardown_phase(execution_id: str) -> None:
+    """Bloque de borrado de la TN: baja el tunel WireGuard y ejecuta deleted + purged.
+
+    Unica pieza del sistema que destruye una TN operativa; la invocan el
+    pipeline efimero (ephemeral_tn=true) y el endpoint DELETE de borrado manual.
+    """
+    from .tnlcm import destroy_trial_network
+    from .utils.wireguard import down_tunnel
+
+    record = executions.get(execution_id)
+    if not record or not record.tn_id:
+        logger.warning("[%s] Teardown requested but there is no TN to destroy", execution_id)
+        return
+
+    tn_id = record.tn_id
+    _update(
+        execution_id,
+        status=ExecutionState.destroying,
+        message=f"Destroying TN {tn_id} (deleted + purged)",
+    )
+
+    vpn_interface = record.vpn_interface or tn_id
+    if vpn_interface:
+        try:
+            logger.info(f"[{execution_id}] Teardown: deactivating WireGuard tunnel {vpn_interface}")
+            down_tunnel(vpn_interface, record.vpn_conf_path)
+            _update(execution_id, vpn_status="DOWN", vpn_error=None)
+        except Exception as vpn_error:
+            logger.error(f"[{execution_id}] WireGuard deactivation failed: {vpn_error}")
+            _update(execution_id, vpn_status="DOWN_ERROR", vpn_error=str(vpn_error))
 
     try:
-        load_dataset_descriptor(execution_id)
-    except FileNotFoundError:
-        raise ValueError("Descriptor not found for execution")
+        logger.info(f"[{execution_id}] Teardown: destroying TN {tn_id}")
+        await destroy_trial_network(tn_id)
+    except Exception as cleanup_error:
+        # El timer global queda abierto: el borrado puede reintentarse con
+        # otra llamada al endpoint DELETE (se admite desde estado FAILED).
+        logger.error(f"[{execution_id}] TN teardown failed: {cleanup_error}")
+        _update(
+            execution_id,
+            status=ExecutionState.failed,
+            error=str(cleanup_error),
+            message=f"TN {tn_id} teardown failed: {cleanup_error}",
+        )
+        await _persist_telemetry_report_best_effort(execution_id, "teardown_failed")
+        return
 
+    _update(
+        execution_id,
+        status=ExecutionState.destroyed,
+        message=f"TN {tn_id} destroyed and purged",
+    )
+    telemetry.increment_counter(
+        "tn_teardown_total", labels={"service": "orchestrator", "status": "success"}
+    )
+    await _persist_telemetry_report_best_effort(execution_id, "tn_destroyed")
+    logger.info("[%s] TN %s teardown completed", execution_id, tn_id)
+
+    # Cerrar timer global de la ejecucion: el ciclo de vida termina aqui
+    final_record = executions.get(execution_id)
+    execution_timer = getattr(final_record, "_execution_timer", None)
+    if execution_timer is not None:
+        execution_timer.stop(status="success")
+        telemetry.log_event(
+            "info",
+            "orchestrator_execution.completed",
+            service="orchestrator",
+            operation="create",
+            execution_id=execution_id,
+            status="success",
+        )
+        telemetry.increment_counter(
+            "orchestrator_execution_total",
+            labels={"service": "orchestrator", "status": "success"},
+        )
+
+
+def start_tn_teardown(execution_id: str) -> ExecutionRecord:
+    """Valida y lanza el borrado manual de la TN (endpoint DELETE).
+
+    La transicion a DESTROYING se hace aqui de forma sincrona para que dos
+    peticiones de borrado concurrentes no dupliquen los jobs de destroy/purge.
+    """
+    record = executions.get(execution_id)
+    if not record:
+        raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
     if not record.tn_id:
-        raise ValueError("TNLCM phase is not ready yet (tn_id missing)")
-    if record.status != ExecutionState.completed:
-        raise ValueError("ELCM phase can only be started when TNLCM phase is COMPLETED")
+        raise ExecutionNotFoundError(
+            f"Execution '{execution_id}' has no TN to remove (tn_id missing)"
+        )
+    if record.status in {ExecutionState.running_experiment, ExecutionState.collecting}:
+        raise ExecutionConflictError(
+            "An experiment is currently running on this TN; wait for it to finish"
+        )
+    if record.status in {ExecutionState.destroying, ExecutionState.destroyed}:
+        raise ExecutionConflictError(f"TN removal already {record.status.value}")
+    if record.status not in {ExecutionState.tn_ready, ExecutionState.failed}:
+        raise ExecutionConflictError(
+            f"TN cannot be removed in its current state (status: {record.status.value})"
+        )
 
-    _cancel_elcm_start_timeout(execution_id)
-    _update(execution_id, status=ExecutionState.running_experiment, message="ELCM phase triggered")
-    asyncio.create_task(run_elcm_phase(execution_id))
+    _update(
+        execution_id,
+        status=ExecutionState.destroying,
+        message=f"TN removal triggered for {record.tn_id}",
+    )
+    _spawn_background_task(run_teardown_phase(execution_id), name=f"teardown:{execution_id}")
     return executions[execution_id]

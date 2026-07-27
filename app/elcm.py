@@ -154,9 +154,13 @@ async def generate_experiment_descriptor(
     execution_id: str,
 ) -> str:
     """Construye el descriptor JSON de ELCM con nombres lógicos de testcase."""
-    template_path = resolve_template_path("ELCM/template_experiment_descriptor.json", category="ELCM")
+    template_path = resolve_template_path(
+        "ELCM/template_experiment_descriptor.json", category="ELCM"
+    )
     if template_path is None:
-        raise FileNotFoundError("Experiment descriptor template not found: ELCM/template_experiment_descriptor.json")
+        raise FileNotFoundError(
+            "Experiment descriptor template not found: ELCM/template_experiment_descriptor.json"
+        )
 
     payload = json.loads(template_path.read_text(encoding="utf-8"))
     payload["Application"] = experiment.name
@@ -201,8 +205,10 @@ async def upload_test_cases(
             if not testcase_path:
                 continue
 
-            resolved_path = testcase_path if Path(testcase_path).exists() else _resolve_examples_path(
+            resolved_path = (
                 testcase_path
+                if Path(testcase_path).exists()
+                else _resolve_examples_path(testcase_path)
             )
             if not resolved_path:
                 logger.warning(f"Could not resolve testcase path: {testcase_path}")
@@ -276,7 +282,9 @@ async def run_experiment(
 
     # Prefer the migrated descriptor under templates/ELCM, with legacy fallback.
     if not exp_descriptor_path:
-        resolved_template = resolve_template_path("ELCM/template_experiment_descriptor.json", category="ELCM")
+        resolved_template = resolve_template_path(
+            "ELCM/template_experiment_descriptor.json", category="ELCM"
+        )
         if resolved_template:
             exp_descriptor_path = str(resolved_template)
         else:

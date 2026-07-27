@@ -34,8 +34,12 @@ logger = logging.getLogger(__name__)
 # Los parámetros opcionales se ignoran si no vienen; si vienen, se inyectan
 COMPONENT_PARAMETER_MAPPING: dict[str, dict[str, list[str]]] = {
     "base": {
-        "required": ["influxdb_user", "influxdb_password", "grafana_password"], # O ponlos en required si son obligatorios
-        "optional": ["influxdb_org", "influxdb_bucket", "influxdb_token" ],
+        "required": [
+            "influxdb_user",
+            "influxdb_password",
+            "grafana_password",
+        ],  # O ponlos en required si son obligatorios
+        "optional": ["influxdb_org", "influxdb_bucket", "influxdb_token"],
     },
     "mongodb": {
         "required": [],
@@ -113,6 +117,7 @@ class MissingComponentParameterError(ValueError):
 
 def _timer(execution_id: str, phase_name: str = "overlay"):
     """Contexto de timing para logging."""
+
     class Timer:
         def __init__(self, exec_id: str, phase: str):
             self.exec_id = exec_id
@@ -121,7 +126,9 @@ def _timer(execution_id: str, phase_name: str = "overlay"):
 
         def stop(self, status: str = "success") -> None:
             elapsed = time.time() - self.start_time
-            logger.info(f"[{self.exec_id}] {self.phase} completed in {elapsed:.2f}s (status={status})")
+            logger.info(
+                f"[{self.exec_id}] {self.phase} completed in {elapsed:.2f}s (status={status})"
+            )
 
     return Timer(execution_id, phase_name)
 
@@ -373,7 +380,3 @@ async def build_component_overlay_values(
 
     timer.stop(status="success")
     return output_path
-
-
-
-

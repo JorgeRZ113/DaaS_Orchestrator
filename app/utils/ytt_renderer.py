@@ -158,7 +158,11 @@ def _candidate_paths(template_ref: str, category: str | None = None) -> list[Pat
 
 def resolve_template_path(template_ref: str, category: str | None = None) -> Path | None:
     for candidate in _candidate_paths(template_ref, category=category):
-        if candidate.exists() and candidate.is_file() and not candidate.name.endswith(".overlay.yaml"):
+        if (
+            candidate.exists()
+            and candidate.is_file()
+            and not candidate.name.endswith(".overlay.yaml")
+        ):
             return candidate.resolve()
 
     if category:
@@ -184,7 +188,11 @@ def resolve_template_path(template_ref: str, category: str | None = None) -> Pat
                     if path.suffix.lower() not in {".yaml", ".yml", ".json"}:
                         continue
                     candidate_norm = _asset_match_key(path)
-                    if candidate_norm == ref_norm or candidate_norm.startswith(ref_norm) or ref_norm.startswith(candidate_norm):
+                    if (
+                        candidate_norm == ref_norm
+                        or candidate_norm.startswith(ref_norm)
+                        or ref_norm.startswith(candidate_norm)
+                    ):
                         matches.append(path.resolve())
 
             if matches:
@@ -263,7 +271,11 @@ def _load_overlay_defaults(overlay_path: Path) -> dict[str, Any]:
     body_lines = []
     for line in body.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("@data/values") or stripped.startswith("#@data/values"):
+        if (
+            not stripped
+            or stripped.startswith("@data/values")
+            or stripped.startswith("#@data/values")
+        ):
             continue
         body_lines.append(line)
     parsed = yaml.safe_load("\n".join(body_lines).strip())
@@ -286,7 +298,9 @@ def _overlay_registry(category: str | None = None) -> dict[str, OverlaySpec]:
     registry: dict[str, OverlaySpec] = {}
     for overlay_path in _overlay_file_paths(category):
         text = overlay_path.read_text(encoding="utf-8")
-        component = _parse_overlay_comment_value(text, "Component") or _infer_overlay_component_name(overlay_path)
+        component = _parse_overlay_comment_value(
+            text, "Component"
+        ) or _infer_overlay_component_name(overlay_path)
         defaults = _load_overlay_defaults(overlay_path)
         sections = tuple(defaults.keys()) if isinstance(defaults, dict) else ()
         dependencies = _parse_overlay_dependencies(text, component)
@@ -319,7 +333,9 @@ def resolve_overlay_chain(template_ref: str, category: str | None = None) -> lis
     if root_spec is None:
         # Fallback: parse the overlay directly if it is not in the registry cache.
         text = overlay_path.read_text(encoding="utf-8")
-        component = _parse_overlay_comment_value(text, "Component") or _infer_overlay_component_name(overlay_path)
+        component = _parse_overlay_comment_value(
+            text, "Component"
+        ) or _infer_overlay_component_name(overlay_path)
         defaults = _load_overlay_defaults(overlay_path)
         root_spec = OverlaySpec(
             path=overlay_path.resolve(),
@@ -379,7 +395,9 @@ def build_tnlcm_values(
     return merged
 
 
-def overlay_editable_fields_for_template(template_ref: str, category: str | None = None) -> dict[str, set]:
+def overlay_editable_fields_for_template(
+    template_ref: str, category: str | None = None
+) -> dict[str, set]:
     """Return a mapping section -> set(field_names) for every field declared in the
     overlay chain, regardless of its default value.
 
@@ -469,7 +487,9 @@ def _merge_data(base: Any, overlay: Any) -> Any:
     return base
 
 
-def render_with_ytt(values: dict[str, Any] | None, template_ref: str, category: str | None = None) -> str:
+def render_with_ytt(
+    values: dict[str, Any] | None, template_ref: str, category: str | None = None
+) -> str:
     """Render a YAML/JSON template by applying ytt-style `@data.values` expressions."""
 
     template_path = resolve_template_path(template_ref, category=category)

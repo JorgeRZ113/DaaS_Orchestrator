@@ -54,9 +54,7 @@ def extract_component_template_values(
         if isinstance(value, dict):
             section = key
             if section not in editable_by_section:
-                invalids.append(
-                    f"component.{comp_key}.{section}: section not allowed"
-                )
+                invalids.append(f"component.{comp_key}.{section}: section not allowed")
                 continue
             # Validar cada campo dentro de la sección
             for field_name, field_value in value.items():
@@ -70,7 +68,7 @@ def extract_component_template_values(
 
         # Formato canónico plano: component.<template>.<field>
         field_name = key
-        
+
         # Verificar si el nombre es una sección permitida (caso especial de ambigüedad)
         if field_name in editable_by_section:
             invalids.append(
@@ -80,9 +78,7 @@ def extract_component_template_values(
 
         # Validar que el campo esté permitido
         if field_name not in editable_fields:
-            invalids.append(
-                f"component.{comp_key}.{field_name}: field not allowed"
-            )
+            invalids.append(f"component.{comp_key}.{field_name}: field not allowed")
             continue
 
         # Mapear el campo a su sección y añadir al resultado
@@ -90,4 +86,3 @@ def extract_component_template_values(
         extracted.setdefault(section, {})[field_name] = value
 
     return extracted, invalids
-
