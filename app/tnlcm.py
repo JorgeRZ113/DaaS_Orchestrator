@@ -72,8 +72,6 @@ async def _activate_with_backoff(
     endpoint_label: str,
     execution_id: str | None = None,
 ) -> None:
-    from app.utils.telemetry import telemetry
-
     activate_timer = telemetry.start_timer("tnlcm", "activate", execution_id=execution_id)
     activate_timer.start()
     telemetry.log_event(
@@ -483,9 +481,17 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
     """Extract key fields from TNLCM raw markdown report."""
 
     def _extract_component_blocks(raw_text: str) -> dict[str, str]:
-        # Split by level-1 markdown headers, ignoring anything inside fenced code blocks.
+        # Divide el report en bloques de componente. Cada componente empieza con
+        # un header markdown: normalmente nivel 1 (`#`), pero TNLCM emite algunos
+        # (p.ej. el vnet) como nivel 2 (`##`). Para ser resiliente a ese cambio
+        # de formato se acepta también un header de nivel 2 como frontera, pero
+        # SOLO si su sección contiene la frase "The component `...` has been ...
+        # created": así se distingue un componente real de subsecciones internas
+        # como "## ELCM BACKEND", "## Grafana" o "## Important information:". Se
+        # ignora cualquier header dentro de bloques de código cercados (```).
+        component_marker = re.compile(r"The component\s+`[^`]+`\s+has been", flags=re.IGNORECASE)
         lines = raw_text.splitlines()
-        headers: list[tuple[int, str]] = []
+        candidates: list[tuple[int, int, str]] = []
         in_fence = False
 
         for idx, line in enumerate(lines):
@@ -496,9 +502,21 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
             if in_fence:
                 continue
 
-            match = re.match(r"^#\s+(.+)$", stripped)
+            match = re.match(r"^(#{1,2})\s+(.+)$", stripped)
             if match:
-                headers.append((idx, match.group(1).strip()))
+                candidates.append((idx, len(match.group(1)), match.group(2).strip()))
+
+        # Selecciona qué headers candidatos son fronteras reales de componente:
+        # todos los de nivel 1, y los de nivel 2 cuya sección marca un componente.
+        headers: list[tuple[int, str]] = []
+        for pos, (start_line, level, component_name) in enumerate(candidates):
+            next_candidate = candidates[pos + 1][0] if pos + 1 < len(candidates) else len(lines)
+            if level == 1:
+                headers.append((start_line, component_name))
+                continue
+            section_text = "\n".join(lines[start_line + 1 : next_candidate])
+            if component_marker.search(section_text):
+                headers.append((start_line, component_name))
 
         blocks: dict[str, str] = {}
         for pos, (start_line, component_name) in enumerate(headers):
@@ -676,9 +694,24 @@ def summarize_trial_network_report(report_markdown: str) -> dict[str, Any]:
     def _component_category(component_name: str, block: str) -> str:
         component_name_lower = component_name.lower()
         block_lower = block.lower()
+        # El nombre del componente es la señal más fiable de su categoría. Si
+        # identifica sin ambigüedad un componente elcm o monitoring, prevalece
+        # sobre los tokens del bloque, evitando falsos positivos por contenido.
+        if "elcm" in component_name_lower:
+            return "elcm"
         if any(
+            token in component_name_lower
+            for token in ("monitoring", "influxdb", "grafana", "prometheus")
+        ):
+            return "monitoring"
+        # tn_init agrupa la infraestructura base de la TN (vxlan y bastion). El
+        # token "vxlan" se comprueba SOLO contra el nombre: en el bloque aparece
+        # también como "VXLAN subnet" dentro de un componente vnet, y matchearlo
+        # por contenido lo clasificaría erróneamente como tn_init (descartándolo).
+        # Las credenciales del bastion sí se detectan por contenido del bloque.
+        if "vxlan" in component_name_lower or any(
             token in component_name_lower or token in block_lower
-            for token in ("wireguard vpn client config", "private key", "vxlan", "technitium dns")
+            for token in ("wireguard vpn client config", "private key", "technitium dns")
         ):
             return "tn_init"
         if any(
@@ -840,8 +873,6 @@ async def deploy_trial_network(
     generated_descriptor_path: str | None = None,
 ) -> str:
     """Create TN and trigger activate. Returns tn_id."""
-    from app.utils.telemetry import telemetry
-
     async with httpx.AsyncClient(timeout=None) as client:
         create_data: dict[str, Any] | None = None
         tn_id: str | None = None

@@ -1,22 +1,29 @@
 import asyncio
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Coroutine
 
+from app import artifacts, elcm, tnlcm
 from app.config import settings
+from app.elcm import ElcmResultsNotFoundError, TnLogsNotFoundError
+from app.generators import elcm_dataset
 from app.generators.tnlcm_renderer import generate_tnlcm_descriptor
 from app.models import (
     DatasetDescriptor,
+    DatasetRequest,
     ExecutionRecord,
     ExecutionState,
     ExperimentConfig,
     ExperimentRun,
 )
-from app.utils.telemetry import telemetry
+from app.utils import influx_raw, results_bundle, wireguard
+from app.utils.telemetry import format_duration_display, telemetry
+from app.utils.wireguard import WireGuardManualDeploymentRequired
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +43,17 @@ class ExecutionConflictError(RuntimeError):
 # ELCM phase timing constants (kept local to orchestration flow)
 ELCM_POLL_INTERVAL_SECONDS = 10
 ELCM_EXECUTION_TIMEOUT_SECONDS = 3600
+
+# Formatos de dataset.output realmente implementados en el runtime. El esquema
+# (models.DatasetOutput) acepta también csv/dashboard/raw, pero se activan de
+# forma incremental; pedir uno todavía no implementado aborta la ejecución
+# (fail-fast). Al implementar un formato nuevo, se añade aquí.
+IMPLEMENTED_DATASET_OUTPUTS: set[str] = {"logs", "csv", "dashboard", "raw"}
+
+# Puertos estándar en la VM de monitorización (ports: 8086 Influx, 3000 Grafana,
+# 9090 Prometheus). Grafana -> URL del dashboard; Influx -> consulta raw.
+GRAFANA_PORT = 3000
+INFLUX_PORT = 8086
 
 # In-memory state for MVP
 executions: dict[str, ExecutionRecord] = {}
@@ -147,13 +165,11 @@ def _set_experiment_run_fields(execution_id: str, name: str, **kwargs) -> None:
 
 async def _persist_telemetry_report_best_effort(execution_id: str, stage: str) -> str | None:
     """Persist telemetry report without interrupting orchestration on I/O failures."""
-    from .artifacts import build_telemetry_report_artifact
-
     if not settings.telemetry_report_artifacts:
         return None
 
     try:
-        telemetry_path = await build_telemetry_report_artifact(execution_id, stage)
+        telemetry_path = await artifacts.build_telemetry_report_artifact(execution_id, stage)
     except Exception as exc:
         logger.warning(
             "[%s] Could not persist telemetry report for stage %s: %s",
@@ -209,15 +225,6 @@ def _release_tnlcm_deploy_slot(execution_id: str) -> None:
 
 async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> None:
     """Phase 1: validate + deploy TN, then activate the WireGuard tunnel automatically."""
-    from .artifacts import build_tnlcm_raw_report_artifact, build_tnlcm_summary_artifact
-    from .tnlcm import (
-        deploy_trial_network,
-        download_trial_network_report,
-        extract_elcm_url_from_report,
-        summarize_trial_network_report,
-    )
-    from .utils.wireguard import WireGuardManualDeploymentRequired, up_tunnel, write_tunnel_conf
-
     tn_id: str | None = None
     vpn_conf_path: str | None = None
 
@@ -231,8 +238,14 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         _update(execution_id, status=ExecutionState.validating, message="Validating descriptor")
         await asyncio.sleep(1)
 
-        if descriptor.dataset.output != "logs":
-            raise ValueError("Only dataset.output='logs' is supported")
+        unsupported = [
+            fmt for fmt in descriptor.dataset.output if fmt not in IMPLEMENTED_DATASET_OUTPUTS
+        ]
+        if unsupported:
+            raise ValueError(
+                f"dataset.output not yet implemented: {', '.join(unsupported)}. "
+                f"Currently supported: {', '.join(sorted(IMPLEMENTED_DATASET_OUTPUTS))}"
+            )
 
         _update(
             execution_id, status=ExecutionState.validating, message="Generating TNLCM descriptor"
@@ -258,7 +271,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         )
 
         try:
-            tn_id = await deploy_trial_network(
+            tn_id = await tnlcm.deploy_trial_network(
                 descriptor.infrastructure,
                 execution_id=execution_id,
                 generated_descriptor_path=tnlcm_descriptor_path,
@@ -266,7 +279,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         except TypeError as exc:
             if "generated_descriptor_path" not in str(exc):
                 raise
-            tn_id = await deploy_trial_network(
+            tn_id = await tnlcm.deploy_trial_network(
                 descriptor.infrastructure,
                 execution_id=execution_id,
             )
@@ -282,11 +295,13 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         telemetry.increment_counter("tnlcm_create_total", labels={"service": "orchestrator"})
 
         _update(execution_id, status=ExecutionState.collecting, message="Downloading TNLCM report")
-        report_markdown = download_trial_network_report(tn_id)
-        raw_report_path = await build_tnlcm_raw_report_artifact(execution_id, report_markdown)
+        report_markdown = tnlcm.download_trial_network_report(tn_id)
+        raw_report_path = await artifacts.build_tnlcm_raw_report_artifact(
+            execution_id, report_markdown
+        )
         report_markdown_from_file = Path(raw_report_path).read_text(encoding="utf-8")
-        report_summary = summarize_trial_network_report(report_markdown_from_file)
-        summary_report_path = await build_tnlcm_summary_artifact(
+        report_summary = tnlcm.summarize_trial_network_report(report_markdown_from_file)
+        summary_report_path = await artifacts.build_tnlcm_summary_artifact(
             execution_id, tn_id, report_summary
         )
         report_artifacts = [tnlcm_descriptor_path, raw_report_path, summary_report_path]
@@ -297,7 +312,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             wireguard_config = tn_init_summary.get("wireguard_client_config")
         if not isinstance(wireguard_config, str) or not wireguard_config.strip():
             raise ValueError("TNLCM report does not include wireguard_client_config")
-        vpn_conf_path = write_tunnel_conf(execution_id, tn_id, wireguard_config)
+        vpn_conf_path = wireguard.write_tunnel_conf(execution_id, tn_id, wireguard_config)
         _update(
             execution_id,
             vpn_interface=tn_id,
@@ -307,7 +322,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         )
 
         # Extract ELCM URL from report if available
-        elcm_url = extract_elcm_url_from_report(report_summary)
+        elcm_url = tnlcm.extract_elcm_url_from_report(report_summary)
         if not elcm_url:
             raise ValueError("TNLCM report does not include a valid ELCM backend URL")
         _update(execution_id, elcm_base_url=elcm_url)
@@ -319,7 +334,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         )
 
         try:
-            up_tunnel(tn_id, vpn_conf_path)
+            wireguard.up_tunnel(tn_id, vpn_conf_path)
         except WireGuardManualDeploymentRequired as vpn_error:
             manual_message = (
                 "TN deployment completed, but WireGuard VPN could not be deployed automatically; "
@@ -385,6 +400,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             _begin_experiment(
                 execution_id,
                 descriptor.experiment,
+                descriptor.dataset,
                 ephemeral=descriptor.ephemeral_tn,
             )
 
@@ -411,18 +427,14 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         if tn_id:
             try:
                 if vpn_conf_path:
-                    from .utils.wireguard import down_tunnel
-
-                    down_tunnel(tn_id, vpn_conf_path)
+                    wireguard.down_tunnel(tn_id, vpn_conf_path)
             except Exception as cleanup_error:
                 logger.warning(
                     f"[{execution_id}] WireGuard cleanup after TNLCM failure failed: {cleanup_error}"
                 )
 
             try:
-                from .tnlcm import destroy_trial_network
-
-                await destroy_trial_network(tn_id)
+                await tnlcm.destroy_trial_network(tn_id)
             except Exception as cleanup_error:
                 logger.warning(
                     f"[{execution_id}] TN cleanup after TNLCM failure failed: {cleanup_error}"
@@ -431,9 +443,137 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         _release_tnlcm_deploy_slot(execution_id)
 
 
+async def _collect_csv_results(
+    execution_id: str,
+    elcm_execution_id: str,
+    elcm_base_url: str,
+    experiment_name: str | None = None,
+) -> list[str]:
+    """Descargar el ZIP de resultados de ELCM y extraer el/los CSV en result/.
+
+    Devuelve las rutas de los CSV extraídos (para registrarlos como artifacts).
+    Si ELCM todavía no tiene resultados (404) se registra un aviso y se devuelve
+    lista vacía, sin abortar la fase.
+    """
+    result_dir = Path(artifacts._artifact_result_dir(execution_id, experiment_name))
+    result_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = result_dir / f"csv_results_{elcm_execution_id}.zip"
+
+    try:
+        await elcm.download_execution_results(
+            elcm_execution_id,
+            dest_path=str(zip_path),
+            elcm_base_url=elcm_base_url,
+            execution_id=execution_id,
+        )
+    except ElcmResultsNotFoundError as exc:
+        logger.warning("[%s] No CSV results available: %s", execution_id, exc)
+        return []
+
+    # Extracción/limpieza es I/O de disco -> fuera del event loop (§8.1).
+    csv_files = await asyncio.to_thread(results_bundle.extract_csv_bundle, zip_path, result_dir)
+
+    # El ZIP externo ya no hace falta una vez extraído el CSV.
+    try:
+        zip_path.unlink()
+    except OSError:
+        pass
+
+    logger.info("[%s] CSV dataset collected: %d file(s)", execution_id, len(csv_files))
+    return [str(path) for path in csv_files]
+
+
+async def _collect_dashboard_results(
+    execution_id: str, elcm_execution_id: str, experiment_name: str | None = None
+) -> list[str]:
+    """Construir la URL del dashboard Grafana y guardarla en result/.
+
+    URL: http://<IP_monitoring>:<GRAFANA_PORT>/d/Run<elcm_execution_id>. ELCM crea
+    el dashboard con uid Run<id> al ejecutar el TestCase de grafana; la IP de
+    monitorización se toma del report TNLCM persistido. No se verifica que el
+    dashboard exista: solo se entrega la URL.
+    """
+    monitoring = artifacts.load_monitoring_info(execution_id)
+    ip = monitoring.get("ip")
+    if not ip:
+        raise ValueError(
+            f"Cannot build dashboard URL: monitoring IP missing in TNLCM report "
+            f"for execution {execution_id}"
+        )
+
+    uid = f"Run{elcm_execution_id}"
+    url = f"http://{ip}:{GRAFANA_PORT}/d/{uid}"
+
+    result_dir = Path(artifacts._artifact_result_dir(execution_id, experiment_name))
+    result_dir.mkdir(parents=True, exist_ok=True)
+    dashboard_path = result_dir / "dashboard.json"
+    dashboard_path.write_text(
+        json.dumps(
+            {
+                "output": "dashboard",
+                "url": url,
+                "grafana_uid": uid,
+                "elcm_execution_id": elcm_execution_id,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    logger.info("[%s] Dashboard URL collected: %s", execution_id, url)
+    return [str(dashboard_path)]
+
+
+async def _collect_raw_results(
+    execution_id: str, elcm_execution_id: str, experiment_name: str | None = None
+) -> list[str]:
+    """Consultar InfluxDB directamente (Flux, 2 pasos) y volcar el CSV crudo en result/.
+
+    Réplica de la interfaz east/west de ELCM: descubre los measurements de la
+    ejecución y vuelca cada uno a `raw_<measurement>.csv`. IP/token/org/bucket
+    salen del bloque monitoring del report TNLCM (el token en memoria, §8.7).
+    Fail-fast si falta la IP o el token de Influx.
+    """
+    monitoring = artifacts.load_monitoring_info(execution_id)
+    ip = monitoring.get("ip")
+    credentials = monitoring.get("credentials") or {}
+    token = credentials.get("token")
+    org = credentials.get("organization") or "testing"
+    bucket = credentials.get("bucket") or "testing"
+
+    if not ip or not token:
+        raise ValueError(
+            f"Cannot query raw InfluxDB data: missing monitoring ip/token in TNLCM "
+            f"report for execution {execution_id}"
+        )
+
+    measurements = await influx_raw.collect_raw_measurements(
+        host=ip,
+        port=INFLUX_PORT,
+        org=org,
+        bucket=bucket,
+        token=token,
+        execution_id=elcm_execution_id,
+    )
+
+    result_dir = Path(artifacts._artifact_result_dir(execution_id, experiment_name))
+    result_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_paths: list[str] = []
+    for measurement, csv_text in measurements.items():
+        # Sanear el nombre del measurement para usarlo como nombre de fichero.
+        safe = re.sub(r"\W+", "_", measurement) or "measurement"
+        raw_path = result_dir / f"raw_{safe}.csv"
+        await asyncio.to_thread(raw_path.write_text, csv_text, "utf-8")
+        raw_paths.append(str(raw_path))
+
+    logger.info("[%s] Raw dataset collected: %d measurement(s)", execution_id, len(raw_paths))
+    return raw_paths
+
+
 async def run_elcm_phase(
     execution_id: str,
     experiment: ExperimentConfig,
+    dataset: DatasetRequest | None = None,
     *,
     ephemeral: bool = False,
 ) -> None:
@@ -442,22 +582,17 @@ async def run_elcm_phase(
     La TN no se toca al terminar: queda en TN_READY para aceptar mas
     experimentos. Solo si `ephemeral=True` (TN de un solo uso) se encadena
     `run_teardown_phase` al finalizar el experimento.
-    """
-    from .artifacts import build_artifacts
-    from .elcm import (
-        generate_experiment_descriptor,
-        generate_testcase,
-        TnLogsNotFoundError,
-        collect_results,
-        get_experiment_status,
-        run_experiment,
-        upload_test_cases,
-    )
-    from .tnlcm import get_tn_status
 
+    El `dataset` (formatos de salida) es POR EXPERIMENTO: llega en el body de
+    /elcm y define qué se recolecta y se guarda en result/<experimento>/. Si no
+    se indica, se usan los formatos fijados al crear la ejecución.
+    """
     record = executions[execution_id]
     tn_id = record.tn_id
     elcm_base_url = record.elcm_base_url
+
+    # Formatos de salida de ESTE experimento (por defecto, los de la ejecución).
+    dataset_outputs = list(dataset.output) if dataset is not None else list(record.dataset_output)
 
     if not tn_id:
         _update(execution_id, status=ExecutionState.failed, message="tn_id missing for ELCM phase")
@@ -490,54 +625,76 @@ async def run_elcm_phase(
             message=f"Running experiment '{experiment.name}'",
         )
 
+        # Fail-fast: rechazar formatos de salida aún no implementados en runtime.
+        unsupported = [fmt for fmt in dataset_outputs if fmt not in IMPLEMENTED_DATASET_OUTPUTS]
+        if unsupported:
+            raise ValueError(
+                f"dataset.output not yet implemented: {', '.join(unsupported)}. "
+                f"Currently supported: {', '.join(sorted(IMPLEMENTED_DATASET_OUTPUTS))}"
+            )
+
+        # Deja constancia en el ExperimentRun de los formatos realmente usados.
+        _set_experiment_run_fields(
+            execution_id, experiment.name, dataset_output=list(dataset_outputs)
+        )
+
         testcase_list = _get_testcases(experiment)
         if not testcase_list:
             raise ValueError("At least one testcase is required")
 
-        generated_testcase_paths: list[str] = []
-        for index, testcase_ref in enumerate(testcase_list):
-            try:
-                testcase_path = await generate_testcase(
-                    testcase_ref, execution_id, output_index=index
+        # Los TestCases del body se resuelven a su fichero real (examples/) y se
+        # suben TAL CUAL: no se re-renderizan (eso corrompía el entrecomillado y
+        # la indentación). Fail-fast si alguno no existe.
+        generated_testcase_paths: list[str] = [
+            str(elcm.resolve_testcase_file(testcase_ref)) for testcase_ref in testcase_list
+        ]
+        # Ficheros del usuario antes de inyectar los TC de dataset: de aqui se lee el
+        # TestCase de captura (*_capture*) para el dashboard.
+        user_testcase_files = list(generated_testcase_paths)
+
+        # Inyección de TestCases de dataset (csv/dashboard): se generan con ytt y
+        # se añaden a la lista de TestCases (upload + descriptor) para que ELCM
+        # los ejecute y produzca el CSV / cree el dashboard. Se guardan como
+        # <Name>.yml. (raw NO inyecta TestCase: consultará InfluxDB directamente.)
+        for kind in ("csv", "dashboard"):
+            if kind in dataset_outputs and kind in elcm_dataset.ELCM_DATASET_TEMPLATES:
+                data_values = None
+                if kind == "dashboard":
+                    # El dashboard se genera con un panel por metrica; measurement y
+                    # metricas salen del TestCase de captura (*_capture*) del body.
+                    capture = elcm.extract_capture_metrics(user_testcase_files)
+                    if capture is None:
+                        raise ValueError(
+                            "dataset.output 'dashboard' requiere un TestCase de captura "
+                            "(*_capture* con Run.PrometheusToInflux) en testcase_paths"
+                        )
+                    measurement, metrics = capture
+                    data_values = {"dataset": {"measurement": measurement, "metrics": metrics}}
+                dataset_tc_path = await elcm_dataset.generate_elcm_dataset_testcase(
+                    kind, execution_id, data_values=data_values
                 )
-            except Exception as exc:
-                logger.warning(
-                    "[%s] Failed to generate testcase %s: %s. Using original reference.",
-                    execution_id,
-                    testcase_ref,
-                    exc,
-                )
-                testcase_path = testcase_ref
-            generated_testcase_paths.append(testcase_path)
+                generated_testcase_paths.append(str(dataset_tc_path))
+                logger.info("[%s] Injected %s dataset testcase into experiment", execution_id, kind)
 
         _update(execution_id, message="Generating Experiment Descriptor")
-        experiment_descriptor_path = await generate_experiment_descriptor(
+        experiment_descriptor_path = await elcm.generate_experiment_descriptor(
             experiment,
             generated_testcase_paths,
             execution_id,
         )
 
         _update(execution_id, message="Uploading TestCases")
-        await upload_test_cases(
+        await elcm.upload_test_cases(
             generated_testcase_paths, elcm_base_url=elcm_base_url, execution_id=execution_id
         )
 
         _update(execution_id, message="Launching experiment descriptor")
-        try:
-            elcm_execution_id = await run_experiment(
-                experiment,
-                elcm_base_url=elcm_base_url,
-                execution_id=execution_id,
-                exp_descriptor_path=experiment_descriptor_path,
-            )
-        except TypeError as exc:
-            if "exp_descriptor_path" not in str(exc):
-                raise
-            elcm_execution_id = await run_experiment(
-                experiment,
-                elcm_base_url=elcm_base_url,
-                execution_id=execution_id,
-            )
+        elcm_execution_id = await elcm.run_experiment(
+            experiment,
+            elcm_base_url=elcm_base_url,
+            execution_id=execution_id,
+            exp_descriptor_path=experiment_descriptor_path,
+        )
         experiment_ids = list(dict.fromkeys([*record.experiment_ids, elcm_execution_id]))
         _update(execution_id, elcm_execution_id=elcm_execution_id)
         _set_experiment_run_fields(
@@ -551,7 +708,7 @@ async def run_elcm_phase(
         elapsed = 0
 
         while elapsed < timeout_seconds:
-            exp_status = await get_experiment_status(
+            exp_status = await elcm.get_experiment_status(
                 elcm_execution_id, elcm_base_url=elcm_base_url, execution_id=execution_id
             )
             logger.info(f"ELCM execution {elcm_execution_id} status: {exp_status}")
@@ -573,33 +730,75 @@ async def run_elcm_phase(
         if not exp_done:
             raise TimeoutError(f"Timeout waiting for ELCM execution {elcm_execution_id} to finish")
 
-        # Collect logs with transient error handling
-        _update(execution_id, status=ExecutionState.collecting, message="Collecting logs")
-        try:
-            execution_logs = await collect_results(
-                elcm_execution_id, elcm_base_url=elcm_base_url, execution_id=execution_id
-            )
-        except TnLogsNotFoundError as logs_error:
-            logger.warning(f"ELCM logs not found for {elcm_execution_id}: {logs_error}")
-            raise
-        except Exception as logs_error:
-            # If logs error, check TN status before failing
-            logger.warning(f"Error collecting logs for {elcm_execution_id}: {logs_error}")
-            tn_status = get_tn_status(tn_id)
-            logger.info(f"TN {tn_id} status after logs error: {tn_status}")
+        # --- Recolección de outputs del dataset (según dataset.output) ---
+        _update(execution_id, status=ExecutionState.collecting, message="Collecting dataset")
+        collected_artifacts: list[str] = []
 
-            # If TN is running, logs will be available later, return empty for now
-            if "RUNNING" in tn_status.upper() or "ACTIVE" in tn_status.upper():
-                logger.info("TN still running, treating logs as pending")
-                execution_logs = {
-                    "output": "logs",
-                    "experiment_id": elcm_execution_id,
-                    "logs": {"message": "Logs not available yet"},
-                    "status": "logs_pending",
-                }
-            else:
-                # TN is in error state, re-raise the error
+        # logs: comportamiento previo, ahora gated por dataset.output. La
+        # recolección de logs actúa además como verificación de que el
+        # experimento se ejecutó (TnLogsNotFoundError).
+        if "logs" in dataset_outputs:
+            try:
+                execution_logs = await elcm.collect_results(
+                    elcm_execution_id, elcm_base_url=elcm_base_url, execution_id=execution_id
+                )
+            except TnLogsNotFoundError as logs_error:
+                logger.warning(f"ELCM logs not found for {elcm_execution_id}: {logs_error}")
                 raise
+            except Exception as logs_error:
+                # If logs error, check TN status before failing
+                logger.warning(f"Error collecting logs for {elcm_execution_id}: {logs_error}")
+                tn_status = tnlcm.get_tn_status(tn_id)
+                logger.info(f"TN {tn_id} status after logs error: {tn_status}")
+
+                # If TN is running, logs will be available later, return empty for now
+                if "RUNNING" in tn_status.upper() or "ACTIVE" in tn_status.upper():
+                    logger.info("TN still running, treating logs as pending")
+                    execution_logs = {
+                        "output": "logs",
+                        "experiment_id": elcm_execution_id,
+                        "logs": {"message": "Logs not available yet"},
+                        "status": "logs_pending",
+                    }
+                else:
+                    # TN is in error state, re-raise the error
+                    raise
+
+            results = {
+                "output": "logs",
+                "experiment_ids": experiment_ids,
+                "testcases": testcase_list,
+                "logs": execution_logs,
+            }
+            collected_artifacts.extend(
+                await artifacts.build_artifacts(
+                    execution_id,
+                    tn_id,
+                    elcm_execution_id,
+                    results,
+                    experiment_name=experiment.name,
+                )
+            )
+
+        # csv: descargar el ZIP de resultados de ELCM y extraer el/los CSV.
+        if "csv" in dataset_outputs:
+            collected_artifacts.extend(
+                await _collect_csv_results(
+                    execution_id, elcm_execution_id, elcm_base_url, experiment.name
+                )
+            )
+
+        # dashboard: construir y guardar la URL del dashboard Grafana.
+        if "dashboard" in dataset_outputs:
+            collected_artifacts.extend(
+                await _collect_dashboard_results(execution_id, elcm_execution_id, experiment.name)
+            )
+
+        # raw: consultar InfluxDB directamente y volcar el CSV crudo por measurement.
+        if "raw" in dataset_outputs:
+            collected_artifacts.extend(
+                await _collect_raw_results(execution_id, elcm_execution_id, experiment.name)
+            )
 
         _update(
             execution_id,
@@ -608,20 +807,13 @@ async def run_elcm_phase(
             message="Experiment finished",
         )
 
-        results = {
-            "output": "logs",
-            "experiment_ids": experiment_ids,
-            "testcases": testcase_list,
-            "logs": execution_logs,
-        }
-        artifact_paths = await build_artifacts(execution_id, tn_id, elcm_execution_id, results)
         merged_artifacts = list(
             dict.fromkeys(
                 [
                     *record.artifacts,
                     *generated_testcase_paths,
                     experiment_descriptor_path,
-                    *artifact_paths,
+                    *collected_artifacts,
                 ]
             )
         )
@@ -726,17 +918,13 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
         )
         payload = {"service": "orchestrator", "operation": "lock", "execution_id": execution_id}
         if lock_wait >= 1.0:
-            from app.utils.telemetry import format_duration_display
-
             payload["duration_display"] = format_duration_display(lock_wait)
         telemetry.log_event("info", "tnlcm_lock.acquire.completed", **payload)
     except Exception:
         pass
 
     try:
-        from .artifacts import persist_dataset_descriptor
-
-        descriptor_path = persist_dataset_descriptor(execution_id, descriptor)
+        descriptor_path = artifacts.persist_dataset_descriptor(execution_id, descriptor)
 
         record = ExecutionRecord(
             execution_id=execution_id,
@@ -744,6 +932,7 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
             message="Execution created",
             # ephemeral_tn solo aplica con auto-start; en manual se ignora
             ephemeral_tn=descriptor.auto_start_elcm and descriptor.ephemeral_tn,
+            dataset_output=list(descriptor.dataset.output),
             artifacts=[descriptor_path],
         )
         executions[execution_id] = record
@@ -784,6 +973,7 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
 def _begin_experiment(
     execution_id: str,
     experiment: ExperimentConfig,
+    dataset: DatasetRequest,
     *,
     ephemeral: bool = False,
 ) -> ExecutionRecord:
@@ -792,6 +982,8 @@ def _begin_experiment(
     La transicion TN_READY -> RUNNING_EXPERIMENT se hace aqui de forma
     sincrona (sin ceder el control al event loop), de modo que dos peticiones
     concurrentes a /elcm no puedan solapar experimentos sobre la misma TN.
+
+    `dataset` define los formatos de salida de ESTE experimento (body de /elcm).
     """
     record = executions.get(execution_id)
     if not record:
@@ -812,25 +1004,34 @@ def _begin_experiment(
             "each experiment must have a unique name"
         )
 
-    record.experiments.append(ExperimentRun(name=experiment.name, started_at=_utc_now_iso()))
+    record.experiments.append(
+        ExperimentRun(
+            name=experiment.name,
+            started_at=_utc_now_iso(),
+            dataset_output=list(dataset.output),
+        )
+    )
     _update(
         execution_id,
         status=ExecutionState.running_experiment,
         message=f"Experiment '{experiment.name}' accepted",
     )
     _spawn_background_task(
-        run_elcm_phase(execution_id, experiment, ephemeral=ephemeral),
+        run_elcm_phase(execution_id, experiment, dataset, ephemeral=ephemeral),
         name=f"elcm:{execution_id}:{experiment.name}",
     )
     return executions[execution_id]
 
 
-def start_elcm_phase(execution_id: str, experiment: ExperimentConfig) -> ExecutionRecord:
+def start_elcm_phase(
+    execution_id: str, experiment: ExperimentConfig, dataset: DatasetRequest
+) -> ExecutionRecord:
     """Lanza un experimento manual sobre la TN viva (endpoint /elcm).
 
     ephemeral_tn no aplica en el camino manual: la TN queda viva al terminar.
+    `dataset` es la salida de datos pedida para este experimento concreto.
     """
-    return _begin_experiment(execution_id, experiment, ephemeral=False)
+    return _begin_experiment(execution_id, experiment, dataset, ephemeral=False)
 
 
 async def run_teardown_phase(execution_id: str) -> None:
@@ -839,9 +1040,6 @@ async def run_teardown_phase(execution_id: str) -> None:
     Unica pieza del sistema que destruye una TN operativa; la invocan el
     pipeline efimero (ephemeral_tn=true) y el endpoint DELETE de borrado manual.
     """
-    from .tnlcm import destroy_trial_network
-    from .utils.wireguard import down_tunnel
-
     record = executions.get(execution_id)
     if not record or not record.tn_id:
         logger.warning("[%s] Teardown requested but there is no TN to destroy", execution_id)
@@ -858,7 +1056,7 @@ async def run_teardown_phase(execution_id: str) -> None:
     if vpn_interface:
         try:
             logger.info(f"[{execution_id}] Teardown: deactivating WireGuard tunnel {vpn_interface}")
-            down_tunnel(vpn_interface, record.vpn_conf_path)
+            wireguard.down_tunnel(vpn_interface, record.vpn_conf_path)
             _update(execution_id, vpn_status="DOWN", vpn_error=None)
         except Exception as vpn_error:
             logger.error(f"[{execution_id}] WireGuard deactivation failed: {vpn_error}")
@@ -866,7 +1064,7 @@ async def run_teardown_phase(execution_id: str) -> None:
 
     try:
         logger.info(f"[{execution_id}] Teardown: destroying TN {tn_id}")
-        await destroy_trial_network(tn_id)
+        await tnlcm.destroy_trial_network(tn_id)
     except Exception as cleanup_error:
         # El timer global queda abierto: el borrado puede reintentarse con
         # otra llamada al endpoint DELETE (se admite desde estado FAILED).

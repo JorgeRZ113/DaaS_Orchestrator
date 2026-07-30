@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,31 @@ def _artifact_base_dir(execution_id: str) -> str:
 
 def _artifact_generated_dir(execution_id: str) -> str:
     return os.path.join(_artifact_base_dir(execution_id), "archivos_generados")
+
+
+def _sanitize_path_component(name: str) -> str:
+    """Sanea un nombre para usarlo como componente de ruta (evita path traversal).
+
+    Sustituye cualquier carácter fuera de `[A-Za-z0-9_.-]` por `_` y recorta los
+    `_` sobrantes. Devuelve `experiment` si el resultado queda vacío.
+    """
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_")
+    return safe or "experiment"
+
+
+def _artifact_result_dir(execution_id: str, experiment_name: str | None = None) -> str:
+    """Directorio de respuestas del dataset: artifacts/<id>/result/[<experimento>/].
+
+    Todas las respuestas obtenidas de la parte `dataset` (logs, csv, dashboard,
+    raw) se guardan aquí, dentro de la carpeta de la ejecución de la TN. Como una
+    misma TN puede ejecutar varios experimentos (cada uno con su propia salida de
+    datos), las respuestas se separan por el nombre del experimento cuando se
+    indica: `result/<experimento>/`.
+    """
+    result_dir = os.path.join(_artifact_base_dir(execution_id), "result")
+    if experiment_name:
+        return os.path.join(result_dir, _sanitize_path_component(experiment_name))
+    return result_dir
 
 
 def persist_generated_artifacts(
@@ -72,14 +98,15 @@ async def build_artifacts(
     tn_id: str,
     experiment_id: str,
     results: dict[str, Any],
+    experiment_name: str | None = None,
 ) -> list[str]:
     """
-    Build artifacts for the current dataset mode (logs only):
+    Build artifacts for the logs dataset mode, en artifacts/<id>/result/[<experimento>/]:
     - metadata.json
     - logs.json
     """
-    base_dir = _artifact_base_dir(execution_id)
-    _ensure_dir(base_dir)
+    result_dir = _artifact_result_dir(execution_id, experiment_name)
+    _ensure_dir(result_dir)
 
     # Signature compatibility: experiment_id is kept although metadata is now minimal.
     _ = experiment_id
@@ -107,16 +134,17 @@ async def build_artifacts(
 
     metadata = {
         "tn_id": tn_id,
+        "experiment": experiment_name,
         "output": "logs",
         "generated_at": _format_timestamp_human(),
         "testcases_count": testcases_count,
     }
-    metadata_path = os.path.join(base_dir, "metadata.json")
+    metadata_path = os.path.join(result_dir, "metadata.json")
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
     logger.info(f"[{execution_id}] metadata.json generated")
 
-    logs_path = os.path.join(base_dir, "logs.json")
+    logs_path = os.path.join(result_dir, "logs.json")
     with open(logs_path, "w", encoding="utf-8") as f:
         json.dump(logs_payload, f, indent=2)
     logger.info(f"[{execution_id}] logs.json generated")
@@ -223,3 +251,27 @@ def load_dataset_descriptor(execution_id: str) -> DatasetDescriptor:
         raise FileNotFoundError(f"Descriptor not found for execution {execution_id}")
     with open(descriptor_path, "r", encoding="utf-8") as f:
         return DatasetDescriptor.model_validate_json(f.read())
+
+
+def load_tnlcm_report_summary(execution_id: str) -> dict[str, Any]:
+    """Carga el `summary` del report TNLCM (artifacts/<id>/tnlcm_report_summary.json)."""
+    summary_path = os.path.join(_artifact_base_dir(execution_id), "tnlcm_report_summary.json")
+    if not os.path.exists(summary_path):
+        raise FileNotFoundError(f"TNLCM report summary not found for execution {execution_id}")
+    with open(summary_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, dict) and isinstance(data.get("summary"), dict):
+        return data["summary"]
+    return {}
+
+
+def load_monitoring_info(execution_id: str) -> dict[str, Any]:
+    """Extrae el bloque `monitoring` del report TNLCM persistido.
+
+    Devuelve ip/ports y credenciales (token/organization/bucket) tal como los
+    reporta TNLCM. IMPORTANTE: el `token` es secreto; usarlo solo en memoria y
+    NO re-persistirlo en executions.json ni en artifacts (§8.7).
+    """
+    summary = load_tnlcm_report_summary(execution_id)
+    monitoring = summary.get("monitoring") if isinstance(summary, dict) else None
+    return monitoring if isinstance(monitoring, dict) else {}

@@ -1,7 +1,9 @@
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
+
+from app.utils.ytt_renderer import overlay_editable_fields_for_template
 
 
 class ExecutionState(str, Enum):
@@ -110,8 +112,6 @@ class InfrastructureConfig(BaseModel):
         """
         # If caller asks for values for a specific template, filter component values
         if template_ref and self.component and isinstance(self.component, dict):
-            from app.utils.ytt_renderer import overlay_editable_fields_for_template
-
             allowed = overlay_editable_fields_for_template(template_ref, category="TNLCM")
 
             # Build reverse mapping: field -> section
@@ -205,14 +205,70 @@ class ExperimentConfig(BaseModel):
     )
 
 
-class ElcmExperimentRequest(BaseModel):
-    experiment: ExperimentConfig
+# Formatos de entrega soportados por dataset.output. El esquema los acepta todos;
+# la disponibilidad REAL en el runtime se controla aparte en el orquestador
+# (IMPLEMENTED_DATASET_OUTPUTS), activándolos de forma incremental.
+DatasetOutput = Literal["logs", "csv", "dashboard", "raw"]
 
 
 class DatasetRequest(BaseModel):
-    output: Literal["logs"] = Field(
-        default="logs",
-        description="Por ahora solo se permite la recoleccion de logs",
+    output: List[DatasetOutput] = Field(
+        default_factory=lambda: ["logs"],
+        description=(
+            "Formato(s) de entrega del dataset. Acepta un único nombre ('logs') "
+            "o una lista (['logs', 'csv']). Valores válidos: logs, csv, dashboard, raw."
+        ),
+    )
+
+    @field_validator("output", mode="before")
+    @classmethod
+    def _normalize_output(cls, value: Any) -> Any:
+        """Aceptar string suelto o lista y normalizar a lista deduplicada.
+
+        - Un string se envuelve en lista ('logs' -> ['logs']).
+        - Cada nombre se recorta y se pasa a minúsculas (case-insensitive).
+        - Se eliminan duplicados conservando el orden de aparición.
+
+        La pertenencia al conjunto permitido la valida el tipo Literal DESPUÉS de
+        esta coerción: un valor desconocido (p. ej. 'zip') hace fallar la
+        validación de Pydantic.
+        """
+        if value is None:
+            return ["logs"]
+        if isinstance(value, str):
+            items: list[Any] = [value]
+        elif isinstance(value, (list, tuple)):
+            items = list(value)
+        else:
+            # Tipo inesperado: se deja pasar para que Pydantic emita el error.
+            return value
+
+        normalized: list[Any] = []
+        seen: set[Any] = set()
+        for item in items:
+            key = item.strip().lower() if isinstance(item, str) else item
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(key)
+
+        if not normalized:
+            raise ValueError("dataset.output must contain at least one delivery format")
+        return normalized
+
+    def wants(self, kind: str) -> bool:
+        """True si `kind` está entre los formatos de entrega solicitados."""
+        return kind in self.output
+
+
+class ElcmExperimentRequest(BaseModel):
+    experiment: ExperimentConfig
+    dataset: DatasetRequest = Field(
+        default_factory=DatasetRequest,
+        description=(
+            "Formato(s) de entrega del dataset para ESTE experimento. Cada "
+            "llamada a /elcm puede pedir una salida distinta; por defecto 'logs'."
+        ),
     )
 
 
@@ -254,6 +310,9 @@ class ExperimentRun(BaseModel):
     name: str
     elcm_execution_id: Optional[str] = None
     status: Literal["RUNNING", "FINISHED", "FAILED"] = "RUNNING"
+    # Formatos de entrega solicitados para este experimento concreto (dataset.output
+    # del body de /elcm). Se recolectan en artifacts/<id>/result/<experimento>/.
+    dataset_output: List[str] = Field(default_factory=lambda: ["logs"])
     error: Optional[str] = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
@@ -264,6 +323,9 @@ class ExecutionRecord(BaseModel):
     status: ExecutionState
     message: str = ""
     ephemeral_tn: bool = False
+    # Formatos de entrega solicitados (dataset.output), fijados al crear la
+    # ejecución. La fase ELCM los consulta para saber qué recolectar/inyectar.
+    dataset_output: List[str] = Field(default_factory=lambda: ["logs"])
     experiments: List[ExperimentRun] = Field(default_factory=list)
     tn_id: Optional[str] = None
     vpn_interface: Optional[str] = None

@@ -6,8 +6,8 @@ Expone dos niveles:
     (InfluxDB, Grafana, Prometheus y ELCM), leyendo su IP/puerto/ruta de un
     diccionario estático `KNOWN_SERVICES`. Sin parseo del report ni token.
 
-Los sondeos HTTP usan `httpx.AsyncClient` con timeout explícito (ver CLAUDE.md
-§8.1) y corren en paralelo con `asyncio.gather`.
+Los sondeos HTTP usan `httpx.AsyncClient` con timeout explícito (§8.1) y corren
+en paralelo con `asyncio.gather`.
 """
 
 import asyncio

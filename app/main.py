@@ -2,10 +2,13 @@ import logging
 from contextlib import asynccontextmanager
 
 import httpx
+import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 
+from app import tnlcm
 from app.config import reload_mutable_settings, settings
+from app.generators.tnlcm_overlay import InvalidDataDescriptorError
 from app.health import check_components, check_services
 from app.models import (
     ComponentsHealthResponse,
@@ -25,8 +28,12 @@ from app.orchestrator import (
     start_elcm_phase,
     start_tn_teardown,
 )
-from app.utils.telemetry import format_duration_display, telemetry
 from app.utils.component_contract import extract_component_template_values
+from app.utils.telemetry import format_duration_display, telemetry
+from app.utils.ytt_renderer import (
+    overlay_editable_fields_for_template,
+    resolve_template_path,
+)
 
 logging.basicConfig(
     level=settings.log_level,
@@ -94,8 +101,6 @@ async def health_components() -> ComponentsHealthResponse:
 
 def main() -> None:
     """Punto de entrada de consola (`daas-orchestrator`) para arrancar Uvicorn."""
-    import uvicorn
-
     uvicorn.run(
         "app.main:app",
         host=settings.app_host,
@@ -161,9 +166,6 @@ async def post_register(
     if not username or not password:
         raise HTTPException(status_code=400, detail="username and password are required")
 
-    from app.tnlcm import TNLCM_LOGIN_TIMEOUT_SECONDS, _response_error_detail
-    import app.tnlcm
-
     # Construir body exactamente como TNLCM espera
     register_payload: dict = {}
     # TNLCM example includes email even if optional; include fields only when present
@@ -179,7 +181,7 @@ async def post_register(
     )
     telemetry.log_event("info", "user.register.request", username=username, email=email)
 
-    async with httpx.AsyncClient(timeout=TNLCM_LOGIN_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(timeout=tnlcm.TNLCM_LOGIN_TIMEOUT_SECONDS) as client:
         # 1) Registrar en TNLCM (no auth)
         try:
             resp = await client.post(
@@ -189,7 +191,7 @@ async def post_register(
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = _response_error_detail(exc.response) or "unknown"
+            detail = tnlcm._response_error_detail(exc.response) or "unknown"
             telemetry.increment_counter(
                 "errors_total",
                 labels={
@@ -219,7 +221,7 @@ async def post_register(
             login_resp.raise_for_status()
             response_data = login_resp.json()
         except httpx.HTTPStatusError as exc:
-            detail = _response_error_detail(exc.response) or "unknown"
+            detail = tnlcm._response_error_detail(exc.response) or "unknown"
             telemetry.increment_counter(
                 "errors_total",
                 labels={
@@ -253,13 +255,13 @@ async def post_register(
             status_code=502, detail=f"TNLCM login did not return access_token: {response_data}"
         )
 
-    app.tnlcm._tnlcm_access_token = str(access_token).strip()
+    tnlcm._tnlcm_access_token = str(access_token).strip()
     if refresh_token:
-        app.tnlcm._tnlcm_refresh_token = str(refresh_token).strip()
+        tnlcm._tnlcm_refresh_token = str(refresh_token).strip()
 
     token_preview = (
-        f"{app.tnlcm._tnlcm_access_token[:12]}...{app.tnlcm._tnlcm_access_token[-6:]}"
-        if len(app.tnlcm._tnlcm_access_token) > 20
+        f"{tnlcm._tnlcm_access_token[:12]}...{tnlcm._tnlcm_access_token[-6:]}"
+        if len(tnlcm._tnlcm_access_token) > 20
         else "[token-set]"
     )
 
@@ -280,11 +282,12 @@ async def post_execution(descriptor: DatasetDescriptor):
 
     Si descriptor.auto_start_elcm=true (por defecto), ELCM se inicia automáticamente
     al completar TNLCM. Establecer auto_start_elcm=false para control manual del flujo.
-    """
-    # Explicit validation: ensure client did not supply disallowed fields in components
-    from app.utils.ytt_renderer import resolve_template_path, overlay_editable_fields_for_template
-    from app.generators.tnlcm_overlay import InvalidDataDescriptorError
 
+    dataset.output acepta un nombre o una lista combinable de: logs, csv, dashboard,
+    raw. Las respuestas del dataset se guardan en artifacts/<execution_id>/result/.
+    """
+
+    # Explicit validation: ensure client did not supply disallowed fields in components
     def _validate_components_or_raise(infra: InfrastructureConfig) -> None:
         comps = infra.component or {}
         invalids: list[str] = []
@@ -394,11 +397,15 @@ async def post_execution_elcm(execution_id: str, request: ElcmExperimentRequest)
     Puede llamarse tantas veces como experimentos se quieran ejecutar (uno a
     la vez). Cada experimento debe tener un nombre unico dentro de la TN.
 
+    El body admite `dataset.output` propio: cada experimento puede pedir una
+    salida de datos distinta (logs/csv/dashboard/raw), que se recolecta en
+    artifacts/<execution_id>/result/<experimento>/.
+
     Respuestas: 202 experimento aceptado; 404 la ejecucion no existe;
     409 hay un experimento en curso, la TN no esta lista o el nombre esta repetido.
     """
     try:
-        record = start_elcm_phase(execution_id, request.experiment)
+        record = start_elcm_phase(execution_id, request.experiment, request.dataset)
     except ExecutionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ExecutionConflictError as exc:
@@ -465,10 +472,8 @@ async def get_execution_detail(execution_id: str):
 )
 def refresh_tnlcm_token():
     """Genera token TNLCM con user/password de .env y lo guarda en memoria."""
-    from app.tnlcm import login_tnlcm_and_persist_token
-
     try:
-        token = login_tnlcm_and_persist_token()
+        token = tnlcm.login_tnlcm_and_persist_token()
         logger.info("TNLCM token refreshed and successfully logged in")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

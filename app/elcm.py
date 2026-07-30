@@ -1,19 +1,25 @@
+import asyncio
 import logging
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 
+from app import artifacts
 from app.config import settings
 from app.models import ExperimentConfig
 from app.utils.telemetry import telemetry
-from app.utils.ytt_renderer import render_with_ytt, resolve_template_path
+from app.utils.ytt_renderer import resolve_template_path
 
 logger = logging.getLogger(__name__)
 
 # ELCM timing constants (kept local to this adapter)
 ELCM_REQUEST_TIMEOUT = 60
+# La descarga del ZIP de resultados puede ser mayor que una llamada JSON normal.
+ELCM_RESULTS_TIMEOUT = 120
 ELCM_RUN_NON_RETRYABLE_STATUS_CODES = {400}
 ELCM_RUN_ERROR_HINT = (
     "Corrija lo indicado por el error antes de volver a ejecutar la parte de ELCM."
@@ -128,24 +134,88 @@ def _save_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-async def generate_testcase(testcase_ref: str, execution_id: str, output_index: int = 0) -> str:
-    """Renderiza un testcase ELCM y lo guarda como testcase_XXX.yml."""
-    template_path = resolve_template_path(testcase_ref, category="ELCM")
-    if template_path is None:
-        raise FileNotFoundError(f"TestCase template not found: {testcase_ref}")
+def resolve_testcase_file(testcase_ref: str) -> Path:
+    """Resuelve un TestCase del body a su fichero real (normalmente en examples/).
 
-    testcase_name = f"testcase_{output_index + 1:03d}"
-    values = {
-        "ExecutionId": execution_id,
-        "execution_id": execution_id,
-        "testcase_name": testcase_name,
-        "testcase_ref": Path(testcase_ref).name,
-    }
-    rendered = render_with_ytt(values, str(template_path), category="ELCM")
+    Los TestCases NO se re-renderizan: se suben tal cual desde `examples/` para no
+    corromper el entrecomillado ni la indentación (ELCM es muy sensible a la
+    sintaxis). Fail-fast si el fichero no existe.
+    """
+    candidate = Path(testcase_ref)
+    if candidate.exists() and candidate.is_file():
+        return candidate.resolve()
 
-    output_path = _generated_dir(execution_id) / f"{testcase_name}.yml"
-    _save_text(output_path, rendered)
-    return str(output_path)
+    resolved = _resolve_examples_path(testcase_ref)
+    if resolved and Path(resolved).is_file():
+        return Path(resolved).resolve()
+
+    raise FileNotFoundError(f"TestCase file not found: {testcase_ref}")
+
+
+def extract_testcase_name(testcase_path: str) -> str:
+    """Devuelve el `Name:` interno de un TestCase V2 (ELCM los registra por Name).
+
+    El descriptor debe referenciar cada TestCase por su `Name:` interno, no por el
+    nombre de fichero: ELCM registra los TestCases V2 por ese campo. Fail-fast si
+    el fichero no es un TestCase válido o no declara `Name`.
+    """
+    path = Path(testcase_path)
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not data.get("Name"):
+        raise ValueError(f"TestCase '{path.name}' has no 'Name' field")
+    return str(data["Name"])
+
+
+def _find_task_config(node: Any, task_name: str) -> dict | None:
+    """Busca recursivamente el `Config` del primer task `task_name` en la estructura.
+
+    Recorre dicts y listas (p. ej. `Sequence` y los `Children` de Flow.Parallel/
+    Flow.Sequence) hasta dar con `{"Task": task_name, "Config": {...}}`.
+    """
+    if isinstance(node, dict):
+        if node.get("Task") == task_name and isinstance(node.get("Config"), dict):
+            return node["Config"]
+        for value in node.values():
+            found = _find_task_config(value, task_name)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for item in node:
+            found = _find_task_config(item, task_name)
+            if found is not None:
+                return found
+    return None
+
+
+def extract_capture_metrics(testcase_files: list[str]) -> tuple[str, list[str]] | None:
+    """Lee measurement + métricas del TestCase de captura del experimento.
+
+    Identifica la captura entre `testcase_files` (rutas ya resueltas a `examples/`)
+    por convención: el nombre de fichero contiene `_capture` y el TestCase incluye un
+    `Run.PrometheusToInflux`. Devuelve `(measurement, [métricas de nombre simple])`;
+    las queries con agregación (p. ej. `sum(rate(...))`) se descartan porque su `Field`
+    saneado no sirve para un panel Grafana. `None` si no hay captura válida.
+    """
+    for testcase_file in testcase_files:
+        path = Path(testcase_file)
+        if "_capture" not in path.name.lower():
+            continue
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            logger.debug("Skipping unparseable capture candidate %s: %s", path.name, exc)
+            continue
+
+        config = _find_task_config(data, "Run.PrometheusToInflux")
+        if not isinstance(config, dict):
+            continue
+
+        measurement = config.get("Measurement")
+        queries = config.get("QueriesRange") or []
+        metrics = [q for q in queries if isinstance(q, str) and re.fullmatch(r"[A-Za-z0-9_]+", q)]
+        if measurement and metrics:
+            return str(measurement), metrics
+    return None
 
 
 async def generate_experiment_descriptor(
@@ -153,7 +223,15 @@ async def generate_experiment_descriptor(
     testcase_paths: list[str],
     execution_id: str,
 ) -> str:
-    """Construye el descriptor JSON de ELCM con nombres lógicos de testcase."""
+    """Genera el Experiment Descriptor de ELCM para un experimento concreto.
+
+    Como el TN Descriptor, se genera por ejecución a partir de la plantilla base
+    (`templates/ELCM/template_experiment_descriptor.json`) rellenando la lista de
+    TestCases y UEs propia de este experimento (no se usa `ytt`, es JSON puro).
+    Se guarda junto al TN Descriptor, en artifacts/<id>/archivos_generados/, con
+    un nombre por experimento (`experiment_descriptor_<experimento>.json`) para
+    que varios experimentos sobre la misma TN no se pisen.
+    """
     template_path = resolve_template_path(
         "ELCM/template_experiment_descriptor.json", category="ELCM"
     )
@@ -164,12 +242,14 @@ async def generate_experiment_descriptor(
 
     payload = json.loads(template_path.read_text(encoding="utf-8"))
     payload["Application"] = experiment.name
-    payload["TestCases"] = [Path(path).stem for path in testcase_paths if path]
-    if experiment.ues_paths:
-        payload["UEs"] = experiment.ues_paths
+    # Referenciar cada TestCase por su Name interno (ELCM los registra por Name).
+    payload["TestCases"] = [extract_testcase_name(path) for path in testcase_paths if path]
+    payload["UEs"] = list(experiment.ues_paths)
 
-    output_path = _generated_dir(execution_id) / "experiment_descriptor.json"
+    filename = f"experiment_descriptor_{artifacts._sanitize_path_component(experiment.name)}.json"
+    output_path = _generated_dir(execution_id) / filename
     _save_text(output_path, json.dumps(payload, indent=4, ensure_ascii=False))
+    logger.info("[%s] Experiment descriptor generated: %s", execution_id, output_path)
     return str(output_path)
 
 
@@ -276,22 +356,14 @@ async def run_experiment(
     experiment: ExperimentConfig,
     elcm_base_url: str | None = None,
     execution_id: str | None = None,
-    exp_descriptor_path: str | None = None,
+    *,
+    exp_descriptor_path: str,
 ) -> str:
-    """Launch the experiment descriptor in ELCM and return execution_id."""
+    """Launch the experiment descriptor in ELCM and return execution_id.
 
-    # Prefer the migrated descriptor under templates/ELCM, with legacy fallback.
-    if not exp_descriptor_path:
-        resolved_template = resolve_template_path(
-            "ELCM/template_experiment_descriptor.json", category="ELCM"
-        )
-        if resolved_template:
-            exp_descriptor_path = str(resolved_template)
-        else:
-            exp_descriptor_path = _resolve_examples_path("Exp_Desc.json")
-    if not exp_descriptor_path:
-        raise ValueError("Experiment descriptor path could not be resolved")
-
+    El descriptor se genera por experimento (`generate_experiment_descriptor`) y
+    se pasa siempre de forma explícita: ya no hay fallback a `examples/`.
+    """
     exp_path = Path(exp_descriptor_path)
     if not exp_path.exists() or not exp_path.is_file():
         raise FileNotFoundError(f"Experiment descriptor not found: {exp_descriptor_path}")
@@ -474,3 +546,78 @@ async def collect_results(
                 collect_timer.stop(status=collect_status)
             except Exception:
                 pass
+
+
+class ElcmResultsNotFoundError(RuntimeError):
+    """Raised when ELCM has no results ZIP for the execution (HTTP 404)."""
+
+
+async def download_execution_results(
+    experiment_id: str,
+    dest_path: str,
+    elcm_base_url: str | None = None,
+    execution_id: str | None = None,
+) -> str:
+    """Descargar el ZIP de resultados de ELCM a `dest_path`.
+
+    GET {base}/elcm/api/v1/execution/{experiment_id}/results
+
+    El endpoint devuelve `{id}.zip` como adjunto (logs planos + ZIP interno con
+    el CSV, ver Compress.Zip flat=True en el backend). La red va con httpx async
+    y la escritura a disco se saca del event loop (§8.1).
+
+    Raises:
+        ElcmResultsNotFoundError: si ELCM responde 404 (sin resultados).
+        RuntimeError: para otros errores HTTP.
+    """
+    base_url = _resolve_elcm_url(elcm_base_url)
+    telemetry.increment_counter(
+        "requests_total", labels={"service": "elcm", "operation": "results"}
+    )
+    results_timer = telemetry.start_timer(
+        "elcm", "results", execution_id=telemetry.ensure_execution_id(execution_id or experiment_id)
+    )
+    results_timer.start()
+    results_status = "success"
+
+    dest = Path(dest_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    async with httpx.AsyncClient(timeout=ELCM_RESULTS_TIMEOUT) as client:
+        try:
+            response = await client.get(
+                f"{base_url}/elcm/api/v1/execution/{experiment_id}/results",
+                headers={"Accept": "*/*"},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            telemetry.increment_counter(
+                "errors_total",
+                labels={"service": "elcm", "operation": "results", "error_type": str(status_code)},
+            )
+            results_status = "error"
+            if status_code == 404:
+                raise ElcmResultsNotFoundError(
+                    f"ELCM has no results for execution {experiment_id} (HTTP 404)."
+                ) from exc
+            detail = _response_error_detail(exc.response)
+            raise RuntimeError(
+                f"ELCM results request failed for execution {experiment_id} "
+                f"(HTTP {status_code}). Backend error: {detail or 'unknown'}"
+            ) from exc
+        finally:
+            try:
+                results_timer.stop(status=results_status)
+            except Exception:
+                pass
+
+        content = response.content
+        await asyncio.to_thread(dest.write_bytes, content)
+        logger.info(
+            "ELCM results downloaded for execution %s: %s (%d bytes)",
+            experiment_id,
+            dest,
+            len(content),
+        )
+        return str(dest)

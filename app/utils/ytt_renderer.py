@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -73,6 +74,35 @@ def _repo_root() -> Path:
 
 def templates_root_dir() -> Path:
     return _repo_root() / "templates"
+
+
+def run_ytt_cli(files: list[Path], *, timeout: int = 60) -> str:
+    """Invoca el binario `ytt` con los ficheros dados y devuelve su stdout.
+
+    Home único para ejecutar ytt nativo (evita duplicar el manejo del
+    subproceso entre los generadores TNLCM y ELCM). Es SÍNCRONA a propósito:
+    quien la llame desde un `async def` debe envolverla en
+    `await asyncio.to_thread(run_ytt_cli, ...)` para no bloquear el event loop.
+
+    Raises:
+        RuntimeError: si el binario `ytt` no está en el PATH, si expira el
+            timeout o si ytt termina con código distinto de 0.
+    """
+    cmd = ["ytt"]
+    for f in files:
+        cmd.extend(["-f", str(f)])
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError as exc:
+        raise RuntimeError("YTT binary not found in PATH.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"YTT timed out after {timeout} seconds.") from exc
+
+    if result.returncode != 0:
+        raise RuntimeError(f"YTT failed with code {result.returncode}: {result.stderr}")
+
+    return result.stdout
 
 
 def _candidate_paths(template_ref: str, category: str | None = None) -> list[Path]:
