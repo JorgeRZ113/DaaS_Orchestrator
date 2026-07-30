@@ -37,7 +37,9 @@ async def test_run_elcm_phase_run_error_is_propagated_without_retry(monkeypatch,
     async def _fake_upload_test_cases(testcase_paths, elcm_base_url=None, execution_id=None):
         return None
 
-    async def _fake_run_experiment(experiment, elcm_base_url=None, execution_id=None):
+    async def _fake_run_experiment(
+        experiment, elcm_base_url=None, execution_id=None, exp_descriptor_path=None
+    ):
         call_count["run_experiment"] += 1
         raise RuntimeError(
             "ELCM /experiment/run (HTTP 400): descriptor invalido. "
@@ -96,7 +98,9 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
             "ELCM upload_test_case failed for TestCase_ping.yml (HTTP 400). Backend error: user_id ausente/invalido. Corrija lo indicado por el mensaje de error antes de volver a lanzar la parte de ELCM."
         )
 
-    async def _fake_run_experiment(experiment, elcm_base_url=None, execution_id=None):
+    async def _fake_run_experiment(
+        experiment, elcm_base_url=None, execution_id=None, exp_descriptor_path=None
+    ):
         call_count["run_experiment"] += 1
         return "exp-never-called"
 
@@ -146,7 +150,9 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
     async def _fake_upload_test_cases(testcase_paths, elcm_base_url=None, execution_id=None):
         return None
 
-    async def _fake_run_experiment(experiment, elcm_base_url=None, execution_id=None):
+    async def _fake_run_experiment(
+        experiment, elcm_base_url=None, execution_id=None, exp_descriptor_path=None
+    ):
         return "exp-404"
 
     async def _fake_get_experiment_status(experiment_id, elcm_base_url=None, execution_id=None):
@@ -157,7 +163,9 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
             "ELCM reports execution exp-404 as not found in logs. El experimento no se ha podido hacer y hay que repetirlo."
         )
 
-    async def _fake_build_artifacts(execution_id: str, tn_id: str, elcm_execution_id: str, results):
+    async def _fake_build_artifacts(
+        execution_id: str, tn_id: str, elcm_execution_id: str, results, experiment_name=None
+    ):
         return ["artifact-1"]
 
     async def _fake_destroy_trial_network(tn_id: str):

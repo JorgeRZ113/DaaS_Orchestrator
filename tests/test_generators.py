@@ -93,72 +93,40 @@ async def test_generate_tnlcm_descriptor_resolves_compound_ueransim_template():
 
 
 @pytest.mark.asyncio
-async def test_generate_testcase_and_experiment_descriptor(monkeypatch, tmp_path):
-    testcase_template = tmp_path / "TPL_Run_Message.yml"
-    testcase_template.write_text("testcase: demo\n", encoding="utf-8")
+async def test_experiment_descriptor_references_testcases_by_internal_name(tmp_path):
+    # Los TestCases se toman verbatim (no se re-renderizan) y el descriptor los
+    # referencia por su Name interno, no por el nombre de fichero.
+    tc_one = tmp_path / "TestCase_ping.yml"
+    tc_one.write_text("Version: 2\nName: Test_ping\nStandard: True\n", encoding="utf-8")
+    tc_two = tmp_path / "otro_fichero.yml"
+    tc_two.write_text("Version: 2\nName: TC_Custom\nStandard: True\n", encoding="utf-8")
 
-    experiment_template = tmp_path / "template_experiment_descriptor.json"
-    experiment_template.write_text("{}\n", encoding="utf-8")
-
-    def _resolve_template_path(template_ref: str, category: str | None = None):
-        if template_ref.endswith("template_experiment_descriptor.json"):
-            return experiment_template
-        return testcase_template
-
-    def _render_with_ytt(values, template_ref: str, category: str | None = None):
-        template_path = Path(template_ref)
-        if template_path.suffix == ".json":
-            return json.dumps(
-                {
-                    "Application": values["Application"],
-                    "TestCases": values["TestCases"],
-                    "UEs": values["UEs"],
-                },
-                indent=4,
-                ensure_ascii=False,
-            )
-
-        return yaml.safe_dump(
-            {
-                "execution_id": values["execution_id"],
-                "testcase_name": values["testcase_name"],
-                "testcase_ref": values["testcase_ref"],
-            },
-            sort_keys=False,
-            allow_unicode=True,
-        )
-
-    monkeypatch.setattr("app.elcm.resolve_template_path", _resolve_template_path)
-    monkeypatch.setattr("app.elcm.render_with_ytt", _render_with_ytt)
-
-    testcase_one = await elcm.generate_testcase(
-        "TPL_Run_Message.yml",
-        execution_id="exec-elcm",
-        output_index=0,
-    )
-    testcase_two = await elcm.generate_testcase(
-        "TPL_Run_Dummy.yml",
-        execution_id="exec-elcm",
-        output_index=1,
-    )
+    assert elcm.resolve_testcase_file(str(tc_one)) == tc_one.resolve()
+    assert elcm.extract_testcase_name(str(tc_one)) == "Test_ping"
 
     experiment_path = await elcm.generate_experiment_descriptor(
-        ExperimentConfig(
-            name="exp-demo", testcase_paths=["TPL_Run_Message.yml", "TPL_Run_Dummy.yml"]
-        ),
-        [testcase_one, testcase_two],
+        ExperimentConfig(name="exp-demo", testcase_paths=["a", "b"], ues_paths=["ue-1"]),
+        [str(tc_one), str(tc_two)],
         execution_id="exec-elcm",
     )
-
-    testcase_one_path = Path(testcase_one)
-    testcase_two_path = Path(testcase_two)
-    assert testcase_one_path.exists()
-    assert testcase_two_path.exists()
-    assert testcase_one_path.name == "testcase_001.yml"
-    assert testcase_two_path.name == "testcase_002.yml"
 
     experiment_file = Path(experiment_path)
     assert experiment_file.exists()
+    assert experiment_file.parent.name == "archivos_generados"
     payload = json.loads(experiment_file.read_text(encoding="utf-8"))
     assert payload["Application"] == "exp-demo"
-    assert payload["TestCases"] == ["testcase_001", "testcase_002"]
+    # Referencia por Name interno (no por stem de fichero).
+    assert payload["TestCases"] == ["Test_ping", "TC_Custom"]
+    assert payload["UEs"] == ["ue-1"]
+
+
+def test_resolve_testcase_file_missing_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        elcm.resolve_testcase_file(str(tmp_path / "no_existe.yml"))
+
+
+def test_extract_testcase_name_without_name_raises(tmp_path):
+    bad = tmp_path / "bad.yml"
+    bad.write_text("Version: 2\nSequence: []\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        elcm.extract_testcase_name(str(bad))

@@ -253,3 +253,48 @@ def test_extract_elcm_url_from_report_returns_none_when_component_missing() -> N
     }
 
     assert tnlcm.extract_elcm_url_from_report(report_summary) is None
+
+
+def test_summarize_is_resilient_to_level2_vnet_component_header() -> None:
+    # TNLCM emite el header del vnet como nivel 2 (##) mientras que el resto de
+    # componentes usan nivel 1 (#). El parser debe: (1) reconocer ese componente
+    # de nivel 2 como bloque propio en vez de fusionarlo con el elcm anterior, y
+    # (2) no clasificar el elcm como tn_init por el token "vxlan" del vnet. Antes
+    # ambos fallos hacían que elcm=None y el vnet se perdiera.
+    report_markdown = """
+# tn-demo-elcm-exp
+
+The component `tn-demo-elcm-exp` has been succesfully created.
+
+## Important information:
+
+- **VM network interfaces**:
+```json
+{"819": "192.168.199.3"}
+```
+
+## ELCM BACKEND
+
+The backend dashboard is available on port 5001.
+
+## tn-demo-vnet-n2
+
+The component `tn-demo-vnet-n2` has been succesfully created.
+
+## Important information:
+
+- **VXLAN subnet**: `10.10.10.0/24`
+- **VNET first IP**: `10.10.10.1`
+"""
+
+    summary = tnlcm.summarize_trial_network_report(report_markdown)
+
+    # El elcm se clasifica bien y su URL se resuelve.
+    assert summary["elcm"] is not None
+    assert summary["elcm"]["ip"] == "192.168.199.3"
+    assert tnlcm.extract_elcm_url_from_report(summary) == "http://192.168.199.3:5001"
+
+    # El vnet de nivel 2 se captura como componente propio (no se descarta ni se
+    # queda fusionado dentro del elcm).
+    assert "tn-demo-vnet-n2" in summary["components"]
+    assert summary["components"]["tn-demo-vnet-n2"]["extra_info"]["vxlan_subnet"] == "10.10.10.0/24"

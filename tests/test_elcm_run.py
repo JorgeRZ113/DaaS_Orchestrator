@@ -69,11 +69,11 @@ async def test_run_experiment_success_200_returns_execution_id(monkeypatch, tmp_
     fake_client = _FakeAsyncClient(_response(200, {"ExecutionId": 321}))
 
     monkeypatch.setattr(elcm.httpx, "AsyncClient", lambda timeout=None: fake_client)
-    monkeypatch.setattr(elcm, "_resolve_examples_path", lambda _: descriptor_path)
 
     execution_id = await elcm.run_experiment(
         ExperimentConfig(name="exp-ok"),
         elcm_base_url=ELCM_BASE_URL,
+        exp_descriptor_path=descriptor_path,
     )
 
     assert execution_id == "321"
@@ -99,12 +99,12 @@ async def test_run_experiment_400_does_not_retry_and_includes_backend_error_hint
     fake_client = _FakeAsyncClient(_response(400, {"message": backend_message}))
 
     monkeypatch.setattr(elcm.httpx, "AsyncClient", lambda timeout=None: fake_client)
-    monkeypatch.setattr(elcm, "_resolve_examples_path", lambda _: descriptor_path)
 
     with pytest.raises(RuntimeError) as exc_info:
         await elcm.run_experiment(
             ExperimentConfig(name="exp-fail"),
             elcm_base_url=ELCM_BASE_URL,
+            exp_descriptor_path=descriptor_path,
         )
 
     message = str(exc_info.value)
@@ -198,3 +198,38 @@ async def test_upload_test_cases_fails_without_retry_and_reports_backend_error(
     assert elcm.ELCM_UPLOAD_ERROR_HINT in message
     assert len(fake_client.post_calls) == 1
     assert fake_client.post_calls[0].endswith("/elcm/api/v1/facility/upload_test_case")
+
+
+@pytest.mark.asyncio
+async def test_download_execution_results_writes_zip(monkeypatch, tmp_path):
+    zip_bytes = b"PK\x03\x04fake-zip-content"
+    request = httpx.Request("GET", "http://elcm.local/elcm/api/v1/execution/9/results")
+    fake_client = _FakeGetClient(httpx.Response(200, content=zip_bytes, request=request))
+
+    monkeypatch.setattr(elcm.httpx, "AsyncClient", lambda timeout=None: fake_client)
+
+    dest = tmp_path / "result" / "csv_results_9.zip"
+    path = await elcm.download_execution_results(
+        "9", dest_path=str(dest), elcm_base_url=ELCM_BASE_URL
+    )
+
+    assert path == str(dest)
+    assert dest.read_bytes() == zip_bytes
+    assert len(fake_client.get_calls) == 1
+    assert fake_client.get_calls[0].endswith("/elcm/api/v1/execution/9/results")
+
+
+@pytest.mark.asyncio
+async def test_download_execution_results_404_raises_not_found(monkeypatch, tmp_path):
+    request = httpx.Request("GET", "http://elcm.local/elcm/api/v1/execution/9/results")
+    fake_client = _FakeGetClient(
+        httpx.Response(404, text="No results for execution 9", request=request)
+    )
+
+    monkeypatch.setattr(elcm.httpx, "AsyncClient", lambda timeout=None: fake_client)
+
+    dest = tmp_path / "result" / "csv_results_9.zip"
+    with pytest.raises(elcm.ElcmResultsNotFoundError):
+        await elcm.download_execution_results("9", dest_path=str(dest), elcm_base_url=ELCM_BASE_URL)
+
+    assert not dest.exists()

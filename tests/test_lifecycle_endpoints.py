@@ -98,6 +98,31 @@ def test_elcm_accepts_experiment_on_ready_tn(isolated_executions) -> None:
     assert isolated_executions == ["elcm:tn-a:exp-demo"]
 
 
+def test_elcm_stores_per_experiment_dataset(isolated_executions) -> None:
+    _add_record("tn-a", ExecutionState.tn_ready, tn_id="tn-a")
+    body = {
+        "experiment": {"name": "exp-ds", "testcase_paths": ["tc.yml"], "ues_paths": []},
+        "dataset": {"output": ["csv", "logs"]},
+    }
+
+    response = client.post("/executions/tn-a/elcm", json=body, headers=_headers())
+
+    assert response.status_code == 202
+    record = orchestrator.executions["tn-a"]
+    # La salida de datos pedida queda registrada en el experimento concreto.
+    assert record.experiments[0].dataset_output == ["csv", "logs"]
+
+
+def test_elcm_defaults_dataset_to_logs_when_omitted(isolated_executions) -> None:
+    _add_record("tn-a", ExecutionState.tn_ready, tn_id="tn-a")
+
+    response = client.post("/executions/tn-a/elcm", json=ELCM_BODY, headers=_headers())
+
+    assert response.status_code == 202
+    record = orchestrator.executions["tn-a"]
+    assert record.experiments[0].dataset_output == ["logs"]
+
+
 def test_elcm_rejects_duplicate_experiment_name(isolated_executions) -> None:
     _add_record(
         "tn-a",

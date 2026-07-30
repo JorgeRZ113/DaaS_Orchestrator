@@ -1,6 +1,6 @@
 from pydantic import ValidationError
 
-from app.models import DatasetDescriptor, ExecutionRecord, ExecutionState
+from app.models import DatasetDescriptor, DatasetRequest, ExecutionRecord, ExecutionState
 from app.utils.ytt_renderer import build_tnlcm_values, resolve_template_path
 
 
@@ -10,7 +10,8 @@ def test_dataset_descriptor_uses_logs_as_default_output() -> None:
         experiment={"name": "exp-demo", "testcase_paths": ["TestCase_ping.yml"]},
     )
 
-    assert descriptor.dataset.output == "logs"
+    assert descriptor.dataset.output == ["logs"]
+    assert descriptor.dataset.wants("logs")
     assert descriptor.experiment.testcase_paths == ["TestCase_ping.yml"]
 
 
@@ -137,8 +138,47 @@ def test_dataset_descriptor_rejects_unsupported_output() -> None:
         pass
 
 
+def test_dataset_output_accepts_single_string() -> None:
+    dataset = DatasetRequest(output="csv")
+    assert dataset.output == ["csv"]
+    assert dataset.wants("csv")
+    assert not dataset.wants("logs")
+
+
+def test_dataset_output_accepts_list_and_dedups_preserving_order() -> None:
+    dataset = DatasetRequest(output=["csv", "logs", "csv", "raw"])
+    assert dataset.output == ["csv", "logs", "raw"]
+
+
+def test_dataset_output_is_case_insensitive_and_trimmed() -> None:
+    dataset = DatasetRequest(output=[" LOGS ", "Dashboard"])
+    assert dataset.output == ["logs", "dashboard"]
+
+
+def test_dataset_output_accepts_all_four_formats() -> None:
+    dataset = DatasetRequest(output=["logs", "csv", "dashboard", "raw"])
+    assert dataset.output == ["logs", "csv", "dashboard", "raw"]
+
+
+def test_dataset_output_rejects_unknown_value_in_list() -> None:
+    try:
+        DatasetRequest(output=["logs", "zip"])
+        raise AssertionError("DatasetRequest should reject unknown output values")
+    except ValidationError:
+        pass
+
+
+def test_dataset_output_rejects_empty_list() -> None:
+    try:
+        DatasetRequest(output=[])
+        raise AssertionError("DatasetRequest should reject an empty output list")
+    except ValidationError:
+        pass
+
+
 def test_execution_record_default_lists_are_initialized() -> None:
     record = ExecutionRecord(execution_id="exec-1", status=ExecutionState.pending)
 
     assert record.experiment_ids == []
     assert record.artifacts == []
+    assert record.dataset_output == ["logs"]

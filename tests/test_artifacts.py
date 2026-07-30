@@ -3,6 +3,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from app import artifacts
 from app.config import settings
 from app.utils.telemetry import telemetry
@@ -31,6 +33,10 @@ def test_build_artifacts_generates_logs_and_metadata(tmp_path) -> None:
         settings.artifacts_dir = previous_dir
 
     assert len(output_paths) == 2
+
+    # Las respuestas del dataset se guardan ahora en artifacts/<id>/result/.
+    assert Path(output_paths[0]).parent.name == "result"
+    assert Path(output_paths[1]).parent.name == "result"
 
     metadata = json.loads(Path(output_paths[0]).read_text(encoding="utf-8"))
     logs = json.loads(Path(output_paths[1]).read_text(encoding="utf-8"))
@@ -83,6 +89,48 @@ def test_build_tnlcm_report_files_are_created(tmp_path) -> None:
     assert "summary" in summary
     assert summary["summary"]["private_ssh_key"] == "PRIVATE"
     assert "alpha" in summary["summary"]["components"]
+
+
+def test_load_monitoring_info_from_summary(tmp_path) -> None:
+    previous_dir = settings.artifacts_dir
+    settings.artifacts_dir = str(tmp_path)
+
+    try:
+        asyncio.run(
+            artifacts.build_tnlcm_summary_artifact(
+                execution_id="exec-mon",
+                tn_id="tn-demo",
+                report_summary={
+                    "monitoring": {
+                        "ip": "192.168.199.2",
+                        "ports": [8086, 3000, 9090],
+                        "credentials": {
+                            "token": "default-token-testing",
+                            "organization": "testing",
+                            "bucket": "testing",
+                        },
+                    },
+                },
+            )
+        )
+        monitoring = artifacts.load_monitoring_info("exec-mon")
+    finally:
+        settings.artifacts_dir = previous_dir
+
+    assert monitoring["ip"] == "192.168.199.2"
+    assert monitoring["ports"] == [8086, 3000, 9090]
+    assert monitoring["credentials"]["token"] == "default-token-testing"
+
+
+def test_load_tnlcm_report_summary_missing_raises(tmp_path) -> None:
+    previous_dir = settings.artifacts_dir
+    settings.artifacts_dir = str(tmp_path)
+
+    try:
+        with pytest.raises(FileNotFoundError):
+            artifacts.load_tnlcm_report_summary("does-not-exist")
+    finally:
+        settings.artifacts_dir = previous_dir
 
 
 def test_build_telemetry_report_artifact_is_created(tmp_path) -> None:
