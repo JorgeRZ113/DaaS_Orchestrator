@@ -1,0 +1,16 @@
+#! Overlay para `prometheus_to_grafana_dashboard.yaml`
+#! TestCase de visualizacion: dashboard Grafana con paneles GENERADOS (uno por metrica).
+#!
+#! `measurement` y `metrics` son placeholders: el generador los SOBRESCRIBE en runtime
+#! con un overlay #@data/values extra, leyendo el TestCase de captura (*_capture*) del
+#! experimento. Sin inyeccion, metrics=[] -> Dashboard vacio (valido).
+
+#@data/values
+---
+dataset:
+  name: "TC_Dataset_PrometheusToGrafana"
+  measurement: ""       #! lo inyecta el generador con el Measurement de la captura
+  interval: "5s"
+  metrics: []           #! lo inyecta el generador con las metricas simples de la captura
+  parameters: {}
+  kpis: {}

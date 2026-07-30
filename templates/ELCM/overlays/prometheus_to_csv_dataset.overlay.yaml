@@ -1,0 +1,19 @@
+#! Overlay para `prometheus_to_csv_dataset.yaml`
+#! TestCase de entrega de datos: Prometheus -> InfluxDB -> CSV -> ZIP
+#!
+#! Valores validados contra el despliegue de laboratorio (ejecucion 8, OK).
+#! El generador rellena estos campos a partir del DataDescriptor y de los
+#! componentes presentes en la Trial Network.
+
+#@data/values
+---
+dataset:
+  name: "TC_Dataset_PrometheusToCsv"
+
+  influx:
+    host: "192.168.199.2"
+    port: 8086
+
+  csv:
+    output: "@{TempFolder}/dataset_@{ExecutionId}.zip"
+    source: "@{TempFolder}/csv_query_@{ExecutionId}.csv"

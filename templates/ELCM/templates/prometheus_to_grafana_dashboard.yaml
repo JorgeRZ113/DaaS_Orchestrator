@@ -1,0 +1,62 @@
+#! Template YTT: TestCase ELCM "grafana" (Prometheus -> InfluxDB -> Dashboard)
+#!
+#! Genera un TestCase v2 que captura metricas de Prometheus a InfluxDB y declara
+#! una seccion `Dashboard:` con paneles. Al terminar la ejecucion, ELCM crea
+#! automaticamente un dashboard Grafana con uid "Run<ExecutionId>", rango
+#! temporal ajustado al experimento (±1 min), y estos paneles.
+#!
+#! Estructura del TestCase generado (la captura Prometheus->InfluxDB es EXTERNA: un
+#! TestCase aparte *_capture* que corre ANTES que este en el experimento):
+#!   Sequence vacia + seccion Dashboard GENERADA (un panel por metrica). La lista de
+#!   metricas y el measurement se INYECTAN como data values (data.values.dataset.
+#!   metrics / .measurement), leidos del TestCase de captura del experimento.
+#!   (No hay InfluxToCsv/CompressFiles: esta variante es de visualizacion. Para CSV
+#!    usar `prometheus_to_csv_dataset.yaml`.)
+#!
+#! Requisitos de despliegue (validados en laboratorio, ejecucion OK):
+#!   - Seccion Grafana habilitada en la config del backend ELCM (Enabled/Host/
+#!     Port/Bearer). ELCM hace POST a {Grafana.Host}:{Port}/api/dashboards/db.
+#!   - InfluxDB como datasource POR DEFECTO en Grafana: los paneles que genera
+#!     ELCM no especifican datasource y su query interna es Flux contra el bucket
+#!     del backend, filtrando por el tag ExecutionId. Leen de InfluxDB, NO de
+#!     Prometheus.
+#!
+#! Reglas validadas contra el backend ELCM:
+#!   - El "Field" de cada panel debe COINCIDIR con la query saneada (\W+ -> "_").
+#!     Por eso aqui las queries son nombres de metrica simples (sin PromQL con
+#!     agregaciones): una query como 'sum(rate(...))' generaria un Field ilegible
+#!     que ningun panel podria referenciar. Las metricas multi-serie no encajan
+#!     en este flujo de visualizacion.
+#!   - "@{...}" es sintaxis del Expander de ELCM, no de ytt: se emite literal.
+#!   - Grafana 11.6 migra los tipos legacy graph/singlestat a timeseries/stat
+#!     automaticamente al abrir el dashboard.
+#!   - Rejilla Grafana: 24 columnas. Size: [alto, ancho], Position: [x, y].
+#!   - Cada panel del overlay debe llevar Measurement == dataset.measurement.
+
+#@ load("@ytt:data", "data")
+
+#! Genera un panel Graph por metrica (data.values.dataset.metrics). Rejilla de 24
+#! columnas en 2 columnas (ancho 12, alto 8): x=(i%2)*12, y=(i//2)*8. El Field de
+#! cada panel coincide con el nombre de la metrica (query saneada).
+#@ def panels():
+#@   res = []
+#@   for i in range(len(data.values.dataset.metrics)):
+#@     name = data.values.dataset.metrics[i]
+#@     res.append({"Name": name, "Measurement": data.values.dataset.measurement, "Field": name, "Type": "Graph", "Interval": data.values.dataset.interval, "Unit": "short", "Size": [8, 12], "Position": [(i % 2) * 12, (i // 2) * 8], "Lines": True, "Percentage": False})
+#@   end
+#@   return res
+#@ end
+---
+Version: 2
+Name: #@ data.values.dataset.name
+#! La captura Prometheus->InfluxDB es un TestCase aparte (*_capture*) que se anade al
+#! experimento ANTES que este. Aqui NO hay tasks (Sequence vacia); solo la seccion
+#! Dashboard, generada dinamicamente (un panel por metrica). El measurement y las
+#! metricas se inyectan como data values leidos de esa captura.
+Sequence: []
+
+Standard: true
+Distributed: false
+Parameters: #@ data.values.dataset.parameters
+KPIs: #@ data.values.dataset.kpis
+Dashboard: #@ panels()

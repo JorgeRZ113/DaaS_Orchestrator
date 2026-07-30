@@ -1,0 +1,36 @@
+#! Template YTT: TestCase ELCM "dataset" (Prometheus -> InfluxDB -> CSV -> ZIP)
+#!
+#! Genera un TestCase v2 completo que la herramienta anade al experimento del
+#! usuario para garantizar la entrega de datos, independientemente de lo que
+#! el experimentador haya definido en sus propios TestCases.
+#!
+
+#@ load("@ytt:data", "data")
+---
+Version: 2
+Name: #@ data.values.dataset.name
+Sequence:
+  - Order: 102
+    Task: "Run.InfluxToCsv"
+    Config:
+      IdCsv: "@{ExecutionId}"
+      Host: #@ data.values.dataset.influx.host
+      Port: #@ data.values.dataset.influx.port
+      CustomQuery: "from(bucket: \"testing\") |> range(start: 0) |> filter(fn: (r) => r[\"_measurement\"] == \"OPEN5GS_KPIS\") |> filter(fn: (r) => r[\"ExecutionId\"] == \"@{ExecutionId}\") |> pivot(rowKey:[\"_time\"], columnKey:[\"_field\"], valueColumn:\"_value\") |> group()"
+
+  #! OBLIGATORIA: Run.InfluxToCsv escribe el CSV en el TempFolder pero NO lo
+  #! registra en GeneratedFiles. Esta task hace ese registro (append a
+  #! GeneratedFiles), que es lo que ELCM copia a Results/<id>.zip ANTES de
+  #! limpiar el TempFolder. Sin ella, el CSV se pierde y no aparece en
+  #! GET /execution/{id}/results. La compresion es un efecto colateral.
+  - Order: 103
+    Task: "Run.CompressFiles"
+    Config:
+      Output: #@ data.values.dataset.csv.output
+      Files:
+        - Source: #@ data.values.dataset.csv.source
+
+Standard: true
+Distributed: false
+Parameters: {}
+KPIs: {}
