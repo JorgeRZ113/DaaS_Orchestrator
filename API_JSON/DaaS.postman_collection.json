@@ -90,7 +90,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn_deveop_20_3\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"adminadmin\"\n      }\n    },\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"fix/uma-test-raul-oneke-onevm-path\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  },\n  \"auto_start_elcm\": true,\n  \"ephemeral_tn\": false\n}",
+              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn_deveop_20_3\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"adminadmin\"\n      }\n    },\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"fix/uma-test-raul-oneke-onevm-path\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": [\n      \"logs\",\n      \"csv\",\n      \"dashboard\",\n      \"raw\"\n    ]\n  },\n  \"auto_start_elcm\": true,\n  \"ephemeral_tn\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -106,7 +106,7 @@
                 "executions"
               ]
             },
-            "description": "Despliega la Trial Network (TNLCM + VPN). El comportamiento posterior depende de dos flags:\n\n• auto_start_elcm (default true): si true, lanza automáticamente el 1er experimento definido en \"experiment\". Si false, la TN queda en TN_READY esperando llamadas manuales a /elcm y \"experiment\" es opcional.\n\n• ephemeral_tn (default false): SOLO aplica con auto_start_elcm=true. Si true, la TN es de un solo uso y se borra automáticamente tras el 1er experimento. Si false (habitual), la TN se queda viva para recibir más experimentos. Se IGNORA cuando auto_start_elcm=false.\n\n⚠️ Ya NO hay borrado automático por defecto: la TN persiste hasta un DELETE /executions/{id}/tn (o el borrado del modo efímero)."
+            "description": "Despliega la Trial Network (TNLCM + VPN). El comportamiento posterior depende de dos flags:\n\n• auto_start_elcm (default true): si true, lanza automáticamente el 1er experimento definido en \"experiment\". Si false, la TN queda en TN_READY esperando llamadas manuales a /elcm y \"experiment\" es opcional.\n\n• ephemeral_tn (default false): SOLO aplica con auto_start_elcm=true. Si true, la TN es de un solo uso y se borra automáticamente tras el 1er experimento. Si false (habitual), la TN se queda viva para recibir más experimentos. Se IGNORA cuando auto_start_elcm=false.\n\n⚠️ Ya NO hay borrado automático por defecto: la TN persiste hasta un DELETE /executions/{id}/tn (o el borrado del modo efímero).\n\n📦 dataset.output — formato(s) de entrega. Acepta un único nombre o una lista combinable, p. ej. [logs, csv]:\n• logs → logs del experimento ELCM (result/logs.json + metadata.json)\n• csv → inyecta un TestCase y descarga+extrae el ZIP de resultados de ELCM (result/csv_query_<id>.csv)\n• dashboard → inyecta un TestCase de Grafana y entrega la URL del dashboard (result/dashboard.json)\n• raw → consulta InfluxDB directamente vía Flux, un CSV por measurement (result/raw_<measurement>.csv)\nTodas las salidas del dataset se guardan en artifacts/<execution_id>/result/<experimento>/ (una subcarpeta por experimento). El campo dataset también puede enviarse por experimento en POST /executions/{id}/elcm."
           },
           "response": []
         },
@@ -128,7 +128,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  }\n}",
+              "raw": "{\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": [\n      \"logs\"\n    ]\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -146,7 +146,7 @@
                 "elcm"
               ]
             },
-            "description": "🧪 INYECTAR UN EXPERIMENTO sobre la TN viva\n\nLanza un experimento ELCM sobre la Trial Network ya desplegada. Se puede llamar tantas veces como experimentos quieras ejecutar (uno a la vez). La TN NO se borra al terminar: vuelve a TN_READY.\n\n📥 Body:\n{\n  \"experiment\": {\n    \"name\": \"exp-demo\",          // ⚠️ ÚNICO por TN (no repetir nombres)\n    \"testcase_paths\": [\"TestCase_ping.yml\"],\n    \"ues_paths\": []\n  }\n}\n\n📋 Qué hace automáticamente:\n1. Sube los test cases a ELCM\n2. Lanza el experimento\n3. Polling cada 10s hasta \"Finished\" (timeout 1h)\n4. Recoge logs y genera artefactos en ./artifacts/{id}/\n5. Vuelve a TN_READY (la TN sigue viva)\n\n🔢 Respuestas:\n• 202 Accepted → experimento aceptado y en marcha\n• 404 Not Found → el execution_id no existe\n• 409 Conflict → ya hay un experimento en curso, la TN no está lista (TN_READY), o el nombre de experimento ya se usó en esta TN"
+            "description": "🧪 INYECTAR UN EXPERIMENTO sobre la TN viva\n\nLanza un experimento ELCM sobre la Trial Network ya desplegada. Se puede llamar tantas veces como experimentos quieras ejecutar (uno a la vez). La TN NO se borra al terminar: vuelve a TN_READY.\n\n📥 Body:\n{\n  \"experiment\": {\n    \"name\": \"exp-demo\",          // ⚠️ ÚNICO por TN (no repetir nombres)\n    \"testcase_paths\": [\"TestCase_ping.yml\"],\n    \"ues_paths\": []\n  },\n  \"dataset\": {                    // opcional; por defecto [\"logs\"]\n    \"output\": [\"logs\"]           // logs | csv | dashboard | raw (combinables)\n  }\n}\n\n📦 dataset POR EXPERIMENTO: cada llamada puede pedir una salida de datos distinta. Las respuestas se guardan en artifacts/{id}/result/<experimento>/ (una subcarpeta por nombre de experimento).\n\n📋 Qué hace automáticamente:\n1. Genera el Experiment Descriptor (UEs + TestCases del body) en artifacts/{id}/archivos_generados/ (junto al TN Descriptor)\n2. Sube los test cases a ELCM (se toman de examples/)\n3. Lanza el experimento\n4. Polling cada 10s hasta \"Finished\" (timeout 1h)\n5. Recoge el dataset pedido en artifacts/{id}/result/<experimento>/\n6. Vuelve a TN_READY (la TN sigue viva)\n\n🔢 Respuestas:\n• 202 Accepted → experimento aceptado y en marcha\n• 404 Not Found → el execution_id no existe\n• 409 Conflict → ya hay un experimento en curso, la TN no está lista (TN_READY), o el nombre de experimento ya se usó en esta TN"
           },
           "response": []
         },

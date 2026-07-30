@@ -70,7 +70,7 @@ LOG_LEVEL=INFO
 TELEMETRY_REPORT_ARTIFACTS=true
 ```
 
-Nota: la ventana máxima para disparar `POST /executions/{execution_id}/elcm` tras completar TNLCM se define como constante interna en `app/orchestrator.py` (`ELCM_START_TIMEOUT_SECONDS`). Si se supera, el orquestador cancela la ejecución y ejecuta `destroy/purge` automático. **Con `auto_start_elcm=true` (defecto), esto no es un problema ya que ELCM se dispara automáticamente.**
+Nota: los tiempos de ELCM se definen como constantes internas en `app/orchestrator.py`: `ELCM_POLL_INTERVAL_SECONDS` (sondeo de estado) y `ELCM_EXECUTION_TIMEOUT_SECONDS` (timeout del experimento). La TN **no** se destruye por defecto al terminar: queda viva (`TN_READY`) hasta un `DELETE /executions/{id}/tn` o, si `ephemeral_tn=true`, tras el primer experimento.
 
 ## Estructura de Archivos Clave
 
@@ -79,11 +79,16 @@ Nota: la ventana máxima para disparar `POST /executions/{execution_id}/elcm` tr
 | `templates/TNLCM/` | Templates renderizables con `ytt` para TNLCM. Base: `base_tnlcm_descriptor.yaml`; componentes: `<nombre>_sample_tnlcm_descriptor.yaml` |
 | `templates/TNLCM/overlays/` | Overlays TNLCM que definen campos editables por template |
 | `templates/ELCM/TestCase/` | Fragmentos y bases de TestCase para experimentos |
-| `templates/ELCM/template_experiment_descriptor.json` | Descriptor base para `/experiment/run` dentro de ELCM |
-| `app/utils/component_contract.py` | **NUEVO**: Extractor centralizado para normalizar y validar `component.<template>.<field>` |
-| `app/orchestrator.py` | Orquestador principal: TNLCM + ELCM + WireGuard automático |
-| `app/generators.py` | Generadores de descriptores TNLCM y ELCM con `ytt` |
-| `app/artifacts.py` | Persistencia de ejecuciones y artefactos |
+| `templates/ELCM/templates/` + `templates/ELCM/overlays/` | TestCases de dataset renderizables con `ytt`: `prometheus_to_csv_dataset` (salida `csv`) y `prometheus_to_grafana_dashboard` (salida `dashboard`) |
+| `templates/ELCM/template_experiment_descriptor.json` | Plantilla base del Experiment Descriptor; se rellena por experimento (UEs + TestCases) y se genera en `artifacts/<id>/archivos_generados/` |
+| `app/main.py` | App FastAPI y definición de endpoints |
+| `app/orchestrator.py` | Orquestador principal: fases TNLCM + ELCM, ciclo de vida de la TN y recolección del dataset |
+| `app/tnlcm.py` / `app/elcm.py` | Adaptadores HTTP a TNLCM y ELCM |
+| `app/health.py` | Health de servicios (`/health/services`) y componentes (`/health/components`) |
+| `app/generators/` | Generadores con `ytt`: `tnlcm_overlay.py`, `tnlcm_renderer.py` (descriptor TNLCM) y `elcm_dataset.py` (TestCases de dataset csv/dashboard) |
+| `app/artifacts.py` | Persistencia de ejecuciones y artefactos (incluye carpeta `result/`) |
+| `app/utils/` | Utilidades: `ytt_renderer.py`, `custom_yaml.py`, `component_contract.py`, `results_bundle.py` (extrae el CSV del ZIP de resultados), `influx_raw.py` (consulta cruda a InfluxDB), `telemetry.py`, `wireguard.py` |
+| `artifacts/<execution_id>/` | Artefactos de la ejecución: descriptor, reportes TNLCM, `<tn_id>.conf` y `result/` con las salidas del dataset |
 | `examples/` | Ejemplos de payloads y casos de uso |
 
 **Nota importante**: En descriptores de experimento, `TestCases` debe contener nombres lógicos (ej. `testcase_001`), no rutas absolutas.
@@ -96,20 +101,26 @@ Header requerido para endpoints de ejecucion:
 
 | Metodo | Endpoint | Auth | Body | Para que sirve |
 |---|---|---|---|---|
-| `GET` | `/health` | No | No | Verificar servicio |
+| `GET` | `/health/services` | No | No | Liveness del orquestador (DaaS) y de TNLCM |
+| `GET` | `/health/components` | Si | No | Health HTTP de InfluxDB/Grafana/Prometheus/ELCM |
 | `POST` | `/refresh` | Si | No | Recarga en caliente variables mutables de `.env` |
 | `POST` | `/register` | No | No (query params) | Registra usuario en TNLCM y devuelve access/refresh token |
 | `POST` | `/executions` | Si | Si | **[UNIFICADO]** Ejecuta TNLCM + ELCM automático (o solo TNLCM si `auto_start_elcm=false`) |
 | `POST` | `/login` | Si | No | Hacer login TNLCM con `.env` y guardar el token en memoria |
-| `POST` | `/executions/{execution_id}/elcm` | Si | No | Disparar ELCM manualmente (para `auto_start_elcm=false`) |
+| `POST` | `/executions/{execution_id}/elcm` | Si | Si (`experiment` + `dataset`) | Lanza un experimento sobre la TN viva (repetible, nombre único, salida de datos por experimento) |
+| `DELETE` | `/executions/{execution_id}/tn` | Si | No | Borrado manual de la TN (deleted + purged) |
 | `GET` | `/executions/{execution_id}` | Si | No | Estado resumido |
 | `GET` | `/executions/{execution_id}/detail` | Si | No | Estado detallado + artefactos |
 
 ## Endpoints actuales (detalle)
 
-### `GET /health`
+### `GET /health/services`
 - Sin autenticacion.
-- Respuesta: estado general del servicio.
+- Liveness del propio orquestador (DaaS) y de TNLCM. `status`: `ok` | `fallen` (solo un error de conexión/timeout marca TNLCM caído).
+
+### `GET /health/components`
+- Requiere header `x-api-key`.
+- Health HTTP de los servicios fijos monitorizables (InfluxDB, Grafana, Prometheus, ELCM), según el diccionario estático de `app/health.py`.
 
 ### `POST /executions` (UNIFICADO)
 
@@ -118,7 +129,8 @@ Header requerido para endpoints de ejecucion:
 - Si `auto_start_elcm=true` (defecto), ejecuta ELCM automáticamente al completar TNLCM.
 - Si `auto_start_elcm=false`, solo ejecuta TNLCM y requiere llamar a `POST /executions/{execution_id}/elcm` manualmente.
 - Devuelve `execution_id`, `status`, `message`.
-- Ver `docs/UNIFIED_EXECUTIONS_API.md` y `examples/EXECUTIONS_EXAMPLES.md` para detalles y ejemplos.
+- `dataset.output` define el/los formato(s) de entrega (ver sección "Campo `dataset.output`").
+- Ver la colección Postman `API_JSON/DaaS.postman_collection.json` y la sección "Ciclo de vida de la TN" para el detalle del flujo.
 
 ### `POST /refresh`
 - Recarga sin reinicio solo configuracion mutable en memoria del proceso actual.
@@ -141,9 +153,17 @@ Header requerido para endpoints de ejecucion:
 - No requiere body.
 
 ### `POST /executions/{execution_id}/elcm`
-- Inicia fase ELCM sobre una ejecucion existente.
-- Requiere TNLCM completado.
-- La VPN WireGuard se activa automaticamente al finalizar TNLCM y se desactiva en el cleanup de ELCM.
+- Lanza un experimento ELCM sobre la Trial Network ya desplegada y **viva** (estado `TN_READY`).
+- Body: `{"experiment": {"name": "...", "testcase_paths": [...], "ues_paths": [...]}, "dataset": {"output": [...]}}`.
+- **`dataset` por experimento**: cada llamada puede pedir una salida de datos distinta (`logs`/`csv`/`dashboard`/`raw`). Si se omite, por defecto `logs`. Las respuestas se guardan en `artifacts/<execution_id>/result/<experimento>/` (una subcarpeta por nombre de experimento).
+- **Experiment Descriptor generado**: la lista de UEs y TestCases se rellena a partir del `experiment` y el descriptor se genera por ejecución (JSON, sin `ytt`), guardándose junto al TN Descriptor en `artifacts/<execution_id>/archivos_generados/experiment_descriptor_<experimento>.json`. Los ficheros de TestCases se siguen tomando de `examples/`.
+- Repetible tantas veces como experimentos quieras (uno a la vez); cada experimento debe tener un **nombre único** dentro de la TN.
+- Respuestas: `202` aceptado; `404` la ejecución no existe; `409` hay un experimento en curso, la TN no está lista o el nombre está repetido.
+
+### `DELETE /executions/{execution_id}/tn`
+- Borrado manual de la Trial Network (deleted + purged) cuando tú decidas.
+- Baja el túnel WireGuard y ejecuta destroy + purge en TNLCM.
+- Respuestas: `202` borrado lanzado; `404` no existe o no tiene TN; `409` hay un experimento en curso o el borrado ya se lanzó/completó.
 
 ### `GET /executions/{execution_id}`
 - Devuelve estado resumido de ejecucion.
@@ -207,7 +227,7 @@ El formato canónico es: `component.<template>.<field> = value`
     "ues_paths": []
   },
   "dataset": {
-    "output": "logs"
+    "output": ["logs", "csv", "dashboard", "raw"]
   },
   "auto_start_elcm": true
 }
@@ -279,7 +299,34 @@ Durante `POST /executions`:
 - `true` (defecto): Ejecuta automáticamente TNLCM + ELCM secuencial
 - `false`: Solo ejecuta TNLCM, requiere llamar manualmente a `POST /executions/{execution_id}/elcm`
 
+### Campo `dataset.output`
+
+Formato(s) de entrega del dataset. Acepta un **único nombre** (`"logs"`) o una **lista** combinable (`["logs", "csv", "dashboard", "raw"]`). Las respuestas se guardan en `artifacts/<execution_id>/result/<experimento>/`, una subcarpeta por experimento.
+
+`dataset` es **por experimento**: aparece tanto en el body de `POST /executions` (define la salida del primer experimento auto-arrancado) como en el body de `POST /executions/{id}/elcm` (define la salida de ese experimento concreto). Como una misma TN puede lanzar varios experimentos con salidas distintas, cada uno escribe en su propia subcarpeta `result/<experimento>/`.
+
+| Valor | Qué hace | Salida en `result/<experimento>/` |
+|-------|----------|-----------------------------------|
+| `logs` | Recolecta los logs del experimento ELCM | `logs.json` + `metadata.json` |
+| `csv` | Inyecta un TestCase que genera un CSV; descarga y extrae el ZIP de resultados de ELCM | `csv_query_<id>.csv` |
+| `dashboard` | Inyecta un TestCase de Grafana; ELCM crea el dashboard (uid `Run<id>`) y se entrega su URL | `dashboard.json` |
+| `raw` | Consulta InfluxDB directamente (Flux, sin TestCase) volcando cada measurement | `raw_<measurement>.csv` |
+
+- `csv` y `dashboard` **inyectan** su TestCase en el experimento (upload + descriptor) para que ELCM lo ejecute.
+- `raw` **no** inyecta: replica la interfaz east/west consultando InfluxDB con el token del report TNLCM (nunca se persiste).
+- Compatibilidad: el string suelto (`"output": "logs"`) se sigue aceptando y se normaliza a lista.
+
 ## Flujo de uso recomendado
+
+### Ciclo de vida de la TN y estados
+
+La Trial Network se queda **viva por defecto** para aceptar varios experimentos. Comportamiento según los flags del `DataDescriptor`:
+
+- `auto_start_elcm=false` → despliega y se queda en `TN_READY`. No borra nada; espera llamadas manuales a `/elcm`. (`ephemeral_tn` se ignora.)
+- `auto_start_elcm=true` + `ephemeral_tn=false` (habitual) → despliega, lanza el 1er experimento y vuelve a `TN_READY`. Acepta más `/elcm` o el borrado manual.
+- `auto_start_elcm=true` + `ephemeral_tn=true` (un solo uso) → despliega, lanza el 1er experimento y borra la TN automáticamente.
+
+Estados: `PENDING → VALIDATING → DEPLOYING → TN_READY ⇄ RUNNING_EXPERIMENT / COLLECTING → DESTROYING → DESTROYED` (o `FAILED`). El borrado manual se dispara con `DELETE /executions/{id}/tn`.
 
 ### Opción 1: Automático (Recomendado)
 
@@ -289,7 +336,7 @@ Con VPN automática ya solucionada, la forma más sencilla es:
 1. POST /login  (opcional pero recomendado)
 2. POST /executions con auto_start_elcm=true (defecto)
 3. GET /executions/{execution_id} para monitorear
-4. ✓ TNLCM + ELCM automático secuencial
+4. ✓ TNLCM + 1er experimento ELCM; la TN queda viva en TN_READY (salvo ephemeral_tn=true)
 ```
 
 **Ventajas:**
@@ -304,9 +351,10 @@ Si necesitas control granular:
 ```
 1. POST /login  (opcional pero recomendado)
 2. POST /executions con auto_start_elcm=false
-3. GET /executions/{execution_id} hasta COMPLETED (TNLCM)
-4. POST /executions/{execution_id}/elcm  (disparar ELCM)
-5. GET /executions/{execution_id} hasta COMPLETED (ELCM)
+3. GET /executions/{execution_id} hasta TN_READY
+4. POST /executions/{execution_id}/elcm con {"experiment": {...}, "dataset": {...}}  (repetible, nombre único, salida por experimento)
+5. GET /executions/{execution_id} hasta que vuelva a TN_READY
+6. DELETE /executions/{execution_id}/tn  (borrado manual cuando termines)
 ```
 
 **Ventajas:**
@@ -327,10 +375,10 @@ Si necesitas control granular:
 2. Sistema descarga el reporte TNLCM y guarda la interfaz WireGuard en `ARTIFACTS_DIR/<execution_id>/<tn_id>.conf`.
 3. Sistema activa automáticamente el túnel WireGuard usando `tn_id` como nombre de túnel.
 4. **Al completar TNLCM exitosamente:** Sistema dispara automáticamente ELCM (si `auto_start_elcm=true`)
-5. ELCM: upload testcases → run experiment → collect logs
-6. En cleanup de ELCM se desactiva obligatoriamente el túnel WireGuard.
-7. Se destruye la TN.
-8. Ejecución completada.
+5. ELCM: genera el Experiment Descriptor → upload testcases (+ TestCases de dataset csv/dashboard) → run experiment → collect dataset (logs/csv/dashboard/raw) en `result/<experimento>/`
+6. Al terminar el experimento la TN vuelve a `TN_READY` (sigue viva y con el túnel WireGuard activo): puedes lanzar más `POST /executions/{id}/elcm`.
+7. Si `ephemeral_tn=true`, tras ese primer experimento se baja el túnel WireGuard y se destruye la TN (`DESTROYED`).
+8. Borrado manual en cualquier momento con `DELETE /executions/{id}/tn`.
 
 ## Arquitectura de Componentes y Validación
 
@@ -339,14 +387,14 @@ Si necesitas control granular:
 El módulo `extract_component_template_values()` centraliza la lógica de:
 1. **Normalización**: Convierte formato plano → estrutura sección/campo
 2. **Validación**: Verifica contra campos editables del overlay TNLCM
-3. **Reutilización**: Se usa en `app/main.py` (validación) y `app/generators.py` (extracción durante render)
+3. **Reutilización**: Se usa en `app/main.py` (validación) y `app/generators/` (extracción durante render)
 
 **Consumidores:**
 
 | Módulo | Uso |
 |---|---|
 | `app/main.py` | Validación en `_validate_components_or_raise()` dentro de `POST /executions` |
-| `app/generators.py` | Extracción de campos editables antes de render `ytt` en `generate_tnlcm_descriptor()` |
+| `app/generators/` | Extracción de campos editables antes de render `ytt` en `generate_tnlcm_descriptor()` |
 
 **Ventajas de centralización:**
 - Evita duplicación de lógica validación ↔ generación
@@ -417,6 +465,14 @@ Reglas de interpretación:
 | 2026-05 | Rediseño del resumen TNLCM: claves fijas `tn_init`/`monitoring`/`elcm` y componentes auxiliares ordenados |
 | 2026-05-17 | Convertidos templates TNLCM base a `ytt` (`@ytt:data` / `@data.values`) y añadida documentación sobre qué valores debe contener el `DataDescriptor` |
 | **2026-05-30** | **Extractor Centralizado**: Módulo `app/utils/component_contract.py` con `extract_component_template_values()` para normalizar y validar campos `component.<template>.<field>` contra editables del overlay; soporta formatos plano y anidado con retrocompatibilidad |
+| 2026-07 | **Ciclo de vida persistente**: la TN queda viva (`TN_READY`) tras cada experimento; nuevos estados y `DELETE /executions/{id}/tn` para borrado manual; `ephemeral_tn` para TN de un solo uso |
+| 2026-07 | **Health desdoblado**: `/health/services` (liveness orquestador + TNLCM) y `/health/components` (InfluxDB/Grafana/Prometheus/ELCM) |
+| 2026-07 | **`dataset.output` multi-formato**: acepta lista o string de `logs`/`csv`/`dashboard`/`raw`; las respuestas se guardan en `artifacts/<execution_id>/result/` |
+| 2026-07 | **csv/dashboard**: nuevo generador ELCM (`app/generators/elcm_dataset.py`) que renderiza con `ytt` un TestCase de dataset y lo inyecta en el experimento; descarga y extracción del ZIP de resultados (`app/utils/results_bundle.py`) |
+| 2026-07 | **raw**: consulta directa a InfluxDB v2 (Flux) replicando la interfaz east/west (`app/utils/influx_raw.py`), un CSV por measurement |
+| 2026-07 | `app/generators.py` dividido en el paquete `app/generators/` (`tnlcm_overlay`, `tnlcm_renderer`, `elcm_dataset`) |
+| 2026-07 | **`dataset` por experimento**: `POST /executions/{id}/elcm` admite su propio `dataset.output`; cada experimento escribe en `result/<experimento>/`. El **Experiment Descriptor** se genera por ejecución (JSON, sin `ytt`) desde las UEs/TestCases del `experiment` y se guarda junto al TN Descriptor; se elimina el fallback a `examples/` |
+| 2026-07 | **TestCases verbatim + fix de comillas**: los TestCases del body se suben **tal cual** desde `examples/` (ya no se re-renderizan: eso corrompía comillas/indentación) y el descriptor los referencia por su `Name:` interno. Los TestCases de dataset (csv/dashboard) se re-serializan forzando comillas dobles para que `ytt` no rompa el entrecomillado (queries de Prometheus, `@{ExecutionId}`) |
 
 ## Uso con Postman
 
@@ -425,7 +481,7 @@ Reglas de interpretación:
 
 ## Debugging y Tests
 
-Ejecutar suite completa de tests (74 tests):
+Ejecutar suite completa de tests (132 tests):
 
 ```bash
 python -m pytest tests/ -v
@@ -479,5 +535,5 @@ Si necesitas validar el flujo completo, usa primero la coleccion Postman y revis
 
 Para problemas de validación de componentes, consulta la sección "Validación de Componentes" arriba y revisa los overlays TNLCM en `templates/TNLCM/overlays/`.
 
-Para entender en detalle la arquitectura del extractor de componentes, ver `app/utils/component_contract.py` y sus consumidores en `app/main.py` y `app/generators.py`.
+Para entender en detalle la arquitectura del extractor de componentes, ver `app/utils/component_contract.py` y sus consumidores en `app/main.py` y `app/generators/`.
 
