@@ -27,6 +27,17 @@ TNLCM_ACTIVATE_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 TNLCM_LEGACY_NON_RETRYABLE_STATUS_CODES = {400, 404, 422}
 TNLCM_LEGACY_ERROR_HINT = "Revise lo indicado por el mensaje de error."
 
+# Vocabulario que TNLCM expone en el campo `state` de GET /trial-networks/{tn_id}.
+# Se usa para reconciliar cuando create/activate devuelve 400/409 porque la TN ya
+# existe: el estado real decide qué fase resta (activar / levantar VPN) en vez de
+# abortar la ejecución. Comparaciones siempre en minúsculas.
+TN_STATE_CREATED = frozenset({"created", "validated"})
+TN_STATE_ACTIVATED = frozenset({"activated"})
+TN_STATE_TERMINAL = frozenset({"failed", "destroyed", "purged"})
+
+# Códigos con los que TNLCM responde cuando la TN ya existe en algún estado.
+TNLCM_ALREADY_EXISTS_STATUS_CODES = {400, 409}
+
 
 # Token storage in memory (populated by login endpoint)
 _tnlcm_access_token: str | None = None
@@ -461,6 +472,17 @@ def _extract_tn_id(data: dict[str, Any]) -> str | None:
     return data.get("tn_id")
 
 
+def resolve_tn_id(infra: InfrastructureConfig) -> str:
+    """Resuelve el tn_id efectivo de una infraestructura.
+
+    TNLCM usa este identificador como clave primaria de la TN: coincide con el
+    `tn_id` explícito de parameters o, en su defecto, con el nombre de la
+    infraestructura. Se centraliza para poder consultar el estado de una TN ya
+    existente sin depender de la respuesta del create (reconciliación).
+    """
+    return str(infra.parameters.get("tn_id") or infra.name)
+
+
 def _extract_report_markdown(response: httpx.Response) -> str:
     """Normalize TNLCM report/download response into raw markdown text."""
     try:
@@ -813,7 +835,7 @@ def _legacy_multipart_from_infra(
     )
     reference_type = infra.parameters.get("library_reference_type")
     reference_value = infra.parameters.get("library_reference_value")
-    custom_tn_id = infra.parameters.get("tn_id") or infra.name
+    custom_tn_id = resolve_tn_id(infra)
 
     if not descriptor_ref:
         raise ValueError(
@@ -876,6 +898,9 @@ async def deploy_trial_network(
     async with httpx.AsyncClient(timeout=None) as client:
         create_data: dict[str, Any] | None = None
         tn_id: str | None = None
+        # True si la reconciliación detecta que la TN ya está 'activated': en ese
+        # caso se salta el bloque de activate y se levanta solo la VPN.
+        already_activated = False
 
         # Medir duración de CREATE
         create_timer = telemetry.start_timer("tnlcm", "create", execution_id=execution_id)
@@ -911,18 +936,66 @@ async def deploy_trial_network(
             create_data = response.json()
         except httpx.HTTPStatusError as exc:
             _log_http_response("TNLCM", exc.response)
-            create_timer.stop(status="error")
-            telemetry.log_event(
-                "error",
-                "tnlcm.create.api_call.failed",
-                service="tnlcm",
-                operation="create",
-                execution_id=execution_id,
-            )
-            telemetry.increment_counter(
-                "errors_total", labels={"service": "tnlcm", "operation": "create"}
-            )
-            _raise_legacy_create_error(exc.response)
+            # Reconciliación: TNLCM devuelve 400/409 cuando la TN ya existe. En vez
+            # de abortar, se consulta su estado real y se continúa por la fase que
+            # reste (activar / levantar VPN). Solo si la TN no existe o está en un
+            # estado terminal se propaga el error original (fail-fast).
+            reconciled_state: str | None = None
+            intended_tn_id: str | None = None
+            if exc.response.status_code in TNLCM_ALREADY_EXISTS_STATUS_CODES:
+                intended_tn_id = resolve_tn_id(infra)
+                try:
+                    reconciled_state = await get_tn_state(intended_tn_id, client)
+                except httpx.HTTPError as state_exc:
+                    logger.warning(
+                        "TNLCM reconcile status check failed for tn_id=%s: %s",
+                        intended_tn_id,
+                        state_exc,
+                    )
+                    reconciled_state = None
+
+            if reconciled_state in TN_STATE_ACTIVATED or reconciled_state in TN_STATE_CREATED:
+                logger.info(
+                    "TNLCM create returned %s but tn_id=%s is already '%s'; "
+                    "reconciling forward instead of failing.",
+                    exc.response.status_code,
+                    intended_tn_id,
+                    reconciled_state,
+                )
+                telemetry.log_event(
+                    "info",
+                    "tnlcm.create.reconciled",
+                    service="tnlcm",
+                    operation="create",
+                    execution_id=execution_id,
+                    tn_id=intended_tn_id,
+                    state=reconciled_state,
+                )
+                tn_id = intended_tn_id
+                already_activated = reconciled_state in TN_STATE_ACTIVATED
+                # La TN ya está registrada: se salta la espera de 20s posterior al
+                # create (create_data=None evita el sleep) y, si está 'activated',
+                # también el activate.
+                create_data = None
+            else:
+                create_timer.stop(status="error")
+                telemetry.log_event(
+                    "error",
+                    "tnlcm.create.api_call.failed",
+                    service="tnlcm",
+                    operation="create",
+                    execution_id=execution_id,
+                )
+                telemetry.increment_counter(
+                    "errors_total", labels={"service": "tnlcm", "operation": "create"}
+                )
+                if reconciled_state in TN_STATE_TERMINAL:
+                    raise RuntimeError(
+                        f"TNLCM tn_id={intended_tn_id} already exists in terminal state "
+                        f"'{reconciled_state}'. Delete it (DELETE /executions/{{id}}/tn) "
+                        "before redeploying."
+                    )
+                _raise_legacy_create_error(exc.response)
 
         create_timer.stop(status="success")
         telemetry.log_event(
@@ -950,61 +1023,75 @@ async def deploy_trial_network(
         if jenkins_pipeline:
             activate_payload["jenkins_deploy_pipeline"] = jenkins_pipeline
 
-        try:
+        # Si la reconciliación detectó la TN ya 'activated', se salta el activate.
+        if not already_activated:
             try:
-                await _activate_with_backoff(
-                    request_call=lambda: client.put(
-                        f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/activate",
-                        headers=_headers(),
-                        timeout=None,
-                    ),
-                    tn_id=tn_id,
-                    endpoint_label="new",
-                    execution_id=execution_id,
-                )
-            except httpx.HTTPStatusError as exc:
-                _log_http_response("TNLCM", exc.response)
-                # Compatibilidad con despliegues legacy que esperan body con tn_id.
-                if exc.response.status_code in {404, 405}:
+                try:
                     await _activate_with_backoff(
-                        request_call=lambda: client.post(
-                            f"{settings.tnlcm_url}/api/v1/trial-network/activate",
-                            json=activate_payload,
-                            headers=_json_headers(),
+                        request_call=lambda: client.put(
+                            f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/activate",
+                            headers=_headers(),
                             timeout=None,
                         ),
                         tn_id=tn_id,
-                        endpoint_label="legacy",
+                        endpoint_label="new",
                         execution_id=execution_id,
                     )
-                elif exc.response.status_code in {409, 422}:
-                    logger.warning(
-                        "TNLCM activate returned %s for tn_id=%s; continuing.",
-                        exc.response.status_code,
-                        tn_id,
+                except httpx.HTTPStatusError as exc:
+                    _log_http_response("TNLCM", exc.response)
+                    # Compatibilidad con despliegues legacy que esperan body con tn_id.
+                    if exc.response.status_code in {404, 405}:
+                        await _activate_with_backoff(
+                            request_call=lambda: client.post(
+                                f"{settings.tnlcm_url}/api/v1/trial-network/activate",
+                                json=activate_payload,
+                                headers=_json_headers(),
+                                timeout=None,
+                            ),
+                            tn_id=tn_id,
+                            endpoint_label="legacy",
+                            execution_id=execution_id,
+                        )
+                    elif exc.response.status_code == 400:
+                        # 400 al activar puede significar que la TN ya está activada:
+                        # se confirma con el estado real antes de decidir.
+                        state = await get_tn_state(tn_id, client)
+                        if state in TN_STATE_ACTIVATED:
+                            logger.info(
+                                "TNLCM activate returned 400 but tn_id=%s is already "
+                                "'activated'; continuing.",
+                                tn_id,
+                            )
+                        else:
+                            raise
+                    elif exc.response.status_code in {409, 422}:
+                        logger.warning(
+                            "TNLCM activate returned %s for tn_id=%s; continuing.",
+                            exc.response.status_code,
+                            tn_id,
+                        )
+                    else:
+                        raise
+            except (_ActivateNoSuchFileError, _ActivateRetryExhaustedError) as activate_error:
+                if redeploy_attempt >= TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS:
+                    raise RuntimeError(
+                        f"TNLCM activate recovery exhausted for tn_id={tn_id}: {activate_error}"
                     )
-                else:
-                    raise
-        except (_ActivateNoSuchFileError, _ActivateRetryExhaustedError) as activate_error:
-            if redeploy_attempt >= TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS:
-                raise RuntimeError(
-                    f"TNLCM activate recovery exhausted for tn_id={tn_id}: {activate_error}"
-                )
 
-            logger.warning(
-                "TNLCM activate recovery for tn_id=%s. Destroying/purging and redeploying (attempt %s/%s). Cause: %s",
-                tn_id,
-                redeploy_attempt + 1,
-                TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS,
-                activate_error,
-            )
-            await _recover_tn_with_destroy_purge(tn_id)
-            return await deploy_trial_network(
-                infra,
-                redeploy_attempt=redeploy_attempt + 1,
-                execution_id=execution_id,
-                generated_descriptor_path=generated_descriptor_path,
-            )
+                logger.warning(
+                    "TNLCM activate recovery for tn_id=%s. Destroying/purging and redeploying (attempt %s/%s). Cause: %s",
+                    tn_id,
+                    redeploy_attempt + 1,
+                    TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS,
+                    activate_error,
+                )
+                await _recover_tn_with_destroy_purge(tn_id)
+                return await deploy_trial_network(
+                    infra,
+                    redeploy_attempt=redeploy_attempt + 1,
+                    execution_id=execution_id,
+                    generated_descriptor_path=generated_descriptor_path,
+                )
 
         telemetry.log_event(
             "info",
@@ -1118,6 +1205,47 @@ def get_tn_status(tn_id: str) -> str:
     status = data.get("status") or data.get("state") or "UNKNOWN"
     logger.debug(f"TN {tn_id} status: {status}")
     return status
+
+
+def _normalize_tn_state(raw: Any) -> str | None:
+    """Normaliza el estado devuelto por TNLCM a minúsculas sin espacios."""
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    return text or None
+
+
+async def get_tn_state(tn_id: str, client: httpx.AsyncClient | None = None) -> str | None:
+    """Consulta el estado real de una TN en TNLCM (campo `state`), sin bloquear.
+
+    Devuelve el estado normalizado (minúsculas) o None si la TN no existe (404).
+    Reutiliza el `client` async abierto si se pasa; en caso contrario abre uno
+    propio con timeout explícito (§8.1). Solo se usa el campo `state`/`status`;
+    nunca se persiste el `raw_descriptor` ni secretos del payload (§8.7).
+    """
+    url = f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}"
+
+    async def _probe(active_client: httpx.AsyncClient) -> str | None:
+        try:
+            response = await active_client.get(
+                url,
+                headers=_headers(),
+                timeout=TNLCM_REQUEST_TIMEOUT,
+            )
+            _log_http_response("TNLCM", response)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _log_http_response("TNLCM", exc.response)
+            if exc.response.status_code == 404:
+                return None
+            raise
+        data = response.json()
+        return _normalize_tn_state(data.get("state") or data.get("status"))
+
+    if client is not None:
+        return await _probe(client)
+    async with httpx.AsyncClient(timeout=TNLCM_REQUEST_TIMEOUT) as own_client:
+        return await _probe(own_client)
 
 
 async def destroy_trial_network(tn_id: str) -> None:

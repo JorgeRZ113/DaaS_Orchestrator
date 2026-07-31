@@ -257,6 +257,12 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         _update(execution_id, status=ExecutionState.deploying, message="Deploying Trial Network")
         logger.info(f"[{execution_id}] Deploying TN: {descriptor.infrastructure.name}")
 
+        # Registrar el tn_id en cuanto se conoce (antes de desplegar): si el deploy
+        # falla a mitad, el record conserva la TN direccionable para poder
+        # reconciliarla con un re-POST o borrarla con el endpoint DELETE.
+        tn_id = tnlcm.resolve_tn_id(descriptor.infrastructure)
+        _update(execution_id, tn_id=tn_id)
+
         # Timer para TNLCM create
         tnlcm_create_timer = telemetry.start_timer(
             "orchestrator", "tnlcm_create", execution_id=execution_id
@@ -433,12 +439,30 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
                     f"[{execution_id}] WireGuard cleanup after TNLCM failure failed: {cleanup_error}"
                 )
 
+            # Cleanup consciente del estado: no destruir una TN sana. Si TNLCM la
+            # reporta como 'created'/'activated', pudo desplegarse aunque nuestro
+            # código no lo detectara; se conserva para reconciliarla con un re-POST.
+            # Solo se destruye si está en estado terminal/parcial o ya no existe.
             try:
-                await tnlcm.destroy_trial_network(tn_id)
-            except Exception as cleanup_error:
+                tn_state = await tnlcm.get_tn_state(tn_id)
+            except Exception as state_error:
                 logger.warning(
-                    f"[{execution_id}] TN cleanup after TNLCM failure failed: {cleanup_error}"
+                    f"[{execution_id}] Could not read TN {tn_id} state before cleanup: {state_error}"
                 )
+                tn_state = None
+
+            if tn_state in (tnlcm.TN_STATE_CREATED | tnlcm.TN_STATE_ACTIVATED):
+                logger.info(
+                    f"[{execution_id}] TN {tn_id} is '{tn_state}' (healthy); skipping "
+                    "destroy so it can be reconciled with a re-POST."
+                )
+            else:
+                try:
+                    await tnlcm.destroy_trial_network(tn_id)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        f"[{execution_id}] TN cleanup after TNLCM failure failed: {cleanup_error}"
+                    )
     finally:
         _release_tnlcm_deploy_slot(execution_id)
 
