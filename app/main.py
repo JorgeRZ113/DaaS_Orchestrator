@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 import httpx
 import uvicorn
@@ -270,6 +271,37 @@ async def post_register(
     return {"status": "ok", "token_preview": token_preview}
 
 
+def _collect_empty_string_paths(value: Any, prefix: str = "") -> list[str]:
+    """Recorrer recursivamente el body y devolver las rutas de todos string vacío.
+
+    Un valor "" (o solo espacios) casi siempre es un campo que el cliente dejó a
+    medias: o lo rellena con un valor real o lo elimina del body. Se devuelven
+    rutas tipo "infrastructure.component.base.grafana_password" para que el
+    cliente sepa exactamente qué corregir antes de reenviar el POST.
+
+    Args:
+        value: Nodo del body (dict, list o escalar) a inspeccionar.
+        prefix: Ruta acumulada hasta este nodo (dot-path).
+
+    Returns:
+        Lista de rutas (dot-path) donde se encontró un string vacío.
+    """
+    empty_paths: list[str] = []
+
+    if isinstance(value, str):
+        if value.strip() == "":
+            empty_paths.append(prefix or "<root>")
+    elif isinstance(value, dict):
+        for key, sub_value in value.items():
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            empty_paths.extend(_collect_empty_string_paths(sub_value, child_prefix))
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            empty_paths.extend(_collect_empty_string_paths(item, f"{prefix}[{index}]"))
+
+    return empty_paths
+
+
 @app.post(
     "/executions",
     response_model=ExecutionResponse,
@@ -325,6 +357,23 @@ async def post_execution(descriptor: DatasetDescriptor):
 
         if invalids:
             raise HTTPException(status_code=400, detail={"invalid_fields": invalids})
+
+    # Rechazo temprano (Fail-Fast): si el cliente envió algún string vacío ("")
+    # en cualquier parte del body, no ejecutamos nada. Debe reenviar un POST bien
+    # formado, rellenando el valor o eliminando el campo. Solo inspeccionamos lo
+    # que el cliente envió (exclude_unset) para no marcar defaults del servidor.
+    empty_fields = _collect_empty_string_paths(descriptor.model_dump(exclude_unset=True))
+    if empty_fields:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "empty_fields": sorted(empty_fields),
+                "message": (
+                    'Algunos campos llegaron vacíos (""). Rellénalos con un valor '
+                    "o elimínalos del body y reenvía el POST."
+                ),
+            },
+        )
 
     # Run validation before proceeding
     try:

@@ -269,3 +269,126 @@ def test_post_execution_accepts_flat_mongodb_fields_without_version(monkeypatch)
     assert response.status_code == 202
     body = response.json()
     assert body["execution_id"] == "tn-demo-mongo"
+
+
+# ---------------------------------------------------------------------------
+# Rechazo de strings vacíos ("") en el body de POST /executions
+# ---------------------------------------------------------------------------
+
+
+def test_post_execution_rejects_empty_string_in_component_field(monkeypatch) -> None:
+    called = {"create": False}
+
+    async def _should_not_run(descriptor):  # pragma: no cover - no debe llamarse
+        called["create"] = True
+        return None
+
+    monkeypatch.setattr("app.main.create_tnlcm_execution", _should_not_run)
+
+    payload = {
+        "infrastructure": {
+            "name": "tn-demo-empty",
+            "component": {
+                "base": {
+                    "influxdb_user": "admin",
+                    "influxdb_password": "adminadmin",
+                    "grafana_password": "",  # vacío: debe rechazar
+                }
+            },
+        },
+        "experiment": {
+            "name": "exp-demo",
+            "testcase_paths": ["TestCase_ping.yml"],
+            "ues_paths": [],
+        },
+        "dataset": {"output": "logs"},
+        "auto_start_elcm": True,
+    }
+
+    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["empty_fields"] == ["infrastructure.component.base.grafana_password"]
+    assert "vac" in detail["message"].lower()
+    # El gate corta antes de crear la ejecución.
+    assert called["create"] is False
+
+
+def test_post_execution_rejects_whitespace_only_and_reports_all_paths(monkeypatch) -> None:
+    monkeypatch.setattr("app.main.create_tnlcm_execution", lambda descriptor: None)
+
+    payload = {
+        "infrastructure": {
+            "name": "tn-demo-multi",
+            "descriptor_path": "   ",  # solo espacios: cuenta como vacío
+            "component": {"base": {"influxdb_user": ""}},
+        },
+        "experiment": {
+            "name": "exp-demo",
+            "testcase_paths": ["", "TestCase_ping.yml"],  # vacío dentro de lista
+            "ues_paths": [],
+        },
+        "dataset": {"output": "logs"},
+    }
+
+    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+
+    assert response.status_code == 400
+    empty_fields = response.json()["detail"]["empty_fields"]
+    assert empty_fields == [
+        "experiment.testcase_paths[0]",
+        "infrastructure.component.base.influxdb_user",
+        "infrastructure.descriptor_path",
+    ]
+
+
+def test_post_execution_does_not_flag_empty_strings_from_server_defaults(monkeypatch) -> None:
+    # Body válido y mínimo: los defaults del servidor (p.ej. message="") no deben
+    # marcarse como vacíos porque solo inspeccionamos lo que envió el cliente.
+    async def _ok_record(descriptor):
+        return ExecutionRecord(
+            execution_id=descriptor.infrastructure.name,
+            status=ExecutionState.pending,
+            message="accepted",
+        )
+
+    monkeypatch.setattr("app.main.create_tnlcm_execution", _ok_record)
+
+    payload = {
+        "infrastructure": {
+            "name": "tn-demo-clean",
+            "component": {
+                "base": {
+                    "influxdb_user": "admin",
+                    "influxdb_password": "adminadmin",
+                    "grafana_password": "adminadmin",
+                }
+            },
+        },
+        "experiment": {
+            "name": "exp-demo",
+            "testcase_paths": ["TestCase_ping.yml"],
+            "ues_paths": [],
+        },
+        "dataset": {"output": "logs"},
+    }
+
+    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+
+    assert response.status_code == 202
+
+
+def test_collect_empty_string_paths_walks_nested_structures() -> None:
+    from app.main import _collect_empty_string_paths
+
+    data = {
+        "a": "value",
+        "b": "",
+        "c": {"d": "  ", "e": "ok"},
+        "f": ["x", "", {"g": ""}],
+    }
+
+    assert _collect_empty_string_paths(data) == ["b", "c.d", "f[1]", "f[2].g"]
+    assert _collect_empty_string_paths({"all": "good"}) == []
+    assert _collect_empty_string_paths("") == ["<root>"]
