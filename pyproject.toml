@@ -32,6 +32,11 @@ dev = [
     "ruff==0.15.20",
     "black==26.5.1",
 ]
+# UI web opcional (Streamlit). No forma parte del runtime del servicio: se
+# instala aparte con `pip install -e ".[ui]"` para no inflar la imagen del core.
+ui = [
+    "streamlit",
+]
 
 [project.scripts]
 daas-orchestrator = "app.main:main"
