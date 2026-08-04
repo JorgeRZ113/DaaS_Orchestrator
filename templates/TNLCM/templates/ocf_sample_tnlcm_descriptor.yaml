@@ -1,4 +1,8 @@
 #@ load("@ytt:data", "data")
+
+#@ internal_vnet = "vnet-internal"
+#@ oneke_cluster = "oneKE-k8s"
+
 ---
 trial_network:
     #! No necesita TN_init, porque se incluye en la base (tnlcm_descriptor_base.yaml)
@@ -8,31 +12,31 @@ trial_network:
       dependencies:
         - "tn_init"
       input:
-        one_vnet_first_ip: "10.10.10.1"
-        one_vnet_netmask: 24
-        one_vnet_address_size: 100
-        one_vnet_gw: "10.10.10.1"
+        one_vnet_first_ip: #@ data.values.ocf.vnet_first_ip
+        one_vnet_netmask: #@ data.values.ocf.vnet_netmask
+        one_vnet_address_size: #@ data.values.ocf.vnet_address_size
+        one_vnet_gw: #@ data.values.ocf.vnet_gw
     ocf-openCapif:
       type: "ocf"
       name: "openCapif"
       dependencies:
-        - "oneKE-k8s"
+        - #@ oneke_cluster
       input:
-        ocf_one_oneKE: #@ data.values.ocf.one_oneKE
+        ocf_one_oneKE: #@ oneke_cluster
         ocf_any_branch: #@ data.values.ocf.branch
     oneKE-k8s:
       type: "oneKE"
       name: "k8s"
       dependencies:
         - "tn_init"
-        - "vnet-internal"
+        - #@ internal_vnet
       input:
-        one_oneKE_internal_vnet: "vnet-internal"
-        one_oneKE_version: "131"
-        #! one_oneKE_multus: true         #! Default value
-        #! one_oneKE_cni_plugin: "canal"  #! Default value
-        #! one_oneKE_metallb: true        #! Default value
-        one_oneKE_metallb_range: "10.10.10.200-10.10.10.240"
-        #! one_oneKE_longhorn: true       #! Default value
-        #! one_oneKE_traefik: false       #! Default value
-        one_oneKE_nginx_passthough: true
+        one_oneKE_internal_vnet: #@ internal_vnet
+        one_oneKE_version: #@ data.values.ocf.oneKE_version
+        one_oneKE_multus: #@ data.values.ocf.oneKE_multus
+        one_oneKE_cni_plugin: #@ data.values.ocf.oneKE_cni_plugin
+        one_oneKE_metallb: #@ data.values.ocf.oneKE_metallb
+        one_oneKE_metallb_range: #@ data.values.ocf.oneKE_metallb_range
+        one_oneKE_longhorn: #@ data.values.ocf.oneKE_longhorn
+        one_oneKE_traefik: #@ data.values.ocf.oneKE_traefik
+        one_oneKE_nginx_passthough: #@ data.values.ocf.oneKE_nginx_passthough

@@ -1,10 +1,51 @@
 #! Overlay para `int_p4_sw_sample_tnlcm_descriptor.yaml`
 #! Component: int_p4_sw
-#! Depends on: vnet, vm_kvm
+#! Depends on: tn_init, vnet, vm_kvm
+#!
+#! Son OPCIONALES las IPs, los puertos y las MACs; cada campo trae como default el valor
+#! del sample de 6G-Library. Lo que no es IP/puerto/MAC (switch_id, interfaces,
+#! hop_metadata_len, max_hop, ins_mask, rep_md_bits, priority) se queda literal en el
+#! template y no se expone aqui.
+#!
+#! Los nombres de las 5 vnets no aparecen: estan en `dependencies` y en las listas
+#! `networks` de cada switch, asi que exponerlos romperia la dependencia.
+#! Tampoco se anade `one_vnet_dns`: no esta declarado en el template de int_p4_sw.
 
 #@ data/values
 ---
-int_switches:
-  collector_networks: []
-  collector_interface: ""
-  collector_port: 0
+int_p4_sw:
+  #! --- vnets de la cadena INT ---
+  vnet_gw: "192.168.199.1"           #! Opcional. Gateway comun: es la IP del tn_bastion
+  vnet_1_first_ip: "10.11.1.1"       #! Opcional
+  vnet_2_first_ip: "10.11.2.1"       #! Opcional
+  vnet_3_first_ip: "10.11.3.1"       #! Opcional
+  vnet_4_first_ip: "10.11.4.1"       #! Opcional
+  vnet_collector_first_ip: "10.11.5.1"  #! Opcional
+
+  #! --- reglas de forwarding (identicas en los tres switches) ---
+  fwd_rule_1_dst_addr: "02:00:0a:0b:01:01"  #! Opcional. MAC destino
+  fwd_rule_1_port: 1                        #! Opcional
+  fwd_rule_2_dst_addr: "02:00:0a:0b:04:02"  #! Opcional. MAC destino
+  fwd_rule_2_port: 2                        #! Opcional
+
+  #! --- switch source ---
+  source_ingress_port: 1             #! Opcional
+  source_egress_port: 2              #! Opcional
+
+  #! --- switch sink ---
+  sink_egress_spec: 2                       #! Opcional
+  sink_reporting_port: 3                    #! Opcional
+  sink_dp_ip: "10.11.5.1"                   #! Opcional. IP del data plane hacia el collector
+  sink_dp_mac: "02:00:0a:0b:05:01"          #! Opcional. MAC del data plane
+
+  #! --- collector ---
+  #! collector_port se usa a la vez en el sink y en el propio collector: un solo campo
+  #! evita que ambos extremos queden con puertos distintos.
+  collector_ip: "10.11.5.2"          #! Opcional
+  collector_mac: "02:00:0a:0b:05:02" #! Opcional
+  collector_port: 12345              #! Opcional
+  collector_interface: "eth1"        #! Opcional. Default 6G-Library
+
+  #! --- vm_kvm auxiliares ---
+  generator_size: "small"            #! Opcional. Choices: extra_large, large, medium, small, very_small
+  external_size: "small"             #! Opcional. Choices: extra_large, large, medium, small, very_small

@@ -1,4 +1,36 @@
 #@ load("@ytt:data", "data")
+
+#! Componente `int_p4_sw`: In-band Network Telemetry sobre P4. Despliega la cadena
+#! source -> transit -> sink, el collector y las 5 vnets que los interconectan, mas dos
+#! vm_kvm auxiliares (generador de trafico y destino externo).
+#!
+#! Son OPCIONALES las IPs, los puertos y las MACs: cada uno viaja con el valor del
+#! sample de 6G-Library como default y puede sobrescribirse desde el DataDescriptor.
+#! Lo que no es IP/puerto/MAC (switch_id, interfaces, hop_metadata_len, max_hop,
+#! ins_mask, rep_md_bits, priority) se mantiene literal.
+#!
+#! No se anade `one_vnet_dns` a las vnets: no esta declarado en este template, y la
+#! regla es cablear lo ya presente, no ampliar el descriptor.
+#!
+#! Los nombres de las vnets y del propio int_p4_sw no se exponen como campos editables:
+#! aparecen en `dependencies` y en las listas `networks` de cada switch.
+#@ vnet_1 = "vnet-1"
+#@ vnet_2 = "vnet-2"
+#@ vnet_3 = "vnet-3"
+#@ vnet_4 = "vnet-4"
+#@ vnet_collector = "vnet-collector"
+#@ int_entity = "int_p4_sw-int"
+
+#! Las tres reglas de forwarding son identicas en los tres switches: se declaran una vez.
+#@ def forward_rules():
+- dst_addr: #@ data.values.int_p4_sw.fwd_rule_1_dst_addr
+  port: #@ data.values.int_p4_sw.fwd_rule_1_port
+  priority: 1
+- dst_addr: #@ data.values.int_p4_sw.fwd_rule_2_dst_addr
+  port: #@ data.values.int_p4_sw.fwd_rule_2_port
+  priority: 1
+#@ end
+
 ---
 trial_network:
     #! No necesita TN_init, porque se incluye en la base (base_tnlcm_descriptor.yaml)
@@ -8,116 +40,88 @@ trial_network:
       dependencies:
         - "tn_init"
       input:
-        one_vnet_first_ip: "10.11.1.1"
+        one_vnet_first_ip: #@ data.values.int_p4_sw.vnet_1_first_ip
         one_vnet_netmask: 24
         one_vnet_address_size: 4
-        one_vnet_gw: "192.168.199.1"
+        one_vnet_gw: #@ data.values.int_p4_sw.vnet_gw
     vnet-2:
       type: "vnet"
       name: "2"
       dependencies:
         - "tn_init"
       input:
-        one_vnet_first_ip: "10.11.2.1"
+        one_vnet_first_ip: #@ data.values.int_p4_sw.vnet_2_first_ip
         one_vnet_netmask: 24
         one_vnet_address_size: 4
-        one_vnet_gw: "192.168.199.1"
+        one_vnet_gw: #@ data.values.int_p4_sw.vnet_gw
     vnet-3:
       type: "vnet"
       name: "3"
       dependencies:
         - "tn_init"
       input:
-        one_vnet_first_ip: "10.11.3.1"
+        one_vnet_first_ip: #@ data.values.int_p4_sw.vnet_3_first_ip
         one_vnet_netmask: 24
         one_vnet_address_size: 4
-        one_vnet_gw: "192.168.199.1"
+        one_vnet_gw: #@ data.values.int_p4_sw.vnet_gw
     vnet-4:
       type: "vnet"
       name: "4"
       dependencies:
         - "tn_init"
       input:
-        one_vnet_first_ip: "10.11.4.1"
+        one_vnet_first_ip: #@ data.values.int_p4_sw.vnet_4_first_ip
         one_vnet_netmask: 24
         one_vnet_address_size: 4
-        one_vnet_gw: "192.168.199.1"
+        one_vnet_gw: #@ data.values.int_p4_sw.vnet_gw
     vnet-collector:
       type: "vnet"
       name: "collector"
       dependencies:
         - "tn_init"
       input:
-        one_vnet_first_ip: "10.11.5.1"
+        one_vnet_first_ip: #@ data.values.int_p4_sw.vnet_collector_first_ip
         one_vnet_netmask: 24
         one_vnet_address_size: 4
-        one_vnet_gw: "192.168.199.1"
+        one_vnet_gw: #@ data.values.int_p4_sw.vnet_gw
     int_p4_sw-int:
       type: "int_p4_sw"
       name: "int"
-      dependencies:
-        - "tn_init"
-        - "vnet-1"
-        - "vnet-2"
-        - "vnet-3"
-        - "vnet-4"
-        - "vnet-collector"
+      dependencies: #@ ["tn_init", vnet_1, vnet_2, vnet_3, vnet_4, vnet_collector]
       input:
         one_int_p4_sw_switches:
           int_p4_switch_0:
               type: "source"
-              networks:
-                - tn_vxlan
-                - vnet-1
-                - vnet-2
+              networks: #@ ["tn_vxlan", vnet_1, vnet_2]
               config:
                 switch_id: 1
                 interfaces:
                   - name: "eth1"
                     id: 1
-                  - name: "eth2" 
+                  - name: "eth2"
                     id: 2
                 int_config:
-                  forward_rules:
-                    - dst_addr: "02:00:0a:0b:01:01"
-                      port: 1
-                      priority: 1
-                    - dst_addr: "02:00:0a:0b:04:02"
-                      port: 2
-                      priority: 1
-                  ingress_port: 1
-                  egress_port: 2
+                  forward_rules: #@ forward_rules()
+                  ingress_port: #@ data.values.int_p4_sw.source_ingress_port
+                  egress_port: #@ data.values.int_p4_sw.source_egress_port
                   hop_metadata_len: 5
                   max_hop: 4
                   ins_mask: "0xEC00"
           int_p4_switch_1:
               type: "transit"
-              networks:
-                - tn_vxlan
-                - vnet-2
-                - vnet-3
+              networks: #@ ["tn_vxlan", vnet_2, vnet_3]
               config:
                 switch_id: 2
                 interfaces:
                   - name: "eth1"
                     id: 1
-                  - name: "eth2" 
+                  - name: "eth2"
                     id: 2
                 int_config:
-                  forward_rules:
-                    - dst_addr: "02:00:0a:0b:01:01"
-                      port: 1
-                      priority: 1
-                    - dst_addr: "02:00:0a:0b:04:02"
-                      port: 2
-                      priority: 1
+                  forward_rules: #@ forward_rules()
           int_p4_switch_2:
               type: "sink"
-              networks:
-                - tn_vxlan
-                - vnet-3
-                - vnet-4
-                - vnet-collector
+              networks: #@ ["tn_vxlan", vnet_3, vnet_4, vnet_collector]
               config:
                 switch_id: 3
                 interfaces:
@@ -128,46 +132,31 @@ trial_network:
                   - name: "eth3"  #! Extra interface for collector
                     id: 3
                 int_config:
-                  forward_rules:
-                    - dst_addr: "02:00:0a:0b:01:01"
-                      port: 1
-                      priority: 1
-                    - dst_addr: "02:00:0a:0b:04:02"
-                      port: 2
-                      priority: 1
-                  egress_spec: 2
-                  sink_reporting_port: 3
-                  collector_ip: "10.11.5.2"
-                  collector_port: 12345
-                  dp_mac: "02:00:0a:0b:05:01"
-                  dp_ip: "10.11.5.1"
-                  collector_mac: "02:00:0a:0b:05:02"
+                  forward_rules: #@ forward_rules()
+                  egress_spec: #@ data.values.int_p4_sw.sink_egress_spec
+                  sink_reporting_port: #@ data.values.int_p4_sw.sink_reporting_port
+                  collector_ip: #@ data.values.int_p4_sw.collector_ip
+                  collector_port: #@ data.values.int_p4_sw.collector_port
+                  dp_mac: #@ data.values.int_p4_sw.sink_dp_mac
+                  dp_ip: #@ data.values.int_p4_sw.sink_dp_ip
+                  collector_mac: #@ data.values.int_p4_sw.collector_mac
                   rep_md_bits: 0
         one_int_p4_sw_collector:
-          networks: #@ data.values.int_switches.collector_networks
+          networks: #@ ["tn_vxlan", vnet_collector]
           config:
-            collector_interface: #@ data.values.int_switches.collector_interface
-            collector_port: #@ data.values.int_switches.collector_port
+            collector_interface: #@ data.values.int_p4_sw.collector_interface
+            collector_port: #@ data.values.int_p4_sw.collector_port
     vm_kvm-generator:
       type: "vm_kvm"
       name: "generator"
-      dependencies:
-        - "tn_init"
-        - "vnet-1"
+      dependencies: #@ ["tn_init", vnet_1]
       input:
-        one_vm_kvm_size: "small"
-        one_vm_kvm_networks:
-          - "tn_vxlan"
-          - "vnet-1"
+        one_vm_kvm_size: #@ data.values.int_p4_sw.generator_size
+        one_vm_kvm_networks: #@ ["tn_vxlan", vnet_1]
     vm_kvm-external:
       type: "vm_kvm"
       name: "external"
-      dependencies:
-        - "tn_init"
-        - "int_p4_sw-int"
-        - "vnet-4"
+      dependencies: #@ ["tn_init", int_entity, vnet_4]
       input:
-        one_vm_kvm_size: "small"
-        one_vm_kvm_networks:
-          - tn_vxlan
-          - vnet-4
+        one_vm_kvm_size: #@ data.values.int_p4_sw.external_size
+        one_vm_kvm_networks: #@ ["tn_vxlan", vnet_4]

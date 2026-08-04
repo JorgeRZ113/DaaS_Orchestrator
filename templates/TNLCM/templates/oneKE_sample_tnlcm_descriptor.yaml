@@ -1,4 +1,7 @@
 #@ load("@ytt:data", "data")
+
+#@ internal_vnet = "vnet-internal"
+
 ---
 trial_network:
     #! No necesita TN_init, porque se incluye en la base (tnlcm_descriptor_base.yaml)
@@ -8,24 +11,24 @@ trial_network:
       dependencies:
         - "tn_init"
       input:
-        one_vnet_first_ip: "10.21.12.1"     #! Default value
-        #! one_vnet_netmask: 24              #! Default value
-        #! one_vnet_address_size: 100        #! Default value
+        one_vnet_first_ip: #@ data.values.oneKE.vnet_first_ip
+        one_vnet_netmask: #@ data.values.oneKE.vnet_netmask
+        one_vnet_address_size: #@ data.values.oneKE.vnet_address_size
     oneKE-cluster:
       type: "oneKE"
       name: "cluster"
       dependencies:
         - "tn_init"
-        - "vnet-internal"
+        - #@ internal_vnet
       input:
         one_oneKE_external_vnet: #@ data.values.oneKE.external_vnet
-        one_oneKE_internal_vnet: #@ data.values.oneKE.internal_vnet
+        one_oneKE_internal_vnet: #@ internal_vnet
         one_oneKE_worker_nodes: #@ data.values.oneKE.worker_nodes
         one_oneKE_version: #@ data.values.oneKE.version
-        #! one_oneKE_multus: true             #! Default value
-        #! one_oneKE_cni_plugin: "canal"      #! Default value
-        #! one_oneKE_metallb: true            #! Default value
+        one_oneKE_multus: #@ data.values.oneKE.multus
+        one_oneKE_cni_plugin: #@ data.values.oneKE.cni_plugin
+        one_oneKE_metallb: #@ data.values.oneKE.metallb
         one_oneKE_metallb_range: #@ data.values.oneKE.metallb_range
-        #! one_oneKE_longhorn: true           #! Default value
-        #! one_oneKE_traefik: false           #! Default value
-        #! one_oneKE_nginx_passthough: false  #! Default value
+        one_oneKE_longhorn: #@ data.values.oneKE.longhorn
+        one_oneKE_traefik: #@ data.values.oneKE.traefik
+        one_oneKE_nginx_passthough: #@ data.values.oneKE.nginx_passthough

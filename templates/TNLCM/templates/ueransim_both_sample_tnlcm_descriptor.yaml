@@ -1,66 +1,103 @@
 #@ load("@ytt:data", "data")
+
+#@ vnet_n2 = "vnet-n2"
+#@ core_entity = "open5gs_vm-core"
+#@ ue = data.values.ueransim_both
+
 ---
 trial_network:
   #! No necesita TN_init, porque se incluye en la base (base_tnlcm_descriptor.yaml)
   vnet-n2:
     type: "vnet"
     name: "n2"
-    dependencies: 
+    dependencies:
       - "tn_init"
     input:
-      one_vnet_first_ip: "10.10.10.1"
-      one_vnet_netmask: 24
-      one_vnet_address_size: 100
-      #! one_vnet_gw: null    #! there is no gateway in this network
-      #! one_vnet_dns: null   #! there is no DNS in this network
+      one_vnet_first_ip: #@ ue.n2_first_ip
+      one_vnet_netmask: #@ ue.n2_netmask
+      one_vnet_address_size: #@ ue.n2_address_size
   open5gs_vm-core:
     type: "open5gs_vm"
     name: "core"
     dependencies:
-      - "vnet-n2"
+      - #@ vnet_n2
     input:
-      one_open5gs_vm_external_vnet: "tn_vxlan"
-      one_open5gs_vm_internal_vnet:
-        - "vnet-n2"
-      one_open5gs_vm_size: "small"
-      one_open5gs_vm_ue_subnet: "10.45.0.0/16"
-      one_open5gs_vm_amf_n2_ip: "10.10.10.200"
-      one_open5gs_vm_upf_n3_ip: "10.10.10.201"
-      #! one_open5gs_vm_ue_count: 20        #! Default value
-      #! one_open5gs_vm_tac: 200            #! Default value
-      #! one_open5gs_vm_mcc: "001"          #! Default value
-      #! one_open5gs_vm_mnc: "01"           #! Default value
-      #! one_open5gs_vm_msin: "0000000001"  #! Default value
-      #! one_open5gs_vm_key: "465B5CE8B199B49FAA5F0A2EE238A6BC"  #! Default value
-      #! one_open5gs_vm_opc: "E8ED289DEBA952E4283B54E88E6183CA"  #! Default value
-      #! one_open5gs_vm_apn: "internet"     #! Default value
-      #! one_open5gs_vm_s_nssai_sst: 1      #! Default value
-      one_open5gs_vm_s_nssai_sd: "000009"
+      one_open5gs_vm_external_vnet: #@ ue.open5gs_external_vnet
+      one_open5gs_vm_internal_vnet: #@ [vnet_n2]
+      one_open5gs_vm_size: #@ ue.open5gs_size
+      one_open5gs_vm_ue_subnet: #@ ue.open5gs_ue_subnet
+      one_open5gs_vm_amf_n2_ip: #@ ue.open5gs_amf_n2_ip
+      one_open5gs_vm_upf_n3_ip: #@ ue.open5gs_upf_n3_ip
+      one_open5gs_vm_ue_count: #@ ue.open5gs_ue_count
+      one_open5gs_vm_tac: #@ ue.open5gs_tac
+      one_open5gs_vm_mcc: #@ ue.open5gs_mcc
+      one_open5gs_vm_mnc: #@ ue.open5gs_mnc
+      one_open5gs_vm_msin: #@ ue.open5gs_msin
+      one_open5gs_vm_key: #@ ue.open5gs_key
+      one_open5gs_vm_opc: #@ ue.open5gs_opc
+      one_open5gs_vm_apn: #@ ue.open5gs_apn
+      one_open5gs_vm_s_nssai_sst: #@ ue.open5gs_s_nssai_sst
+      one_open5gs_vm_s_nssai_sd: #@ ue.open5gs_s_nssai_sd
   ueransim-both:
     type: "ueransim"
     name: "both"
     dependencies:
-      - "open5gs_vm-core"
+      - #@ core_entity
     input:
-      one_ueransim_networks:
-        - "tn_vxlan"
+      one_ueransim_networks: #@ ue.networks
       one_ueransim_mode: "both"
-      #! one_ueransim_run_gnb: true  #! Default value in mode 'both'
-      #! one_ueransim_run_ue: true   #! Default value in mode 'both'
-      one_ueransim_gnb_linked_5gcore: #@ data.values.ueransim_both.gnb_linked_5gcore
-      #! one_ueransim_gnb_amf_n2_ip: "10.10.10.200"  #! Autocompleted from open5gs_k8s-core. Default value is 10.21.12.200
-      #! one_ueransim_gnb_tac: 200                   #! Default value + autocompleted from open5gs_k8s-core
-      #! one_ueransim_gnb_mcc: "001"                 #! Default value + autocompleted from open5gs_k8s-core
-      #! one_ueransim_gnb_mnc: "01"                  #! Default value + autocompleted from open5gs_k8s-core
-      #! one_ueransim_gnb_slices_sst: 1              #! Default value + autocompleted from open5gs_k8s-core
-      #! one_ueransim_gnb_slices_sd: "000009"        #! Autocompleted from open5gs_k8s-core. Default value is 000001
-      #! one_ueransim_ue_linked_gnb: null            #! If undefined and mode is 'both', the same component acts as the linked gNB
-      #! one_ueransim_ue_gnbsearchlist: "localhost"  #! Default value
-      #! one_ueransim_ue_mcc: "001"                               #! Default value + autocompleted from the linked_gnb's linked_5gcore (open5gs_k8s-core)
-      #! one_ueransim_ue_mnc: "01"                                #! Default value + autocompleted from the linked_gnb's linked_5gcore (open5gs_k8s-core)
-      #! one_ueransim_ue_msin: "0000000001"                       #! Default value + autocompleted from the linked_gnb's linked_5gcore (open5gs_k8s-core)
-      #! one_ueransim_ue_key: "465B5CE8B199B49FAA5F0A2EE238A6BC"  #! Default value + autocompleted from the linked_gnb's linked_5gcore (open5gs_k8s-core)
-      #! one_ueransim_ue_opc: "E8ED289DEBA952E4283B54E88E6183CA"  #! Default value + autocompleted from the linked_gnb's linked_5gcore (open5gs_k8s-core)
-      #! one_ueransim_ue_session_apn: "internet"                  #! Default value + autocompleted from the linked_gnb's linked_5gcore (open5gs_k8s-core)
-      #! one_ueransim_ue_session_sst: 1                           #! Default value + autocompleted from the linked_gnb's linked_5gcore (open5gs_k8s-core)
-      #! one_ueransim_ue_session_sd: "000009"                     #! Autocompleted from from the linked_gnb's linked_5gcore (open5gs_k8s-core). Default value is 000001
+      #@ if ue.run_gnb != "":
+      one_ueransim_run_gnb: #@ ue.run_gnb
+      #@ end
+      #@ if ue.run_ue != "":
+      one_ueransim_run_ue: #@ ue.run_ue
+      #@ end
+      one_ueransim_gnb_linked_5gcore: #@ core_entity
+      #@ if ue.gnb_amf_n2_ip != "":
+      one_ueransim_gnb_amf_n2_ip: #@ ue.gnb_amf_n2_ip
+      #@ end
+      #@ if ue.gnb_tac != "":
+      one_ueransim_gnb_tac: #@ ue.gnb_tac
+      #@ end
+      #@ if ue.gnb_mcc != "":
+      one_ueransim_gnb_mcc: #@ ue.gnb_mcc
+      #@ end
+      #@ if ue.gnb_mnc != "":
+      one_ueransim_gnb_mnc: #@ ue.gnb_mnc
+      #@ end
+      #@ if ue.gnb_slices_sst != "":
+      one_ueransim_gnb_slices_sst: #@ ue.gnb_slices_sst
+      #@ end
+      #@ if ue.gnb_slices_sd != "":
+      one_ueransim_gnb_slices_sd: #@ ue.gnb_slices_sd
+      #@ end
+      #@ if ue.ue_linked_gnb != "":
+      one_ueransim_ue_linked_gnb: #@ ue.ue_linked_gnb
+      #@ end
+      #@ if ue.ue_gnbsearchlist != "":
+      one_ueransim_ue_gnbsearchlist: #@ ue.ue_gnbsearchlist
+      #@ end
+      #@ if ue.ue_mcc != "":
+      one_ueransim_ue_mcc: #@ ue.ue_mcc
+      #@ end
+      #@ if ue.ue_mnc != "":
+      one_ueransim_ue_mnc: #@ ue.ue_mnc
+      #@ end
+      #@ if ue.ue_msin != "":
+      one_ueransim_ue_msin: #@ ue.ue_msin
+      #@ end
+      #@ if ue.ue_key != "":
+      one_ueransim_ue_key: #@ ue.ue_key
+      #@ end
+      #@ if ue.ue_opc != "":
+      one_ueransim_ue_opc: #@ ue.ue_opc
+      #@ end
+      #@ if ue.ue_session_apn != "":
+      one_ueransim_ue_session_apn: #@ ue.ue_session_apn
+      #@ end
+      #@ if ue.ue_session_sst != "":
+      one_ueransim_ue_session_sst: #@ ue.ue_session_sst
+      #@ end
+      #@ if ue.ue_session_sd != "":
+      one_ueransim_ue_session_sd: #@ ue.ue_session_sd
+      #@ end

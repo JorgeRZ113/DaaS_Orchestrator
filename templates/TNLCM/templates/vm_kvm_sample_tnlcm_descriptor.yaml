@@ -1,12 +1,19 @@
 #@ load("@ytt:data", "data")
+#@ load("@ytt:template", "template")
+
+#@ entity_key = "vm_kvm-" + data.values.vm_kvm.name
+
+#@ def vm_kvm_entity():
+type: "vm_kvm"
+name: #@ data.values.vm_kvm.name
+dependencies:
+  - "tn_init"
+input:
+  one_vm_kvm_size: #@ data.values.vm_kvm.size
+  one_vm_kvm_networks: #@ data.values.vm_kvm.networks
+#@ end
+
 ---
 trial_network:
-    #! No necesita TN_init, porque se incluye en la base (base_tnlcm_descriptor.yaml)
-    vm_kvm-ubuntu22_04:
-      type: "vm_kvm"
-      name: "ubuntu22_04"
-      dependencies:
-        - "tn_init"
-      input:
-        one_vm_kvm_size: #@ data.values.vm.size
-        one_vm_kvm_networks: #@ data.values.vm.networks
+  #! No necesita tn_init, porque se incluye en la base (base_tnlcm_descriptor.yaml)
+  _: #@ template.replace({entity_key: vm_kvm_entity()})
