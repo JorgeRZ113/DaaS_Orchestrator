@@ -106,9 +106,38 @@
                 "executions"
               ]
             },
-            "description": "Despliega la Trial Network (TNLCM + VPN). El comportamiento posterior depende de dos flags:\n\n• auto_start_elcm (default true): si true, lanza automáticamente el 1er experimento definido en \"experiment\". Si false, la TN queda en TN_READY esperando llamadas manuales a /elcm y \"experiment\" es opcional.\n\n• ephemeral_tn (default false): SOLO aplica con auto_start_elcm=true. Si true, la TN es de un solo uso y se borra automáticamente tras el 1er experimento. Si false (habitual), la TN se queda viva para recibir más experimentos. Se IGNORA cuando auto_start_elcm=false.\n\n⚠️ Ya NO hay borrado automático por defecto: la TN persiste hasta un DELETE /executions/{id}/tn (o el borrado del modo efímero).\n\n📦 dataset.output — formato(s) de entrega. Acepta un único nombre o una lista combinable, p. ej. [logs, csv]:\n• logs → logs del experimento ELCM (result/logs.json + metadata.json)\n• csv → inyecta un TestCase y descarga+extrae el ZIP de resultados de ELCM (result/csv_query_<id>.csv)\n• dashboard → inyecta un TestCase de Grafana y entrega la URL del dashboard (result/dashboard.json)\n• raw → consulta InfluxDB directamente vía Flux, un CSV por measurement (result/raw_<measurement>.csv)\nTodas las salidas del dataset se guardan en artifacts/<execution_id>/result/<experimento>/ (una subcarpeta por experimento). El campo dataset también puede enviarse por experimento en POST /executions/{id}/elcm."
+            "description": "Despliega la Trial Network (TNLCM + VPN). El comportamiento posterior depende de dos flags:\n\n• auto_start_elcm (default true): si true, lanza automáticamente el 1er experimento definido en \"experiment\". Si false, la TN queda en TN_READY esperando llamadas manuales a /elcm y \"experiment\" es opcional.\n\n• ephemeral_tn (default false): SOLO aplica con auto_start_elcm=true. Si true, la TN es de un solo uso y se borra automáticamente tras el 1er experimento. Si false (habitual), la TN se queda viva para recibir más experimentos. Se IGNORA cuando auto_start_elcm=false.\n\n⚠️ Ya NO hay borrado automático por defecto: la TN persiste hasta un DELETE /executions/{id}/tn (o el borrado del modo efímero).\n\n📦 dataset.output — formato(s) de entrega. Acepta un único nombre o una lista combinable, p. ej. [logs, csv]:\n• logs → logs del experimento ELCM (result/logs.json + metadata.json)\n• csv → inyecta un TestCase y descarga+extrae el ZIP de resultados de ELCM (result/csv_query_<id>.csv)\n• dashboard → inyecta un TestCase de Grafana y entrega la URL del dashboard (result/dashboard.json)\n• raw → consulta InfluxDB directamente vía Flux, un CSV por measurement (result/raw_<measurement>.csv)\nTodas las salidas del dataset se guardan en artifacts/<execution_id>/result/<experimento>/ (una subcarpeta por experimento). El campo dataset también puede enviarse por experimento en POST /executions/{id}/elcm.\n\n🚫 Validación de vacíos — antes de cualquier otra validación, si CUALQUIER campo del body llega como \"\" (o solo espacios), en cualquier sección o elemento de lista, se rechaza con 400 y la ejecución NO arranca. La respuesta lista las rutas afectadas en detail.empty_fields (dot-path, p. ej. infrastructure.component.base.grafana_password): rellena el valor o elimina el campo del body y reenvía el POST. Solo se inspecciona lo que envías (no los defaults del servidor)."
           },
-          "response": []
+          "response": [
+            {
+              "name": "400 - Campos vacíos en el body",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "x-api-key", "value": "{{apiKey}}", "type": "text" },
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"\"\n      }\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  }\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/executions",
+                  "host": [ "{{baseUrl}}" ],
+                  "path": [ "executions" ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "cookie": [],
+              "body": "{\n  \"detail\": {\n    \"empty_fields\": [\n      \"infrastructure.component.base.grafana_password\"\n    ],\n    \"message\": \"Algunos campos llegaron vacíos (\\\"\\\"). Rellénalos con un valor o elimínalos del body y reenvía el POST.\"\n  }\n}"
+            }
+          ]
         },
         {
           "name": "POST /executions/{execution_id}/elcm",

@@ -1,10 +1,7 @@
-#! Overlay para `vm_kvm_sample_tnlcm_descriptor.yaml`
-#! Component: vm_kvm
-#! Depends on:
-
 #@ data/values
 ---
 vm_kvm:
-  size: "small" #! extra_large, large, medium, small, very_small
-
-
+  name: "ubuntu22_04"
+  size: "small"        #! Choices: extra_large, large, medium, small, very_small
+  networks:            #! Se espera una lista
+    - "tn_vxlan"

@@ -1,9 +1,16 @@
-#! Overlay para `ocf_sample_tnlcm_descriptor.yaml`
-#! Component: ocf
-#! Depends on: vnet, oneKE
-
 #@ data/values
 ---
 ocf:
-  one_oneKE: "oneKE-k8s"
-  any_branch: "staging"
+  vnet_first_ip: "10.10.10.1"
+  vnet_netmask: 24                                  
+  vnet_address_size: 100                            
+  vnet_gw: "10.10.10.1"
+  branch: "staging"
+  oneKE_version: "131"                              
+  oneKE_multus: true                                
+  oneKE_cni_plugin: "canal"                         
+  oneKE_metallb: true                               
+  oneKE_metallb_range: "10.10.10.200-10.10.10.240"
+  oneKE_longhorn: true                              
+  oneKE_traefik: false                              
+  oneKE_nginx_passthough: true

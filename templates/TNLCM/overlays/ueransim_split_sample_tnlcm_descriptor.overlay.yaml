@@ -1,30 +1,67 @@
 #! Overlay para `ueransim_split_sample_tnlcm_descriptor.yaml`
-#! Component: ueransim
-#! Depends on: vnet, open5gs_vm
+#! Component: ueransim (modos gnb + ue como entidades separadas)
+#! Depends on: tn_init, vnet, open5gs_vm
+#!
+#! TODOS los campos son OPCIONALES. Los dos `one_ueransim_mode` no aparecen: se quedan
+#! literales en el template porque son lo que define esta variante.
+#!
+#! Al haber dos entidades UERANSIM, los campos van prefijados por entidad
+#! (`gnb_*` para ueransim-gnb, `ue_*` para ueransim-ue).
+#!
+#! Vacio en gnb_*/ue_* significa "que lo autocomplete TNLCM" desde el core o el gNB
+#! enlazados; por eso no se fijan aqui los defaults de 6G-Library (se anotan al lado).
+#!
+#! `gnb_linked_5gcore` y `ue_linked_gnb` no aparecen: son nombres de entidad usados en
+#! `dependencies`.
 
 #@ data/values
 ---
 ueransim_split:
-  mode: "gnb"
-  #! run_gnb: true  #! Default value in mode 'gnb'
-  #! run_ue: false  #! Default value in mode 'gnb'
-  gnb_linked_5gcore: "open5gs_vm-core"
-  #! gnb_amf_n2_ip: "10.10.10.200"  #! Autocompleted from open5gs_k8s-core. Default value is 10.21.12.200
-  #! gnb_tac: 200                   #! Default value + autocompleted from open5gs_k8s-core
-  #! gnb_mcc: "001"                 #! Default value + autocompleted from open5gs_k8s-core
-  #! gnb_mnc: "01"                  #! Default value + autocompleted from open5gs_k8s-core
-  #! gnb_slices_sst: 1              #! Default value + autocompleted from open5gs_k8s-core
-  #! gnb_slices_sd: "000009"        #! Autocompleted from open5gs_k8s-core. Default value is 000001
-  mode: "ue"
-  #! run_gnb: false  #! Default value in mode 'ue'
-  #! run_ue: true    #! Default value in mode 'ue'
-  ue_linked_gnb: "ueransim-gnb"
-  #! ue_gnbsearchlist: "localhost"               #! Autocompleted from ueransim-gnb
-  #! ue_mcc: "001"                               #! Default value + autocompleted from the linked_gnb's linked_5gcore (open5gs_k8s-core)
-  #! ue_mnc: "01"                                #! Default value + autocompleted from the linked_gnb's linked_5gcore (open5gs_k8s-core)
-  #! ue_msin: "0000000001"                       #! Default value + autocompleted from the linked_gnb's linked_5gcore (open5gs_k8s-core)
-  #! ue_key: "465B5CE8B199B49FAA5F0A2EE238A6BC"  #! Default value + autocompleted from the linked_gnb's linked_5gcore
-  #! ue_opc: "E8ED289DEBA952E4283B54E88E6183CA"  #! Default value + autocompleted from the linked_gnb's linked_5gcore
-  #! ue_session_apn: "internet"                  #! Default value + autocompleted from the linked_gnb's linked_5gcore    
-  #! ue_session_sst: 1                           #! Default value + autocompleted from the linked_gnb's linked_5gcore  
-  #! ue_session_sd: "000009"                     #! Autocompleted from from the linked_gnb's linked_5gcore (open5gs_k8s-core). Default value is 000001
+  #! --- vnet N2 ---
+  n2_first_ip: "10.10.10.1"   #! Opcional
+  n2_netmask: 24              #! Opcional. Default 6G-Library
+  n2_address_size: 100        #! Opcional. Default 6G-Library
+
+  #! --- open5gs (fuente de verdad del PLMN) ---
+  open5gs_external_vnet: "tn_vxlan"                 #! Opcional. Default 6G-Library
+  open5gs_size: "small"                             #! Opcional
+  open5gs_ue_subnet: "10.45.0.0/16"                 #! Opcional. Default 6G-Library
+  open5gs_amf_n2_ip: "10.10.10.200"                 #! Opcional. Dentro de la subred N2
+  open5gs_upf_n3_ip: "10.10.10.201"                 #! Opcional. Dentro de la subred N2
+  open5gs_ue_count: 20                              #! Opcional. Default 6G-Library
+  open5gs_tac: 200                                  #! Opcional. Default 6G-Library
+  open5gs_mcc: "001"                                #! Opcional. Default 6G-Library
+  open5gs_mnc: "01"                                 #! Opcional. Default 6G-Library
+  open5gs_msin: "0000000001"                        #! Opcional. Default 6G-Library
+  open5gs_key: "465B5CE8B199B49FAA5F0A2EE238A6BC"   #! Opcional. Default 6G-Library
+  open5gs_opc: "E8ED289DEBA952E4283B54E88E6183CA"   #! Opcional. Default 6G-Library
+  open5gs_apn: "internet"                           #! Opcional. Default 6G-Library
+  open5gs_s_nssai_sst: 1                            #! Opcional. Default 6G-Library
+  open5gs_s_nssai_sd: "000009"                      #! Opcional. 6G-Library trae 000001
+
+  #! --- ueransim-gnb ---
+  gnb_networks:               #! Opcional. Se espera una lista. Default 6G-Library
+    - "tn_vxlan"
+  gnb_run_gnb: ""             #! Opcional. Vacio = default de TNLCM en modo gnb (true)
+  gnb_run_ue: ""              #! Opcional. Vacio = default de TNLCM en modo gnb (false)
+  gnb_amf_n2_ip: ""           #! Opcional (10.21.12.200). Vacio = autocompletado del core
+  gnb_tac: ""                 #! Opcional (200)
+  gnb_mcc: ""                 #! Opcional (001)
+  gnb_mnc: ""                 #! Opcional (01)
+  gnb_slices_sst: ""          #! Opcional (1)
+  gnb_slices_sd: ""           #! Opcional (000001)
+
+  #! --- ueransim-ue ---
+  ue_networks:                #! Opcional. Se espera una lista. Default 6G-Library
+    - "tn_vxlan"
+  ue_run_gnb: ""              #! Opcional. Vacio = default de TNLCM en modo ue (false)
+  ue_run_ue: ""               #! Opcional. Vacio = default de TNLCM en modo ue (true)
+  ue_gnbsearchlist: ""        #! Opcional (localhost). Vacio = autocompletado del gNB
+  ue_mcc: ""                  #! Opcional (001)
+  ue_mnc: ""                  #! Opcional (01)
+  ue_msin: ""                 #! Opcional (0000000001)
+  ue_key: ""                  #! Opcional (465B5CE8B199B49FAA5F0A2EE238A6BC)
+  ue_opc: ""                  #! Opcional (E8ED289DEBA952E4283B54E88E6183CA)
+  ue_session_apn: ""          #! Opcional (internet)
+  ue_session_sst: ""          #! Opcional (1)
+  ue_session_sd: ""           #! Opcional (000001)

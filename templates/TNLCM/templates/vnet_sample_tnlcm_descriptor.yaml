@@ -1,15 +1,27 @@
 #@ load("@ytt:data", "data")
+#@ load("@ytt:template", "template")
+
+
+#@ entity_key = "vnet-" + data.values.vnet.name
+
+#@ def vnet_entity():
+type: "vnet"
+name: #@ data.values.vnet.name
+dependencies:
+  - "tn_init"
+input:
+  one_vnet_first_ip: #@ data.values.vnet.first_ip
+  one_vnet_netmask: #@ data.values.vnet.netmask
+  one_vnet_address_size: #@ data.values.vnet.address_size
+  #@ if data.values.vnet.gw != "":
+  one_vnet_gw: #@ data.values.vnet.gw
+  #@ end
+  #@ if data.values.vnet.dns != "":
+  one_vnet_dns: #@ data.values.vnet.dns
+  #@ end
+#@ end
+
 ---
 trial_network:
-    #! No necesita TN_init, porque se incluye en la base (base_tnlcm_descriptor.yaml)
-    vnet-anothernet:
-      type: "vnet"
-      name: "anothernet"
-      dependencies:
-        - "tn_init"
-      input:
-        one_vnet_gw: #@ data.values.network.gateway
-        one_vnet_dns: #@ data.values.network.dns
-        one_vnet_netmask: #@ data.values.network.netmask
-        one_vnet_first_ip: #@ data.values.network.first_ip
-        one_vnet_address_size: #@ data.values.network.address_size
+  #! No necesita tn_init, porque se incluye en la base (base_tnlcm_descriptor.yaml)
+  _: #@ template.replace({entity_key: vnet_entity()})

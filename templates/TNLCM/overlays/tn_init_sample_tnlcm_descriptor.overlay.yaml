@@ -1,16 +1,12 @@
-#! Overlay para `tn_init_sample_tnlcm_descriptor.yaml`
-#! Component: tn_init
-#! Depends on:
-
 #@ data/values
 ---
 network_vxlan:
-  first_ip: ""
+  first_ip: "192.168.199.1"
   address_size: 254
 
 bastion:
   vpn_clients: 1
-  vpn_allowedips: ""
+  vpn_allowedips: "192.168.166.0/24"
   routemanager_add: []
   fw_exceptions: []
   nat_exceptions: []
