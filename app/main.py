@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app import tnlcm
 from app.config import reload_mutable_settings, settings
-from app.generators.tnlcm_overlay import InvalidDataDescriptorError
+from app.generators.tnlcm_overlay import COMPONENT_PARAMETER_MAPPING, InvalidDataDescriptorError
 from app.health import check_components, check_services
 from app.models import (
     ComponentsHealthResponse,
@@ -325,9 +325,9 @@ async def post_execution(descriptor: DatasetDescriptor):
         invalids: list[str] = []
 
         for comp_key, comp_values in (comps.items() if isinstance(comps, dict) else []):
-            if not isinstance(comp_values, dict) or not comp_values:
-                # empty dict or non-dict is acceptable (empty means include defaults)
-                continue
+            if not isinstance(comp_values, dict):
+                # non-dict is acceptable (means include defaults)
+                comp_values = {}
 
             # Resolve template path for this component
             candidate = (
@@ -348,12 +348,19 @@ async def post_execution(descriptor: DatasetDescriptor):
             }
 
             # Usar extractor centralizado para normalizar y validar campos
-            _, component_invalids = extract_component_template_values(
+            extracted, component_invalids = extract_component_template_values(
                 comp_key=comp_key,
                 comp_values=comp_values,
                 editable_by_section=editable_by_section,
             )
             invalids.extend(component_invalids)
+
+            # Campos obligatorios: se comprueban aquí para cortar con 400 en vez de
+            # dejar que la ejecución falle en segundo plano al rellenar el overlay.
+            required = set(COMPONENT_PARAMETER_MAPPING.get(comp_key, {}).get("required", []))
+            provided = {field for fields in extracted.values() for field in fields}
+            for field in sorted(required - provided):
+                invalids.append(f"component.{comp_key}.{field}: required field missing")
 
         if invalids:
             raise HTTPException(status_code=400, detail={"invalid_fields": invalids})
