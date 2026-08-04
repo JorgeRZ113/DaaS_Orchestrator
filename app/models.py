@@ -348,6 +348,49 @@ class ExecutionResponse(BaseModel):
     tn_id: Optional[str] = None
 
 
+class ExecutionStep(BaseModel):
+    """Un paso del resumen legible: que se hizo, cuanto tardo y como acabo.
+
+    `duration` viene ya formateado en lenguaje natural ("3 min 57 s") para
+    pintarlo tal cual; `duration_seconds` se conserva para ordenar o graficar.
+    """
+
+    step: str
+    status: Literal["ok", "error", "running", "pending", "skipped"]
+    duration: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    attempts: Optional[int] = None
+    detail: Optional[str] = None
+
+
+class ExecutionSummary(BaseModel):
+    """Vista de una ejecucion pensada para el experimentador, no para el programador.
+
+    La construye `app.utils.execution_summary` a partir de la telemetria y del
+    `ExecutionRecord`; es lo que devuelve `GET /executions/{id}/summary` y lo
+    que se persiste como `summary.json`.
+    """
+
+    execution_id: str
+    status: str
+    state: ExecutionState
+    outcome: Literal["ok", "error", "running"]
+    message: str = ""
+    network: Optional[str] = None
+    vpn_status: Optional[str] = None
+    total_duration: Optional[str] = None
+    total_duration_seconds: Optional[float] = None
+    experiments_total: int = 0
+    experiments_successful: int = 0
+    steps: List[ExecutionStep] = Field(default_factory=list)
+    technical_steps: List[ExecutionStep] = Field(default_factory=list)
+    results: List[str] = Field(default_factory=list)
+    dashboards: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+    what_went_wrong: Optional[str] = None
+    generated_at: str
+
+
 class ServiceHealth(BaseModel):
     """Estado de liveness de un servicio individual (orquestador o TNLCM)."""
 

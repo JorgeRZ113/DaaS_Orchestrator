@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c0d4f4e1-3e6a-4e06-a7fb-9b7c0f2c9c01",
     "name": "DaaS Orchestrator - API Unificada",
-    "description": "🚀 FLUJO UNIFICADO DaaS (Data as a Service) — TN PERSISTENTE MULTI-EXPERIMENTO\n\n🔐 Paso previo opcional (TNLCM):\n0. POST /tnlcm/token/refresh → obtiene access_token con TNLCM_USER/TNLCM_PASSWORD\n\n📍 FLUJO PRINCIPAL - POST /executions:\n1. POST /executions → Despliega la Trial Network (TNLCM + VPN) y, según flags, lanza el primer experimento\n2. GET /executions/{id} → Consulta estado y progreso\n3. GET /executions/{id}/detail → Consulta detalle completo (incluye historial de experimentos)\n\n♻️ CICLO DE VIDA (la TN se queda VIVA por defecto):\nMatriz de comportamiento según los flags del DataDescriptor:\n• auto_start_elcm=false → Despliega y se queda en TN_READY. NO borra nada. Espera llamadas manuales a /elcm. (ephemeral_tn se ignora en este modo)\n• auto_start_elcm=true + ephemeral_tn=false (HABITUAL) → Despliega, lanza el 1er experimento y vuelve a TN_READY. Acepta más /elcm o el borrado manual.\n• auto_start_elcm=true + ephemeral_tn=true (UN SOLO USO) → Despliega, lanza el 1er experimento y borra la TN automáticamente (DESTROYED).\n\n🧪 Inyectar experimentos (TN viva):\n- POST /executions/{id}/elcm con body {\"experiment\": {...}} → lanza un experimento sobre la TN. Repetible N veces (uno a la vez). Cada experimento debe tener un NOMBRE ÚNICO.\n\n🗑️ Borrado manual (deleted + purged):\n- DELETE /executions/{id}/tn → destruye la TN cuando tú decidas.\n\n🔄 Estados: PENDING → VALIDATING → DEPLOYING → TN_READY ⇄ RUNNING_EXPERIMENT/COLLECTING → DESTROYING → DESTROYED (o FAILED)\n\n✅ El execution_id se guarda automáticamente en {{executionId}}",
+    "description": "🚀 FLUJO UNIFICADO DaaS (Data as a Service) — TN PERSISTENTE MULTI-EXPERIMENTO\n\n🔐 Paso previo opcional (TNLCM):\n0. POST /tnlcm/token/refresh → obtiene access_token con TNLCM_USER/TNLCM_PASSWORD\n\n📍 FLUJO PRINCIPAL - POST /executions:\n1. POST /executions → Despliega la Trial Network (TNLCM + VPN) y, según flags, lanza el primer experimento\n2. GET /executions/{id} → Consulta estado y progreso\n3. GET /executions/{id}/detail → Consulta detalle completo (incluye historial de experimentos)\n4. GET /executions/{id}/summary → Resumen legible: qué pasó en cada fase, cuánto tardó y qué falló, en lenguaje natural (añade ?format=markdown para verlo como texto)\n\n♻️ CICLO DE VIDA (la TN se queda VIVA por defecto):\nMatriz de comportamiento según los flags del DataDescriptor:\n• auto_start_elcm=false → Despliega y se queda en TN_READY. NO borra nada. Espera llamadas manuales a /elcm. (ephemeral_tn se ignora en este modo)\n• auto_start_elcm=true + ephemeral_tn=false (HABITUAL) → Despliega, lanza el 1er experimento y vuelve a TN_READY. Acepta más /elcm o el borrado manual.\n• auto_start_elcm=true + ephemeral_tn=true (UN SOLO USO) → Despliega, lanza el 1er experimento y borra la TN automáticamente (DESTROYED).\n\n🧪 Inyectar experimentos (TN viva):\n- POST /executions/{id}/elcm con body {\"experiment\": {...}} → lanza un experimento sobre la TN. Repetible N veces (uno a la vez). Cada experimento debe tener un NOMBRE ÚNICO.\n\n🗑️ Borrado manual (deleted + purged):\n- DELETE /executions/{id}/tn → destruye la TN cuando tú decidas.\n\n🔄 Estados: PENDING → VALIDATING → DEPLOYING → TN_READY ⇄ RUNNING_EXPERIMENT/COLLECTING → DESTROYING → DESTROYED (o FAILED)\n\n✅ El execution_id se guarda automáticamente en {{executionId}}",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -252,7 +252,65 @@
                 "detail"
               ]
             },
-            "description": "📋 Información detallada de la ejecución\n\nRetorna:\n• Status actual\n• Trial Network ID (tn_id)\n• ELCM Execution ID (si está en fase 2)\n• Artefactos generados (paths)\n• Mensajes de error (si aplica)\n• Timestamps de cada fase\n\nÚsalo para debugging o auditoría completa"
+            "description": "📋 Información detallada de la ejecución\n\nRetorna:\n• Status actual\n• Trial Network ID (tn_id)\n• ELCM Execution ID (si está en fase 2)\n• Artefactos generados (paths)\n• Mensajes de error en crudo (si aplica)\n\nÚsalo para debugging o auditoría completa. Para ver los tiempos por fase en lenguaje natural, usa GET /executions/{execution_id}/summary"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /executions/{execution_id}/summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "summary"
+              ]
+            },
+            "description": "📖 Resumen legible de la ejecución, pensado para EXPERIMENTADORES\n\nTraduce la telemetría interna a lenguaje natural: qué pasó en cada fase, cuánto tardó y dónde han quedado los resultados. Sin vocabulario técnico (nada de service/operation/gauges).\n\nDevuelve:\n• status / outcome → estado en una frase (ok | error | running)\n• total_duration → duración total ya formateada (\"6 min 27 s\")\n• steps → un paso por fase, con duración y estado: ok | error | running | pending | skipped. Cada experimento sale como su propia fila: Experiment \"exp-demo\"\n• technical_steps → el detalle fino, plegable (upload/run/status/collect, purge...)\n• results / dashboards → carpetas de resultados y enlaces a Grafana\n• what_went_wrong → el error en lenguaje llano y qué hacer para arreglarlo\n\n💡 Se construye EN VIVO: puedes llamarlo MIENTRAS la ejecución sigue en curso y verás los pasos pasar de pending → running → ok. Un despliegue tarda ~4-5 min, así que es la forma cómoda de seguirlo (mejor que GET /executions/{id}, que solo da el estado global).\n\n⚠️ Los campos vacíos se omiten de la respuesta: léelos con .get()\n\n📄 Formato completo documentado en docs/TELEMETRY.md"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /executions/{execution_id}/summary?format=markdown",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/summary?format=markdown",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "markdown"
+                }
+              ]
+            },
+            "description": "📄 El mismo resumen, pero como texto Markdown en vez de JSON\n\nEs exactamente el fichero summary.md que se guarda en artifacts/<execution_id>/ en cada hito de la ejecución.\n\nPensado para leerlo de un vistazo o pegarlo en un informe:\n\n  # Execution summary — tn-demo3_0\n\n  - **Status:** ✅ Completed\n  - **Total duration:** 6 min 27 s\n  - **Network:** tn-demo3_0\n\n  | Step                             |   Duration | Status |\n  |----------------------------------|-----------:|:------:|\n  | Creating the network in TNLCM    |     7.5 s  |   ✅   |\n  | Starting up the virtual machines | 3 min 57 s |   ✅   |\n  | Experiment \"exp-demo\"            |    32.9 s  |   ✅   |\n\n⚠️ Postman lo muestra como texto plano, sin renderizar."
           },
           "response": []
         }

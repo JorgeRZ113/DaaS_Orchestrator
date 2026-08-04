@@ -42,7 +42,7 @@ def _tn_ready_record(execution_id: str) -> ExecutionRecord:
 async def test_teardown_downs_vpn_destroys_tn_and_marks_destroyed(monkeypatch):
     calls: list[tuple[str, str]] = []
 
-    async def _fake_destroy_trial_network(tn_id: str) -> None:
+    async def _fake_destroy_trial_network(tn_id: str, execution_id: str | None = None) -> None:
         calls.append(("destroy", tn_id))
 
     def _fake_down_tunnel(tn_id: str, conf_path: str | None = None) -> None:
@@ -65,7 +65,7 @@ async def test_teardown_downs_vpn_destroys_tn_and_marks_destroyed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_teardown_failure_leaves_failed_state_for_retry(monkeypatch):
-    async def _fake_destroy_trial_network(tn_id: str) -> None:
+    async def _fake_destroy_trial_network(tn_id: str, execution_id: str | None = None) -> None:
         raise RuntimeError("TNLCM unreachable")
 
     def _fake_down_tunnel(tn_id: str, conf_path: str | None = None) -> None:
@@ -99,7 +99,7 @@ async def test_teardown_failure_leaves_failed_state_for_retry(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_teardown_without_tn_is_a_noop(monkeypatch):
-    async def _fail_destroy(tn_id: str) -> None:
+    async def _fail_destroy(tn_id: str, execution_id: str | None = None) -> None:
         raise AssertionError("destroy_trial_network should not be called without tn_id")
 
     monkeypatch.setattr("app.tnlcm.destroy_trial_network", _fail_destroy)

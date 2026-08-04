@@ -67,7 +67,7 @@ def _patch_common(monkeypatch, destroy_calls: list[str], state_result):
     async def _fake_get_tn_state(tn_id, client=None):
         return state_result
 
-    async def _fake_destroy(tn_id):
+    async def _fake_destroy(tn_id, execution_id=None):
         destroy_calls.append(tn_id)
 
     def _fake_down_tunnel(tn_id, conf_path=None):
