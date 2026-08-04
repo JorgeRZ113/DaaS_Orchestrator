@@ -12,8 +12,12 @@ Usage:
     duration = timer.stop()
     telemetry.log_event('info', 'orchestrator.create.completed', service='orchestrator', operation='create', execution_id=execution_id)
 The implementation keeps internal counters, gauges and timing samples as
-objects. The exported report filters human-visible timings to durations >= 1s
-while keeping all samples available for totals and calculations.
+objects. The exported report is scoped to a single ``execution_id``: the
+singleton is process-wide and never reset, so filtering is what keeps one
+execution's report from carrying over the previous ones.
+
+This module is the *technical* channel. The experimenter-facing view is built
+on top of it by ``app.utils.execution_summary``.
 """
 
 from __future__ import annotations
@@ -30,6 +34,10 @@ from app.config import settings
 
 logger = logging.getLogger("telemetry")
 _MIN_VISIBLE_DURATION_SECONDS = 1.0
+_ERROR_STATUSES = {"error", "failed"}
+# Sufijo del mensaje por fase: un paso en error no puede anunciarse como
+# ".completed", que es lo que hacia el valor por defecto de Timer.stop().
+_MESSAGE_SUFFIX_BY_PHASE = {"error": "failed"}
 
 
 def _telemetry_root_dir() -> str:
@@ -43,6 +51,16 @@ def _format_timestamp_human() -> str:
     """Generar timestamp en formato HH:MM:SS-DD/MM/AAAA."""
     now = datetime.now(timezone.utc)
     return now.strftime("%H:%M:%S-%d/%m/%Y")
+
+
+def _format_timestamp_iso() -> str:
+    """Timestamp ISO-8601 en UTC, ordenable y parseable.
+
+    Convive con `_format_timestamp_human`: el humano se conserva para no romper
+    los consumidores existentes, el ISO es el que permite ordenar los eventos
+    cronologicamente y cruzarlos con `ExperimentRun.started_at`.
+    """
+    return datetime.now(timezone.utc).isoformat()
 
 
 def format_duration_display(duration_seconds: float) -> str:
@@ -176,12 +194,16 @@ class Timer:
         self,
         *,
         status: str = "success",
-        phase: str = "completed",
+        phase: Optional[str] = None,
         attempt: Optional[int] = None,
     ) -> float:
         if self._start is None:
             raise RuntimeError("Timer was not started")
         duration = time.time() - self._start
+        # La fase se deriva del status salvo que el llamante la fije: asi un paso
+        # fallido emite `<service>.<operation>.failed` y no `.completed`.
+        if phase is None:
+            phase = "error" if status in _ERROR_STATUSES else "completed"
         self.telemetry.observe_duration(
             service=self.service,
             operation=self.operation,
@@ -205,8 +227,9 @@ class Timer:
             log_fields["labels"] = self.labels
         if duration >= _MIN_VISIBLE_DURATION_SECONDS:
             log_fields["duration_display"] = format_duration_display(duration)
-        level = "error" if status in {"error", "failed"} or phase == "error" else "info"
-        self.telemetry.log_event(level, f"{self.service}.{self.operation}.{phase}", **log_fields)
+        level = "error" if status in _ERROR_STATUSES or phase == "error" else "info"
+        suffix = _MESSAGE_SUFFIX_BY_PHASE.get(phase, phase)
+        self.telemetry.log_event(level, f"{self.service}.{self.operation}.{suffix}", **log_fields)
         return duration
 
 
@@ -247,6 +270,16 @@ class Telemetry:
         if execution_id:
             return execution_id
         return str(uuid.uuid4())
+
+    def timings_for(self, execution_id: Optional[str]) -> List[TimingRecord]:
+        """Devuelve solo las medidas de una ejecucion concreta.
+
+        El singleton es global al proceso y nunca se resetea en produccion, asi
+        que filtrar por `execution_id` es lo unico que evita que un informe
+        arrastre los tiempos de las ejecuciones anteriores.
+        """
+        with self._lock:
+            return [item for item in self._timings if item.execution_id == execution_id]
 
     # Counters
     def increment_counter(
@@ -324,7 +357,8 @@ class Telemetry:
         execution_id: Optional[str] = None,
         labels: Optional[Dict[str, Any]] = None,
     ) -> Timer:
-        execution_id = self.ensure_execution_id(execution_id)
+        # Sin `execution_id` el timer queda sin correlacionar a proposito: acunar
+        # aqui un UUID creaba un directorio de artefactos huerfano por medida.
         return Timer(self, service, operation, execution_id, labels or {})
 
     # Logs
@@ -333,6 +367,7 @@ class Telemetry:
         status = fields.get("status") or _status_from_phase(phase)
         payload = {
             "timestamp": _format_timestamp_human(),
+            "ts": _format_timestamp_iso(),
             "message": message,
             "phase": phase,
             "status": status,
@@ -381,12 +416,12 @@ class Telemetry:
         with self._lock:
             counters = [record.to_dict() for record in self._counters.values()]
             gauges = [record.to_dict() for record in self._gauges.values()]
-            timings = [
-                record.to_dict()
-                for record in self._timings
-                if record.duration_seconds >= _MIN_VISIBLE_DURATION_SECONDS
-            ]
-            totals = self._build_totals(self._timings)
+            # Solo las medidas de esta ejecucion, y sin filtrar por duracion: el
+            # informe tecnico debe ser completo y coherente entre `timings` y
+            # `totals`. Ocultar lo irrelevante es tarea de la capa de resumen.
+            scoped = [record for record in self._timings if record.execution_id == execution_id]
+            timings = [record.to_dict() for record in scoped]
+            totals = self._build_totals(scoped)
         report = TelemetryReport(
             metadata=metadata,
             counters=counters,
@@ -397,17 +432,18 @@ class Telemetry:
         return report.to_dict()
 
     def _build_totals(self, timings: List[TimingRecord]) -> Dict[str, Any]:
+        # `creation` mide solo la llamada real a TNLCM: agregar tambien
+        # ("orchestrator", "create") --el timer del request HTTP, milisegundos--
+        # duplicaba el contador para un unico despliegue.
         return {
             "tnlcm": {
-                "creacion": self._aggregate_timings(
-                    timings, {("orchestrator", "create"), ("tnlcm", "create")}
-                ),
-                "activacion": self._aggregate_timings(timings, {("tnlcm", "activate")}),
-                "destruccion": self._aggregate_timings(timings, {("tnlcm", "destroy")}),
-                "purged": self._aggregate_timings(timings, {("tnlcm", "purged")}),
+                "creation": self._aggregate_timings(timings, {("tnlcm", "create")}),
+                "activation": self._aggregate_timings(timings, {("tnlcm", "activate")}),
+                "destruction": self._aggregate_timings(timings, {("tnlcm", "destroy")}),
+                "purge": self._aggregate_timings(timings, {("tnlcm", "purged")}),
             },
             "elcm": {
-                "experimento_completo": self._aggregate_timings(
+                "experiment_total": self._aggregate_timings(
                     timings, {("orchestrator", "elcm_phase")}
                 ),
             },
