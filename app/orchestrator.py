@@ -164,7 +164,13 @@ def _set_experiment_run_fields(execution_id: str, name: str, **kwargs) -> None:
 
 
 async def _persist_telemetry_report_best_effort(execution_id: str, stage: str) -> str | None:
-    """Persist telemetry report without interrupting orchestration on I/O failures."""
+    """Persist telemetry report and execution summary without interrupting orchestration.
+
+    Escribe los dos canales en cada hito: el informe tecnico
+    (`telemetry_report_<stage>.json`) y el resumen legible para el
+    experimentador (`summary.json` + `summary.md`). Ambas escrituras son
+    best-effort; un fallo de I/O no aborta la orquestacion.
+    """
     if not settings.telemetry_report_artifacts:
         return None
 
@@ -181,7 +187,19 @@ async def _persist_telemetry_report_best_effort(execution_id: str, stage: str) -
 
     record = executions.get(execution_id)
     if record:
-        merged_artifacts = list(dict.fromkeys([*record.artifacts, telemetry_path]))
+        generated = [telemetry_path]
+        try:
+            generated.extend(
+                await artifacts.build_execution_summary_artifacts(execution_id, record)
+            )
+        except Exception as exc:
+            logger.warning(
+                "[%s] Could not persist execution summary for stage %s: %s",
+                execution_id,
+                stage,
+                exc,
+            )
+        merged_artifacts = list(dict.fromkeys([*record.artifacts, *generated]))
         _update(execution_id, artifacts=merged_artifacts)
     return telemetry_path
 
@@ -301,7 +319,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         telemetry.increment_counter("tnlcm_create_total", labels={"service": "orchestrator"})
 
         _update(execution_id, status=ExecutionState.collecting, message="Downloading TNLCM report")
-        report_markdown = tnlcm.download_trial_network_report(tn_id)
+        report_markdown = tnlcm.download_trial_network_report(tn_id, execution_id=execution_id)
         raw_report_path = await artifacts.build_tnlcm_raw_report_artifact(
             execution_id, report_markdown
         )
@@ -339,9 +357,12 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             dict.fromkeys([*record_for_artifacts.artifacts, *report_artifacts])
         )
 
+        vpn_timer = telemetry.start_timer("wireguard", "tunnel_up", execution_id)
+        vpn_timer.start()
         try:
             wireguard.up_tunnel(tn_id, vpn_conf_path)
         except WireGuardManualDeploymentRequired as vpn_error:
+            vpn_timer.stop(status="error")
             manual_message = (
                 "TN deployment completed, but WireGuard VPN could not be deployed automatically; "
                 "deploy it manually before starting ELCM"
@@ -370,6 +391,8 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             )
             await _persist_telemetry_report_best_effort(execution_id, "tnlcm_manual_required")
             return
+
+        vpn_timer.stop(status="success")
 
         # Wait 1 second for WireGuard VPN to be fully activated before calling other components
         await asyncio.sleep(1)
@@ -458,7 +481,7 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
                 )
             else:
                 try:
-                    await tnlcm.destroy_trial_network(tn_id)
+                    await tnlcm.destroy_trial_network(tn_id, execution_id=execution_id)
                 except Exception as cleanup_error:
                     logger.warning(
                         f"[{execution_id}] TN cleanup after TNLCM failure failed: {cleanup_error}"
@@ -1078,17 +1101,21 @@ async def run_teardown_phase(execution_id: str) -> None:
 
     vpn_interface = record.vpn_interface or tn_id
     if vpn_interface:
+        vpn_down_timer = telemetry.start_timer("wireguard", "tunnel_down", execution_id)
+        vpn_down_timer.start()
         try:
             logger.info(f"[{execution_id}] Teardown: deactivating WireGuard tunnel {vpn_interface}")
             wireguard.down_tunnel(vpn_interface, record.vpn_conf_path)
             _update(execution_id, vpn_status="DOWN", vpn_error=None)
+            vpn_down_timer.stop(status="success")
         except Exception as vpn_error:
+            vpn_down_timer.stop(status="error")
             logger.error(f"[{execution_id}] WireGuard deactivation failed: {vpn_error}")
             _update(execution_id, vpn_status="DOWN_ERROR", vpn_error=str(vpn_error))
 
     try:
         logger.info(f"[{execution_id}] Teardown: destroying TN {tn_id}")
-        await tnlcm.destroy_trial_network(tn_id)
+        await tnlcm.destroy_trial_network(tn_id, execution_id=execution_id)
     except Exception as cleanup_error:
         # El timer global queda abierto: el borrado puede reintentarse con
         # otra llamada al endpoint DELETE (se admite desde estado FAILED).

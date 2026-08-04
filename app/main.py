@@ -1,11 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app import tnlcm
 from app.config import reload_mutable_settings, settings
@@ -17,6 +17,7 @@ from app.models import (
     ElcmExperimentRequest,
     ExecutionRecord,
     ExecutionResponse,
+    ExecutionSummary,
     InfrastructureConfig,
     ServicesHealthResponse,
 )
@@ -30,6 +31,7 @@ from app.orchestrator import (
     start_tn_teardown,
 )
 from app.utils.component_contract import extract_component_template_values
+from app.utils.execution_summary import build_execution_summary, render_summary_markdown
 from app.utils.telemetry import format_duration_display, telemetry
 from app.utils.ytt_renderer import (
     overlay_editable_fields_for_template,
@@ -519,6 +521,40 @@ async def get_execution_detail(execution_id: str):
     if not record:
         raise HTTPException(status_code=404, detail="Ejecucion no encontrada")
     return record
+
+
+@app.get(
+    "/executions/{execution_id}/summary",
+    response_model=ExecutionSummary,
+    # Sin los campos vacios: la respuesta queda igual que el `summary.json` de
+    # artifacts/ y se lee sin ruido (`attempts`/`detail` solo cuando aplican).
+    response_model_exclude_none=True,
+    tags=["executions"],
+    dependencies=[Depends(verify_api_key)],
+)
+async def get_execution_summary(
+    execution_id: str,
+    output_format: Literal["json", "markdown"] = Query("json", alias="format"),
+):
+    """Devuelve el resumen legible de una ejecucion, pensado para experimentadores.
+
+    Muestra que paso en cada fase, cuanto tardo y donde han quedado los
+    resultados, sin vocabulario interno. Se construye en vivo, asi que puede
+    consultarse mientras la ejecucion sigue en curso.
+
+    Con `?format=markdown` devuelve el mismo contenido como texto (el mismo
+    `summary.md` que se guarda en `artifacts/<execution_id>/`).
+    """
+    record = get_execution(execution_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Ejecucion no encontrada")
+
+    summary = build_execution_summary(execution_id, record)
+    if output_format == "markdown":
+        return PlainTextResponse(
+            render_summary_markdown(summary), media_type="text/markdown; charset=utf-8"
+        )
+    return summary
 
 
 @app.post(

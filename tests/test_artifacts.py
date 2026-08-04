@@ -7,6 +7,7 @@ import pytest
 
 from app import artifacts
 from app.config import settings
+from app.models import ExecutionRecord, ExecutionState, ExperimentRun
 from app.utils.telemetry import telemetry
 
 # Pattern for HH:MM:SS-DD/MM/AAAA format
@@ -154,6 +155,14 @@ def test_build_telemetry_report_artifact_is_created(tmp_path) -> None:
             execution_id="exec-3",
             duration_seconds=65.034,
         )
+        # Medida de OTRA ejecucion: el singleton es global al proceso, asi que
+        # el informe solo debe traer las de "exec-3".
+        telemetry.observe_duration(
+            service="tnlcm",
+            operation="activate",
+            execution_id="exec-other",
+            duration_seconds=999.0,
+        )
         telemetry_path = asyncio.run(
             artifacts.build_telemetry_report_artifact(
                 execution_id="exec-3",
@@ -175,9 +184,52 @@ def test_build_telemetry_report_artifact_is_created(tmp_path) -> None:
     ), f"Invalid timestamp format: {payload['metadata']['generated_at']}"
     assert any(metric["name"] == "requests_total" for metric in payload["counters"])
     assert any(timing["operation"] == "destroy" for timing in payload["timings"])
-    assert all(timing["duration_seconds"] >= 1.0 for timing in payload["timings"])
-    assert payload["timings"][0]["duration_display"] == "01:05:034"
-    assert payload["totals"]["tnlcm"]["destruccion"]["count"] == 1
-    assert payload["totals"]["tnlcm"]["destruccion"]["duration_display"] == "01:05:034"
-    assert payload["totals"]["tnlcm"]["activacion"]["count"] == 1
-    assert payload["totals"]["tnlcm"]["activacion"]["duration_display"] == "00:00:500"
+    # El informe ya no filtra por duracion: `timings` y `totals` deben cuadrar.
+    assert {timing["duration_seconds"] for timing in payload["timings"]} == {0.5, 65.034}
+    assert all(timing["execution_id"] == "exec-3" for timing in payload["timings"])
+    assert payload["totals"]["tnlcm"]["destruction"]["count"] == 1
+    assert payload["totals"]["tnlcm"]["destruction"]["duration_display"] == "01:05:034"
+    assert payload["totals"]["tnlcm"]["activation"]["count"] == 1
+    assert payload["totals"]["tnlcm"]["activation"]["duration_display"] == "00:00:500"
+
+
+def test_build_execution_summary_artifacts_are_created(tmp_path) -> None:
+    previous_dir = settings.artifacts_dir
+    settings.artifacts_dir = str(tmp_path)
+    telemetry.reset()
+
+    try:
+        telemetry.observe_duration(
+            service="tnlcm",
+            operation="activate",
+            execution_id="exec-summary",
+            duration_seconds=237.36,
+        )
+        record = ExecutionRecord(
+            execution_id="exec-summary",
+            status=ExecutionState.destroyed,
+            tn_id="exec-summary",
+            experiments=[ExperimentRun(name="exp-demo", status="FINISHED")],
+        )
+        summary_paths = asyncio.run(
+            artifacts.build_execution_summary_artifacts("exec-summary", record)
+        )
+    finally:
+        telemetry.reset()
+        settings.artifacts_dir = previous_dir
+
+    json_path, markdown_path = (Path(path) for path in summary_paths)
+    assert json_path.name == "summary.json"
+    assert markdown_path.name == "summary.md"
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["execution_id"] == "exec-summary"
+    assert payload["outcome"] == "ok"
+    assert any(
+        step["step"] == "Starting up the virtual machines" and step["duration"] == "3 min 57 s"
+        for step in payload["steps"]
+    )
+
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert markdown.startswith("# Execution summary — exec-summary")
+    assert "**Experiments:** 1 of 1 successful" in markdown

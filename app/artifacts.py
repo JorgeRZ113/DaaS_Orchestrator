@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
-from app.models import DatasetDescriptor
+from app.models import DatasetDescriptor, ExecutionRecord
+from app.utils.execution_summary import build_execution_summary, render_summary_markdown
 from app.utils.telemetry import telemetry
 
 logger = logging.getLogger(__name__)
@@ -219,6 +220,33 @@ async def build_telemetry_report_artifact(
 
     logger.info(f"[{execution_id}] telemetry report generated: {telemetry_path}")
     return telemetry_path
+
+
+async def build_execution_summary_artifacts(
+    execution_id: str,
+    record: ExecutionRecord,
+) -> list[str]:
+    """Persist the experimenter-facing summary as summary.json + summary.md.
+
+    Es la contraparte legible de `build_telemetry_report_artifact`: mismo
+    directorio, pero con el vocabulario y las duraciones que entiende quien
+    lanza el experimento.
+    """
+    base_dir = _artifact_base_dir(execution_id)
+    _ensure_dir(base_dir)
+
+    summary = build_execution_summary(execution_id, record)
+
+    summary_json_path = os.path.join(base_dir, "summary.json")
+    with open(summary_json_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    summary_md_path = os.path.join(base_dir, "summary.md")
+    with open(summary_md_path, "w", encoding="utf-8") as f:
+        f.write(render_summary_markdown(summary))
+
+    logger.info(f"[{execution_id}] execution summary generated: {summary_md_path}")
+    return [summary_json_path, summary_md_path]
 
 
 def persist_dataset_descriptor(execution_id: str, descriptor: DatasetDescriptor) -> str:
