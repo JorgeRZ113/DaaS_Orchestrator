@@ -121,12 +121,12 @@ def render_sidebar() -> None:
 
         st.divider()
         st.subheader("Salud")
-        if st.button("Comprobar salud", use_container_width=True):
+        if st.button("Comprobar salud", width="stretch"):
             _render_health()
 
         st.divider()
         st.subheader("TNLCM")
-        if st.button("Login (.env)", use_container_width=True):
+        if st.button("Login (.env)", width="stretch"):
             _do_login()
 
         with st.expander("Registrar usuario"):
@@ -188,15 +188,23 @@ def _build_execution_body(
             st.error(f"JSON de component inválido: {exc}")
             return None
     else:
-        base: dict[str, Any] = {}
-        if influx_user.strip():
-            base["influxdb_user"] = influx_user.strip()
-        if influx_password.strip():
-            base["influxdb_password"] = influx_password.strip()
-        if grafana_password.strip():
-            base["grafana_password"] = grafana_password.strip()
-        if base:
-            infrastructure["component"] = {"base": base}
+        # El componente 'base' es todo-o-nada: el backend exige sus tres campos
+        # obligatorios (influxdb_user/password y grafana_password). Si el usuario
+        # rellena alguno, validamos aquí en cliente para no chocar con el 400.
+        base_fields = {
+            "influxdb_user": influx_user.strip(),
+            "influxdb_password": influx_password.strip(),
+            "grafana_password": grafana_password.strip(),
+        }
+        if any(base_fields.values()):
+            missing = [field for field, value in base_fields.items() if not value]
+            if missing:
+                st.error(
+                    "El componente 'base' requiere sus tres campos obligatorios. "
+                    f"Faltan: {', '.join(missing)}."
+                )
+                return None
+            infrastructure["component"] = {"base": base_fields}
 
     body: dict[str, Any] = {
         "infrastructure": infrastructure,
@@ -231,9 +239,17 @@ def tab_new_execution() -> None:
             lib_value = st.text_input("library_reference_value", value="")
 
         st.markdown("**Componente base (monitorización)**")
-        influx_user = st.text_input("influxdb_user", value="admin")
-        influx_password = st.text_input("influxdb_password", value="", type="password")
-        grafana_password = st.text_input("grafana_password", value="", type="password")
+        st.caption(
+            "Campos obligatorios del componente 'base': si rellenas alguno, hacen "
+            "falta los tres (influxdb_user, influxdb_password, grafana_password)."
+        )
+        influx_user = st.text_input("influxdb_user (obligatorio)", value="admin")
+        influx_password = st.text_input(
+            "influxdb_password (obligatorio)", value="", type="password"
+        )
+        grafana_password = st.text_input(
+            "grafana_password (obligatorio)", value="", type="password"
+        )
 
         outputs = st.multiselect("dataset.output", options=list(DATASET_OUTPUTS), default=["logs"])
         col3, col4 = st.columns(2)
