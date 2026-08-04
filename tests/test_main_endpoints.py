@@ -248,6 +248,9 @@ def test_post_execution_accepts_flat_mongodb_fields_without_version(monkeypatch)
                 "mongodb": {
                     "user": "mongo-user",
                     "password": "mongo-pass",
+                    "database": "mongo-db",
+                    "express_user": "express-user",
+                    "express_password": "express-pass",
                 }
             },
             "parameters": {
@@ -269,6 +272,48 @@ def test_post_execution_accepts_flat_mongodb_fields_without_version(monkeypatch)
     assert response.status_code == 202
     body = response.json()
     assert body["execution_id"] == "tn-demo-mongo"
+
+
+def test_post_execution_rejects_mongodb_without_required_credentials(monkeypatch) -> None:
+    # Las credenciales de mongodb son obligatorias: debe cortar con 400 en el POST
+    # en vez de aceptar y fallar luego al generar el descriptor.
+    async def _ok_record(descriptor):
+        return ExecutionRecord(
+            execution_id=descriptor.infrastructure.name,
+            status=ExecutionState.pending,
+            message="accepted",
+        )
+
+    monkeypatch.setattr("app.main.create_tnlcm_execution", _ok_record)
+
+    payload = {
+        "infrastructure": {
+            "name": "tn-demo-mongo",
+            "component": {"mongodb": {"user": "mongo-user"}},
+            "parameters": {
+                "library_reference_type": "branch",
+                "library_reference_value": "develop",
+            },
+        },
+        "experiment": {
+            "name": "exp-demo",
+            "testcase_paths": ["TestCase_ping.yml"],
+            "ues_paths": [],
+        },
+        "dataset": {"output": "logs"},
+        "auto_start_elcm": True,
+    }
+
+    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+
+    assert response.status_code == 400
+    invalid_fields = response.json()["detail"]["invalid_fields"]
+    assert any(
+        "component.mongodb.password: required field missing" == item for item in invalid_fields
+    )
+    assert any(
+        "component.mongodb.database: required field missing" == item for item in invalid_fields
+    )
 
 
 # ---------------------------------------------------------------------------

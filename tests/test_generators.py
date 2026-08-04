@@ -6,6 +6,7 @@ import yaml
 
 from app import elcm
 from app.config import settings
+from app.generators.tnlcm_overlay import MissingComponentParameterError
 from app.generators.tnlcm_renderer import generate_tnlcm_descriptor
 from app.models import ExperimentConfig, InfrastructureConfig
 from app.utils.telemetry import telemetry
@@ -14,6 +15,14 @@ BASE_COMPONENT_VALUES = {
     "influxdb_user": "influx-user",
     "influxdb_password": "influx-pass",
     "grafana_password": "grafana-pass",
+}
+
+MONGODB_COMPONENT_VALUES = {
+    "user": "mongo-user",
+    "password": "mongo-pass",
+    "database": "mongo-db",
+    "express_user": "express-user",
+    "express_password": "express-pass",
 }
 
 
@@ -46,15 +55,14 @@ async def test_generate_tnlcm_descriptor_creates_yaml_in_generated_dir():
 
 @pytest.mark.asyncio
 async def test_generate_tnlcm_descriptor_extracts_flat_mongodb_fields_with_defaults():
-    # NOTE: COMPONENT_PARAMETER_MAPPING["mongodb"] currently only allows
-    # "database"/"replica_set" (pendiente completar el mapeo para
-    # mongodb/redis). "user"/"password" are not yet wired up.
+    # Las credenciales de mongodb son obligatorias; `version` es el único opcional
+    # y se queda con el default del overlay si no se envía.
     output_path = await generate_tnlcm_descriptor(
         InfrastructureConfig(
             name="tn-demo",
             component={
                 "base": BASE_COMPONENT_VALUES,
-                "mongodb": {"database": "mongo-db"},
+                "mongodb": MONGODB_COMPONENT_VALUES,
             },
         ),
         execution_id="exec-tn-mongo",
@@ -66,11 +74,69 @@ async def test_generate_tnlcm_descriptor_extracts_flat_mongodb_fields_with_defau
     mongodb_input = mongodb_component["input"]
 
     assert mongodb_input["one_mongodb_database"] == "mongo-db"
-    # user/password are not yet mapped, so they keep the overlay defaults
-    assert mongodb_input["one_mongodb_user"] == ""
-    assert mongodb_input["one_mongodb_password"] == ""
-    # version is not editable in overlay and should remain default from overlay/template
+    assert mongodb_input["one_mongodb_user"] == "mongo-user"
+    assert mongodb_input["one_mongodb_password"] == "mongo-pass"
+    # version no se envía: conserva el default del overlay
     assert mongodb_input["one_mongodb_version"] == "8.0"
+
+
+@pytest.mark.asyncio
+async def test_generate_tnlcm_descriptor_rejects_incomplete_mongodb_credentials():
+    with pytest.raises(MissingComponentParameterError) as excinfo:
+        await generate_tnlcm_descriptor(
+            InfrastructureConfig(
+                name="tn-demo",
+                component={
+                    "base": BASE_COMPONENT_VALUES,
+                    "mongodb": {"database": "mongo-db"},
+                },
+            ),
+            execution_id="exec-tn-mongo-incompleto",
+        )
+
+    assert set(excinfo.value.missing_params) == {
+        "user",
+        "password",
+        "express_user",
+        "express_password",
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_tnlcm_descriptor_omits_optional_fields_left_empty():
+    # `gw` y `dns` son opcionales sin default: el template no debe emitir la clave
+    # cuando el overlay las deja vacías, y sí emitirla cuando llegan con valor.
+    output_path = await generate_tnlcm_descriptor(
+        InfrastructureConfig(
+            name="tn-demo",
+            component={"base": BASE_COMPONENT_VALUES, "vnet": {}},
+        ),
+        execution_id="exec-tn-vnet-defaults",
+    )
+    vnet_input = yaml.safe_load(Path(output_path).read_text(encoding="utf-8"))["trial_network"][
+        "vnet-anothernet"
+    ]["input"]
+
+    assert vnet_input["one_vnet_first_ip"] == "10.21.12.1"
+    assert "one_vnet_gw" not in vnet_input
+    assert "one_vnet_dns" not in vnet_input
+
+    output_path = await generate_tnlcm_descriptor(
+        InfrastructureConfig(
+            name="tn-demo",
+            component={
+                "base": BASE_COMPONENT_VALUES,
+                "vnet": {"name": "mired", "gw": "10.9.9.254"},
+            },
+        ),
+        execution_id="exec-tn-vnet-gw",
+    )
+    trial_network = yaml.safe_load(Path(output_path).read_text(encoding="utf-8"))["trial_network"]
+
+    # `name` es opcional y la clave de la entidad se deriva de él
+    assert "vnet-mired" in trial_network
+    assert trial_network["vnet-mired"]["input"]["one_vnet_gw"] == "10.9.9.254"
+    assert "one_vnet_dns" not in trial_network["vnet-mired"]["input"]
 
 
 @pytest.mark.asyncio
