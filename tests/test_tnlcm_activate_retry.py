@@ -59,7 +59,7 @@ async def test_recover_tn_with_destroy_purge_uses_delays_and_cleanup(monkeypatch
     async def _fake_sleep(seconds: int) -> None:
         calls.append(f"sleep:{seconds}")
 
-    async def _fake_destroy(tn_id: str) -> None:
+    async def _fake_destroy(tn_id: str, execution_id: str | None = None) -> None:
         calls.append(f"destroy:{tn_id}")
 
     monkeypatch.setattr(tnlcm, "TNLCM_RECOVERY_DESTROY_DELAY", 1)

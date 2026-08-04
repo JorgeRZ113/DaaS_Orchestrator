@@ -46,7 +46,7 @@ async def test_run_elcm_phase_run_error_is_propagated_without_retry(monkeypatch,
             "Corrija lo indicado por el error antes de volver a ejecutar la parte de ELCM."
         )
 
-    async def _fake_destroy_trial_network(tn_id: str):
+    async def _fake_destroy_trial_network(tn_id: str, execution_id: str | None = None):
         return None
 
     def _fake_down_tunnel(vpn_interface: str, vpn_conf_path: str | None = None):
@@ -104,7 +104,7 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
         call_count["run_experiment"] += 1
         return "exp-never-called"
 
-    async def _fake_destroy_trial_network(tn_id: str):
+    async def _fake_destroy_trial_network(tn_id: str, execution_id: str | None = None):
         return None
 
     def _fake_down_tunnel(vpn_interface: str, vpn_conf_path: str | None = None):
@@ -168,7 +168,7 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
     ):
         return ["artifact-1"]
 
-    async def _fake_destroy_trial_network(tn_id: str):
+    async def _fake_destroy_trial_network(tn_id: str, execution_id: str | None = None):
         return None
 
     def _fake_down_tunnel(vpn_interface: str, vpn_conf_path: str | None = None):

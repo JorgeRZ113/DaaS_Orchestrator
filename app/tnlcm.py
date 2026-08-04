@@ -867,7 +867,7 @@ def _legacy_multipart_from_infra(
     return data, files
 
 
-async def _recover_tn_with_destroy_purge(tn_id: str) -> None:
+async def _recover_tn_with_destroy_purge(tn_id: str, execution_id: str | None = None) -> None:
     """Reusable recovery sequence used before redeploy attempts."""
     if TNLCM_RECOVERY_DESTROY_DELAY > 0:
         logger.info(
@@ -877,7 +877,7 @@ async def _recover_tn_with_destroy_purge(tn_id: str) -> None:
         )
         await asyncio.sleep(TNLCM_RECOVERY_DESTROY_DELAY)
 
-    await destroy_trial_network(tn_id)
+    await destroy_trial_network(tn_id, execution_id=execution_id)
 
     if TNLCM_REDEPLOY_DELAY > 0:
         logger.info(
@@ -1085,7 +1085,7 @@ async def deploy_trial_network(
                     TNLCM_ACTIVATE_REDEPLOY_MAX_ATTEMPTS,
                     activate_error,
                 )
-                await _recover_tn_with_destroy_purge(tn_id)
+                await _recover_tn_with_destroy_purge(tn_id, execution_id=execution_id)
                 return await deploy_trial_network(
                     infra,
                     redeploy_attempt=redeploy_attempt + 1,
@@ -1105,15 +1105,18 @@ async def deploy_trial_network(
         return tn_id
 
 
-def download_trial_network_report(tn_id: str) -> str:
-    """Download TNLCM deployment report synchronously and return raw markdown."""
+def download_trial_network_report(tn_id: str, execution_id: str | None = None) -> str:
+    """Download TNLCM deployment report synchronously and return raw markdown.
+
+    `execution_id` es opcional para no romper llamadas existentes, pero el
+    orquestador debe pasarlo: sin el, la medida queda sin correlacionar y no
+    aparece en el resumen de la ejecucion.
+    """
     url = f"{settings.tnlcm_url}/api/v1/trial-networks/{tn_id}/report/download"
     telemetry.increment_counter(
         "requests_total", labels={"service": "tnlcm", "operation": "download_report"}
     )
-    report_timer = telemetry.start_timer(
-        "tnlcm", "download_report", telemetry.ensure_execution_id()
-    )
+    report_timer = telemetry.start_timer("tnlcm", "download_report", execution_id)
     report_timer.start()
     with httpx.Client(timeout=TNLCM_REQUEST_TIMEOUT) as client:
         try:
@@ -1248,12 +1251,17 @@ async def get_tn_state(tn_id: str, client: httpx.AsyncClient | None = None) -> s
         return await _probe(own_client)
 
 
-async def destroy_trial_network(tn_id: str) -> None:
-    """Destroy and purge TN using DELETE endpoints."""
+async def destroy_trial_network(tn_id: str, execution_id: str | None = None) -> None:
+    """Destroy and purge TN using DELETE endpoints.
+
+    `execution_id` es opcional por compatibilidad, pero el orquestador lo pasa
+    siempre para que los tiempos de borrado y purgado caigan en el resumen de la
+    ejecucion en lugar de quedar sueltos.
+    """
     telemetry.increment_counter(
         "requests_total", labels={"service": "tnlcm", "operation": "destroy"}
     )
-    destroy_timer = telemetry.start_timer("tnlcm", "destroy", telemetry.ensure_execution_id())
+    destroy_timer = telemetry.start_timer("tnlcm", "destroy", execution_id)
     destroy_timer.start()
     async with httpx.AsyncClient(timeout=None) as client:
         # First destroy
@@ -1279,7 +1287,7 @@ async def destroy_trial_network(tn_id: str) -> None:
             pass
 
         # Then purge
-        purged_timer = telemetry.start_timer("tnlcm", "purged", telemetry.ensure_execution_id())
+        purged_timer = telemetry.start_timer("tnlcm", "purged", execution_id)
         purged_timer.start()
         purge_ok = False
         try:

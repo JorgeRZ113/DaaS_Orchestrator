@@ -313,9 +313,7 @@ async def upload_test_cases(
             telemetry.increment_counter(
                 "requests_total", labels={"service": "elcm", "operation": "upload"}
             )
-            upload_timer = telemetry.start_timer(
-                "elcm", "upload", telemetry.ensure_execution_id(execution_id)
-            )
+            upload_timer = telemetry.start_timer("elcm", "upload", execution_id)
             upload_timer.start()
             upload_status = "success"
             try:
@@ -374,7 +372,7 @@ async def run_experiment(
 
     base_url = _resolve_elcm_url(elcm_base_url)
     telemetry.increment_counter("requests_total", labels={"service": "elcm", "operation": "run"})
-    run_timer = telemetry.start_timer("elcm", "run", telemetry.ensure_execution_id(execution_id))
+    run_timer = telemetry.start_timer("elcm", "run", execution_id)
     run_timer.start()
     run_status = "success"
     async with httpx.AsyncClient(timeout=ELCM_REQUEST_TIMEOUT) as client:
@@ -428,9 +426,7 @@ async def get_experiment_status(
 ) -> str:
     """Get execution status from ELCM."""
     telemetry.increment_counter("requests_total", labels={"service": "elcm", "operation": "status"})
-    status_timer = telemetry.start_timer(
-        "elcm", "status", execution_id=telemetry.ensure_execution_id(execution_id or experiment_id)
-    )
+    status_timer = telemetry.start_timer("elcm", "status", execution_id=execution_id)
     status_timer.start()
     status_value = "success"
     base_url = _resolve_elcm_url(elcm_base_url)
@@ -481,9 +477,7 @@ async def collect_results(
     telemetry.increment_counter(
         "requests_total", labels={"service": "elcm", "operation": "collect"}
     )
-    collect_timer = telemetry.start_timer(
-        "elcm", "collect", execution_id=telemetry.ensure_execution_id(execution_id or experiment_id)
-    )
+    collect_timer = telemetry.start_timer("elcm", "collect", execution_id=execution_id)
     collect_timer.start()
     collect_status = "success"
     base_url = _resolve_elcm_url(elcm_base_url)
@@ -574,9 +568,7 @@ async def download_execution_results(
     telemetry.increment_counter(
         "requests_total", labels={"service": "elcm", "operation": "results"}
     )
-    results_timer = telemetry.start_timer(
-        "elcm", "results", execution_id=telemetry.ensure_execution_id(execution_id or experiment_id)
-    )
+    results_timer = telemetry.start_timer("elcm", "results", execution_id=execution_id)
     results_timer.start()
     results_status = "success"
 
