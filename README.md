@@ -160,6 +160,12 @@ Header requerido para endpoints de ejecucion:
 - Repetible tantas veces como experimentos quieras (uno a la vez); cada experimento debe tener un **nombre único** dentro de la TN.
 - Respuestas: `202` aceptado; `404` la ejecución no existe; `409` hay un experimento en curso, la TN no está lista o el nombre está repetido.
 
+> **`experiment.name` es la clave del experimento dentro de la TN, no un simple rótulo.** La unicidad la impone **nuestro orquestador**, no ELCM. ELCM no exige nombres únicos. Aquí reutilizamos ese nombre para dos cosas dentro de la misma TN:
+> 1. **Tracking de estado** — el `ExperimentRun` se localiza por `name`, un nombre repetido apuntaría al run equivocado y corrompería su estado/`finished_at`.
+> 2. **Carpeta de resultados** — el dataset se guarda en `artifacts/<execution_id>/result/<experimento>/`, reutilizar el nombre haría que un experimento sobrescribiera los datos del anterior.
+>
+> Por eso se rechaza con `409` un nombre ya usado en esa TN. **Recomendación:** usa nombres descriptivos y únicos por experimento (p. ej. `exp-latencia-01`, `exp-throughput-02`).
+
 ### `DELETE /executions/{execution_id}/tn`
 - Borrado manual de la Trial Network (deleted + purged) cuando tú decidas.
 - Baja el túnel WireGuard y ejecuta destroy + purge en TNLCM.
@@ -293,6 +299,27 @@ Durante `POST /executions`:
   }
 }
 ```
+
+### Rechazo de valores vacíos (`""`)
+
+Antes de cualquier otra validación, `POST /executions` recorre **todo el body** y **rechaza con `400`** si encuentra cualquier string vacío (`""` o solo espacios) en **cualquier** campo, sección o elemento de lista. La ejecución **no arranca**: hay que reenviar un POST bien formado, **rellenando el valor** o **eliminando el campo**.
+
+Solo se inspecciona lo que envía el cliente (no los defaults del servidor), y cada ruta se reporta como dot-path para localizarla al instante:
+
+```json
+{
+  "detail": {
+    "empty_fields": [
+      "experiment.testcase_paths[0]",
+      "infrastructure.component.base.grafana_password",
+      "infrastructure.descriptor_path"
+    ],
+    "message": "Algunos campos llegaron vacíos (\"\"). Rellénalos con un valor o elimínalos del body y reenvía el POST."
+  }
+}
+```
+
+> Nota: esto cubre también el caso de un parámetro `required` (ej. `grafana_password`) enviado como `""`: se rechaza aquí como campo vacío, no llega a la validación de `required` del overlay.
 
 ### Campo `auto_start_elcm`
 
