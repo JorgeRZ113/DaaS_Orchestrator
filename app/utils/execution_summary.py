@@ -1,19 +1,9 @@
 """Vista de la telemetria orientada al experimentador, no al programador.
 
 ``app.utils.telemetry`` es el canal tecnico: emite JSON Lines con vocabulario
-interno (``service``, ``operation``, ``phase``, contadores, gauges). Este modulo
-lo traduce a un resumen legible que responde a las tres preguntas que se hace
+interno. Este modulo lo traduce a un resumen legible que responde a las tres preguntas que se hace
 quien lanza un experimento: que ha pasado, cuanto ha tardado cada cosa y donde
 han quedado los resultados.
-
-Todo el texto que sale de aqui va en ingles: el proyecto es internacional.
-
-Uso::
-
-    from app.utils.execution_summary import build_execution_summary, render_summary_markdown
-
-    summary = build_execution_summary(execution_id, record)
-    markdown = render_summary_markdown(summary)
 
 No guarda estado propio: se construye bajo demanda cruzando las medidas ya
 registradas en el singleton de telemetria (filtradas por ``execution_id``) con
@@ -168,8 +158,7 @@ _ERROR_HINTS: Tuple[Tuple[str, str, str], ...] = (
 
 
 def format_duration_human(duration_seconds: Optional[float]) -> Optional[str]:
-    """Duracion en lenguaje natural: ``< 1 s``, ``7.5 s``, ``3 min 57 s``, ``1 h 05 min``.
-
+    """
     Sustituye al ``MM:SS:MMM`` de ``telemetry.format_duration_display``, que se
     lee mal (``04:33:204`` parece 4 horas y media). Aquel se mantiene intacto
     para el informe tecnico.
