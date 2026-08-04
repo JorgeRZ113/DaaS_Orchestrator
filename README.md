@@ -23,6 +23,7 @@ El flujo es reproducible, guiado por:
 - **Reintentos automáticos**: Recuperación ante fallos transitorios de TNLCM (ej. `activate` con backoff)
 - **VPN WireGuard automática**: Activación tras TNLCM, desactivación en cleanup ELCM
 - **Telemetría granular**: Métricas por fase (TNLCM create/activate, ELCM total) con `execution_id` para correlación
+- **Resumen legible**: `GET /executions/{id}/summary` y `summary.md`/`summary.json` traducen la telemetría a pasos, duraciones y errores en lenguaje natural para el experimentador ([`docs/TELEMETRY.md`](docs/TELEMETRY.md))
 - **Persistencia de artefactos**: `DatasetDescriptor` guardado inmediatamente en `artifacts/<execution_id>/`
 
 ## Requisitos
@@ -111,6 +112,7 @@ Header requerido para endpoints de ejecucion:
 | `DELETE` | `/executions/{execution_id}/tn` | Si | No | Borrado manual de la TN (deleted + purged) |
 | `GET` | `/executions/{execution_id}` | Si | No | Estado resumido |
 | `GET` | `/executions/{execution_id}/detail` | Si | No | Estado detallado + artefactos |
+| `GET` | `/executions/{execution_id}/summary` | Si | No | Resumen legible para experimentadores (`?format=markdown` para texto) |
 
 ## Endpoints actuales (detalle)
 
@@ -176,6 +178,12 @@ Header requerido para endpoints de ejecucion:
 
 ### `GET /executions/{execution_id}/detail`
 - Devuelve detalle completo (incluye ids y artifacts).
+
+### `GET /executions/{execution_id}/summary`
+- Resumen legible para experimentadores: qué pasó en cada fase, cuánto tardó y dónde han quedado los resultados, sin vocabulario interno.
+- Se construye en vivo, así que puede consultarse mientras la ejecución sigue en curso (los pasos pasan de `pending` a `running` y a `ok`).
+- `?format=markdown` devuelve el mismo contenido como texto (el `summary.md` que se guarda en `artifacts/<execution_id>/`).
+- Detalle completo del formato en [`docs/TELEMETRY.md`](docs/TELEMETRY.md).
 
 ## Payloads: Formato y Validación
 
@@ -542,7 +550,6 @@ Los tests validan:
 Los siguientes archivos contienen snapshots históricos de fases anteriores del desarrollo. **NO se recomiendan para nuevas implementaciones**:
 
 - `docs/UNIFIED_EXECUTIONS_API.md` - Documentación de fase de unificación (desalineada con estado actual)
-- `docs/TELEMETRY.md` - Telemetría anterior a refactor (módulo movido a `app/utils/telemetry.py`)
 - `docs/TNLCM_MASKS_SUMMARY.md` - Modelo de máscaras TNLCM obsoleto
 - `docs/TNLCM_MASKS_INTEGRATION.md` - Propuesta de arquitectura superada
 - `docs/CHANGES_UNIFIED_EXECUTIONS_API.md` - Changelog de fase de unificación
@@ -556,9 +563,10 @@ Los siguientes archivos contienen snapshots históricos de fases anteriores del 
 
 ## Soporte
 
-Si necesitas validar el flujo completo, usa primero la coleccion Postman y revisa el endpoint de detalle para inspeccionar artifacts y errores:
+Si necesitas validar el flujo completo, usa primero la coleccion Postman y revisa estos dos endpoints para inspeccionar qué ha pasado:
 
-- `GET /executions/{execution_id}/detail`
+- `GET /executions/{execution_id}/summary` - qué pasó en cada fase, cuánto tardó y qué falló, en lenguaje natural
+- `GET /executions/{execution_id}/detail` - registro completo con artifacts y el error en crudo
 
 Para problemas de validación de componentes, consulta la sección "Validación de Componentes" arriba y revisa los overlays TNLCM en `templates/TNLCM/overlays/`.
 
