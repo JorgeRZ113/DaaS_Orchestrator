@@ -346,6 +346,180 @@ def tab_status() -> None:
     st.json(detail)
 
 
+# ===== Pestaña: Resumen =====
+
+# Un despliegue TNLCM tarda ~4-5 min, asi que sondear cada 5 s da sensacion de
+# progreso sin castigar a la API.
+SUMMARY_REFRESH_SECONDS = 5
+
+# El backend devuelve el resumen en ingles a proposito (la telemetria es
+# internacional). Aqui solo se traduce el estado de cada paso, que es un enum
+# corto y cerrado; las etiquetas de los pasos se pintan tal cual para no
+# duplicar el catalogo de `app/utils/execution_summary.py`.
+_STEP_STATUS = {
+    "ok": "Completado",
+    "error": "Error",
+    "running": "En curso",
+    "pending": "Pendiente",
+    "skipped": "Omitido",
+}
+
+
+def _render_steps(steps: list[dict[str, Any]]) -> None:
+    """Pinta una lista de pasos como tabla (paso, duración, estado)."""
+    if not steps:
+        st.caption("Todavía no hay pasos registrados.")
+        return
+
+    # `detail` solo viene en los pasos que fallan: si no hay ninguno, se omite
+    # la columna en vez de mostrarla vacía.
+    show_detail = any(step.get("detail") for step in steps)
+
+    rows: list[dict[str, Any]] = []
+    for step in steps:
+        row: dict[str, Any] = {
+            "Paso": step.get("step", "?"),
+            "Duración": step.get("duration") or "—",
+            "Estado": _STEP_STATUS.get(step.get("status", ""), step.get("status", "?")),
+            "Intentos": step.get("attempts"),
+        }
+        if show_detail:
+            row["Detalle"] = step.get("detail")
+        rows.append(row)
+
+    st.dataframe(
+        rows,
+        hide_index=True,
+        column_config={
+            "Paso": st.column_config.TextColumn(width="large"),
+            "Intentos": st.column_config.NumberColumn(help="Solo si el paso se reintentó"),
+        },
+    )
+
+
+def _render_summary(summary: dict[str, Any]) -> None:
+    """Pinta el resumen completo: KPIs, aviso de estado, pasos y resultados."""
+    with st.container(horizontal=True):
+        st.metric("Estado", summary.get("status") or "?", border=True)
+        st.metric("Duración total", summary.get("total_duration") or "—", border=True)
+        st.metric("Red", summary.get("network") or "—", border=True)
+        if summary.get("experiments_total"):
+            st.metric(
+                "Experimentos correctos",
+                f"{summary.get('experiments_successful', 0)} / {summary['experiments_total']}",
+                border=True,
+            )
+
+    if summary.get("what_went_wrong"):
+        st.error(summary["what_went_wrong"], icon=":material/error:")
+    elif summary.get("outcome") == "ok":
+        st.success(
+            summary.get("message") or "Ejecución completada.",
+            icon=":material/check_circle:",
+        )
+    elif summary.get("message"):
+        st.info(summary["message"], icon=":material/hourglass_top:")
+
+    _render_steps(summary.get("steps") or [])
+
+    dashboards = summary.get("dashboards") or []
+    results = summary.get("results") or []
+    if dashboards or results:
+        with st.container(border=True):
+            st.markdown("**Resultados**")
+            for url in dashboards:
+                st.link_button("Abrir dashboard de Grafana", url, icon=":material/monitoring:")
+            for path in results:
+                st.code(path, language=None)
+
+    with st.expander("Detalle técnico"):
+        st.caption("Pasos internos del orquestador; normalmente no hace falta mirarlos.")
+        _render_steps(summary.get("technical_steps") or [])
+
+
+def _render_summary_panel() -> None:
+    """Descarga el resumen del execution_id del formulario y lo pinta."""
+    execution_id = st.session_state.get("summary_execution_id", "").strip()
+    if not execution_id:
+        st.warning("Introduce un execution_id.")
+        return
+
+    client = _get_client()
+    if client is None:
+        return
+
+    try:
+        summary = client.get_execution_summary(execution_id)
+    except ApiError as exc:
+        _show_api_error(exc)
+        return
+
+    _render_summary(summary)
+    st.caption(f"Actualizado: {summary.get('generated_at', '?')}")
+
+
+@st.fragment(run_every=SUMMARY_REFRESH_SECONDS)
+def _summary_live_panel() -> None:
+    """Mismo panel, refrescándose solo él cada N segundos.
+
+    Al vivir en un fragment, el sondeo no vuelve a ejecutar el resto de la app
+    ni pierde lo que haya escrito el usuario en las otras pestañas.
+    """
+    _render_summary_panel()
+
+
+def tab_summary() -> None:
+    """Resumen legible de una ejecución (GET /executions/{id}/summary)."""
+    st.subheader("Resumen de la ejecución")
+    st.caption(
+        "Qué ha pasado en cada fase, cuánto ha tardado y dónde han quedado los "
+        "resultados. Se construye en vivo, así que puedes mirarlo mientras la "
+        "Trial Network se está desplegando."
+    )
+
+    execution_id = st.text_input(
+        "execution_id",
+        value=st.session_state.get("last_execution_id", ""),
+        key="summary_execution_id",
+    )
+
+    auto = st.toggle(
+        f"Actualizar cada {SUMMARY_REFRESH_SECONDS} s",
+        key="summary_auto_refresh",
+        help="Útil mientras la ejecución está en curso: un despliegue tarda ~4-5 min.",
+    )
+    if st.button("Consultar", icon=":material/refresh:"):
+        st.session_state["summary_requested"] = True
+
+    if not st.session_state.get("summary_requested"):
+        return
+
+    if auto:
+        _summary_live_panel()
+    else:
+        _render_summary_panel()
+
+    with st.expander("Informe en Markdown (el mismo summary.md de artifacts/)"):
+        # La descarga se hace solo bajo demanda: el contenido de un expander se
+        # evalua aunque este plegado.
+        if st.button("Generar informe", icon=":material/description:", key="summary_md"):
+            client = _get_client()
+            if client is not None and execution_id.strip():
+                try:
+                    report = client.get_execution_summary(execution_id.strip(), as_markdown=True)
+                except ApiError as exc:
+                    _show_api_error(exc)
+                else:
+                    st.download_button(
+                        "Descargar summary.md",
+                        data=report,
+                        file_name=f"summary_{execution_id.strip()}.md",
+                        mime="text/markdown",
+                        icon=":material/download:",
+                    )
+                    st.markdown(report)
+
+
 # ===== Pestaña: Experimento ELCM =====
 
 
@@ -434,14 +608,16 @@ def main() -> None:
 
     render_sidebar()
 
-    tabs = st.tabs(["Nueva ejecución", "Estado", "Experimento ELCM", "Borrar TN"])
+    tabs = st.tabs(["Nueva ejecución", "Resumen", "Estado", "Experimento ELCM", "Borrar TN"])
     with tabs[0]:
         tab_new_execution()
     with tabs[1]:
-        tab_status()
+        tab_summary()
     with tabs[2]:
-        tab_elcm()
+        tab_status()
     with tabs[3]:
+        tab_elcm()
+    with tabs[4]:
         tab_teardown()
 
 

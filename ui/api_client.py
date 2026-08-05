@@ -196,6 +196,22 @@ class ApiClient:
         """Registro completo de una ejecución (artifacts, experimentos, error)."""
         return self._request("GET", f"/executions/{execution_id}/detail", auth=True)
 
+    def get_execution_summary(self, execution_id: str, *, as_markdown: bool = False) -> Any:
+        """Resumen legible: pasos, duraciones, resultados y errores explicados.
+
+        El backend lo construye en vivo, así que puede consultarse mientras la
+        ejecución sigue en curso. Con `as_markdown=True` devuelve el texto del
+        informe (el mismo `summary.md` que se guarda en `artifacts/`) en lugar
+        del JSON; `_parse_response` ya se encarga de devolverlo como str.
+        """
+        params = {"format": "markdown"} if as_markdown else None
+        return self._request(
+            "GET",
+            f"/executions/{execution_id}/summary",
+            auth=True,
+            params=params,
+        )
+
     def start_elcm(self, execution_id: str, body: dict[str, Any]) -> Any:
         """Lanza un experimento ELCM sobre la TN viva de la ejecución."""
         return self._request(
