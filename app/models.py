@@ -1,3 +1,4 @@
+import asyncio
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
@@ -208,7 +209,19 @@ class ExperimentConfig(BaseModel):
 # Formatos de entrega soportados por dataset.output. El esquema los acepta todos;
 # la disponibilidad REAL en el runtime se controla aparte en el orquestador
 # (IMPLEMENTED_DATASET_OUTPUTS), activándolos de forma incremental.
-DatasetOutput = Literal["logs", "csv", "dashboard", "raw"]
+DatasetOutput = Literal["logs", "csv", "dashboard", "raw", "files"]
+
+
+# Variables globales del bloque `dataset`, declaradas por el modo de salida que
+# las consume. Cada variable es exclusiva de sus modos: pedirla sin activar
+# ninguno de ellos es un error de configuración, no un valor que se ignora en
+# silencio (fail-fast). El modo 'logs' no admite variables.
+DATASET_MODE_VARIABLES: dict[str, set[str]] = {
+    "logs": set(),
+    "csv": {"measurement", "influx_host", "influx_port", "influx_bucket"},
+    "dashboard": {"measurement", "panel_interval"},
+    "raw": {"measurement", "influx_bucket"},
+}
 
 
 class DatasetRequest(BaseModel):
@@ -218,6 +231,36 @@ class DatasetRequest(BaseModel):
             "Formato(s) de entrega del dataset. Acepta un único nombre ('logs') "
             "o una lista (['logs', 'csv']). Valores válidos: logs, csv, dashboard, raw."
         ),
+    )
+
+    # --- Variables globales por modo (ver DATASET_MODE_VARIABLES) ---
+    # Todas son opcionales: si no se indican, el orquestador las deriva del
+    # despliegue (IP de monitorización del report TNLCM, measurement del TestCase
+    # de captura) y en último término usa el default del overlay.
+    measurement: Optional[str] = Field(
+        default=None,
+        description=(
+            "Measurement de InfluxDB del que se extrae el dataset. Modos: csv, "
+            "dashboard, raw. Por defecto, el del TestCase de captura."
+        ),
+    )
+    influx_host: Optional[str] = Field(
+        default=None,
+        description=(
+            "IP/host de InfluxDB. Modo: csv. Por defecto, la IP de monitorización "
+            "del report TNLCM."
+        ),
+    )
+    influx_port: Optional[int] = Field(
+        default=None, description="Puerto de InfluxDB. Modo: csv. Por defecto 8086."
+    )
+    influx_bucket: Optional[str] = Field(
+        default=None,
+        description="Bucket de InfluxDB. Modos: csv, raw. Por defecto 'testing'.",
+    )
+    panel_interval: Optional[str] = Field(
+        default=None,
+        description="Intervalo de refresco de los paneles Grafana. Modo: dashboard.",
     )
 
     @field_validator("output", mode="before")
@@ -256,9 +299,41 @@ class DatasetRequest(BaseModel):
             raise ValueError("dataset.output must contain at least one delivery format")
         return normalized
 
+    @model_validator(mode="after")
+    def _reject_variables_of_inactive_modes(self) -> "DatasetRequest":
+        """Rechazar variables cuyo modo dueño no está en `output` (fail-fast).
+
+        Definir `influx_host` sin pedir 'csv' casi siempre significa que el modo
+        se olvidó en `output`; aceptarlo en silencio produciría una entrega
+        distinta de la esperada sin ningún aviso.
+        """
+        active = set(self.output)
+        offending: dict[str, list[str]] = {}
+        for variable in self.variables():
+            owners = {mode for mode, names in DATASET_MODE_VARIABLES.items() if variable in names}
+            if not owners & active:
+                offending[variable] = sorted(owners)
+
+        if offending:
+            detail = "; ".join(
+                f"'{name}' requiere dataset.output con alguno de {owners}"
+                for name, owners in sorted(offending.items())
+            )
+            raise ValueError(f"dataset variables not applicable to the requested output: {detail}")
+        return self
+
     def wants(self, kind: str) -> bool:
         """True si `kind` está entre los formatos de entrega solicitados."""
         return kind in self.output
+
+    def variables(self) -> dict[str, Any]:
+        """Variables globales realmente indicadas en el body (sin los None)."""
+        known = {name for names in DATASET_MODE_VARIABLES.values() for name in names}
+        return {
+            name: getattr(self, name)
+            for name in sorted(known)
+            if getattr(self, name, None) is not None
+        }
 
 
 class ElcmExperimentRequest(BaseModel):
@@ -313,6 +388,8 @@ class ExperimentRun(BaseModel):
     # Formatos de entrega solicitados para este experimento concreto (dataset.output
     # del body de /elcm). Se recolectan en artifacts/<id>/result/<experimento>/.
     dataset_output: List[str] = Field(default_factory=lambda: ["logs"])
+    # Variables globales del bloque dataset usadas en este experimento.
+    dataset_variables: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
@@ -326,6 +403,9 @@ class ExecutionRecord(BaseModel):
     # Formatos de entrega solicitados (dataset.output), fijados al crear la
     # ejecución. La fase ELCM los consulta para saber qué recolectar/inyectar.
     dataset_output: List[str] = Field(default_factory=lambda: ["logs"])
+    # Variables globales del bloque dataset fijadas al crear la ejecución. Se
+    # reutilizan cuando POST /executions/{id}/elcm no trae bloque `dataset`.
+    dataset_variables: Dict[str, Any] = Field(default_factory=dict)
     experiments: List[ExperimentRun] = Field(default_factory=list)
     tn_id: Optional[str] = None
     vpn_interface: Optional[str] = None
@@ -340,12 +420,28 @@ class ExecutionRecord(BaseModel):
     error: Optional[str] = None
     _execution_timer: Any = PrivateAttr(default=None)
 
+    # Señales de fase: la background task las activa al alcanzar un estado
+    # terminal (haya ido bien o mal) y el endpoint bloqueante espera en ellas.
+    # Son estado vivo del proceso, no se serializan a executions.json.
+    _vpn_ready: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
+    _experiment_finished: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
+    _tn_purged: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
+
 
 class ExecutionResponse(BaseModel):
+    """Respuesta de los endpoints de ciclo de vida.
+
+    El desenlace lo dice el codigo HTTP (200 completo, 207 incompleto, 502 la
+    fase fallo). Estos campos son el detalle para poder actuar: que TN quedo
+    creada, si el tunel necesita montarse a mano y que fallo exactamente.
+    """
+
     execution_id: str
     status: ExecutionState
     message: str = ""
     tn_id: Optional[str] = None
+    vpn_status: Optional[str] = None
+    error: Optional[str] = None
 
 
 class ExecutionStep(BaseModel):

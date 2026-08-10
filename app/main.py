@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 import httpx
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Query, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app import tnlcm
@@ -17,18 +17,24 @@ from app.models import (
     ElcmExperimentRequest,
     ExecutionRecord,
     ExecutionResponse,
+    ExecutionState,
     ExecutionSummary,
     InfrastructureConfig,
     ServicesHealthResponse,
 )
 from app.orchestrator import (
+    ELCM_PHASE_MAX_WAIT_SECONDS,
+    TEARDOWN_MAX_WAIT_SECONDS,
+    TNLCM_PHASE_MAX_WAIT_SECONDS,
     ExecutionConflictError,
     ExecutionNotFoundError,
+    PhaseStillRunningError,
     TnlcmDeploymentInProgressError,
     create_tnlcm_execution,
     get_execution,
     start_elcm_phase,
     start_tn_teardown,
+    wait_for_phase,
 )
 from app.utils.component_contract import extract_component_template_values
 from app.utils.execution_summary import build_execution_summary, render_summary_markdown
@@ -57,7 +63,73 @@ def to_execution_response(record: ExecutionRecord) -> ExecutionResponse:
         status=record.status,
         message=record.message,
         tn_id=record.tn_id,
+        vpn_status=record.vpn_status,
+        error=record.error,
     )
+
+
+# Desenlaces posibles de una fase, documentados en OpenAPI.
+PHASE_RESPONSES: dict[int | str, dict[str, Any]] = {
+    200: {"description": "La fase completo todo lo que el endpoint promete"},
+    207: {"description": "La fase termino, pero incompleta (ver vpn_status / error)"},
+    502: {"description": "La fase fallo en un servicio de abajo (TNLCM/Jenkins/ELCM)"},
+    504: {"description": "Sigue en curso al agotarse el tope; consultar GET /executions/{id}"},
+}
+
+
+def _phase_http_status(
+    record: ExecutionRecord, signal: str, experiment_name: str | None = None
+) -> int:
+    """Traduce el desenlace de una fase al codigo HTTP que le corresponde.
+
+    El codigo es la respuesta: 200 solo si la fase hizo todo lo prometido, 207
+    si termino incompleta y 502 si fallo. El cliente no tiene que leer el body
+    para saber como fue.
+    """
+    if record.status is ExecutionState.failed:
+        return 502
+
+    if signal == "_vpn_ready":
+        # TN desplegada pero sin tunel automatico: no se puede llamar a /elcm
+        # todavia, asi que no es un 200 limpio.
+        return 207 if record.vpn_status == "MANUAL_REQUIRED" else 200
+
+    if signal == "_experiment_finished":
+        run = next(
+            (item for item in reversed(record.experiments) if item.name == experiment_name),
+            None,
+        )
+        if run is None:
+            return 200
+        if run.status == "FAILED":
+            return 502
+        # Experimento terminado con `error` relleno = dataset parcial.
+        return 207 if run.error else 200
+
+    if signal == "_tn_purged":
+        return 200 if record.status is ExecutionState.destroyed else 502
+
+    return 200
+
+
+async def _await_phase(
+    execution_id: str,
+    signal: str,
+    timeout: float,
+    response: Response,
+    *,
+    experiment_name: str | None = None,
+) -> ExecutionResponse:
+    """Bloquea hasta que la fase termine y responde con el codigo del desenlace."""
+    try:
+        record = await wait_for_phase(execution_id, signal, timeout)
+    except ExecutionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PhaseStillRunningError as exc:
+        raise HTTPException(status_code=504, detail=str(exc))
+
+    response.status_code = _phase_http_status(record, signal, experiment_name)
+    return to_execution_response(record)
 
 
 @asynccontextmanager
@@ -307,12 +379,31 @@ def _collect_empty_string_paths(value: Any, prefix: str = "") -> list[str]:
 @app.post(
     "/executions",
     response_model=ExecutionResponse,
-    status_code=202,
+    status_code=200,
+    responses=PHASE_RESPONSES,
     tags=["executions"],
     dependencies=[Depends(verify_api_key)],
 )
-async def post_execution(descriptor: DatasetDescriptor):
+async def post_execution(
+    descriptor: DatasetDescriptor,
+    response: Response,
+    wait: bool = Query(
+        True,
+        description=(
+            "Si es true (por defecto) la respuesta no llega hasta que la VPN queda "
+            "resuelta. Con false se devuelve 202 al instante y se consulta el estado "
+            "con GET /executions/{execution_id}."
+        ),
+    ),
+):
     """Inicia una ejecución completa: TNLCM y opcionalmente ELCM (auto-start).
+
+    Con `wait=true` la respuesta llega cuando la VPN esta resuelta, que es el
+    punto a partir del cual se puede llamar a /elcm. El codigo HTTP dice como
+    fue: 200 tunel arriba, 207 TN desplegada pero el tunel hay que montarlo a
+    mano (vpn_status=MANUAL_REQUIRED), 502 fallo el despliegue. Tope de espera:
+    40 min; al agotarse se responde 504 y el despliegue continua en segundo
+    plano.
 
     Si descriptor.auto_start_elcm=true (por defecto), ELCM se inicia automáticamente
     al completar TNLCM. Establecer auto_start_elcm=false para control manual del flujo.
@@ -412,7 +503,12 @@ async def post_execution(descriptor: DatasetDescriptor):
     )
     try:
         record = await create_tnlcm_execution(descriptor)
-        return to_execution_response(record)
+        if not wait:
+            response.status_code = 202
+            return to_execution_response(record)
+        return await _await_phase(
+            record.execution_id, "_vpn_ready", TNLCM_PHASE_MAX_WAIT_SECONDS, response
+        )
     except TnlcmDeploymentInProgressError as exc:
         request_status = "error"
         telemetry.increment_counter(
@@ -445,12 +541,31 @@ async def post_execution(descriptor: DatasetDescriptor):
 @app.post(
     "/executions/{execution_id}/elcm",
     response_model=ExecutionResponse,
-    status_code=202,
+    status_code=200,
+    responses=PHASE_RESPONSES,
     tags=["executions"],
     dependencies=[Depends(verify_api_key)],
 )
-async def post_execution_elcm(execution_id: str, request: ElcmExperimentRequest):
+async def post_execution_elcm(
+    execution_id: str,
+    request: ElcmExperimentRequest,
+    response: Response,
+    wait: bool = Query(
+        True,
+        description=(
+            "Si es true (por defecto) la respuesta no llega hasta que el dataset "
+            "esta recolectado. Con false se devuelve 202 al instante."
+        ),
+    ),
+):
     """Lanza un experimento ELCM sobre la TN viva de la ejecucion.
+
+    Con `wait=true` la respuesta llega cuando el dataset ya esta en disco, no
+    solo cuando el experimento ha parado. El codigo HTTP dice como fue: 200
+    dataset completo, 207 el experimento termino pero la recoleccion quedo a
+    medias (el campo `error` dice que formatos faltaron), 502 el experimento
+    fallo. Tope de espera: 70 min; al agotarse se responde 504 y el experimento
+    continua en segundo plano.
 
     Puede llamarse tantas veces como experimentos se quieran ejecutar (uno a
     la vez). Cada experimento debe tener un nombre unico dentro de la TN.
@@ -459,8 +574,9 @@ async def post_execution_elcm(execution_id: str, request: ElcmExperimentRequest)
     salida de datos distinta (logs/csv/dashboard/raw), que se recolecta en
     artifacts/<execution_id>/result/<experimento>/.
 
-    Respuestas: 202 experimento aceptado; 404 la ejecucion no existe;
-    409 hay un experimento en curso, la TN no esta lista o el nombre esta repetido.
+    Respuestas: 200 experimento terminado; 202 aceptado (wait=false);
+    404 la ejecucion no existe; 409 hay un experimento en curso, la TN no esta
+    lista o el nombre esta repetido; 504 sigue en curso al agotarse el tope.
     """
     try:
         record = start_elcm_phase(execution_id, request.experiment, request.dataset)
@@ -468,23 +584,50 @@ async def post_execution_elcm(execution_id: str, request: ElcmExperimentRequest)
         raise HTTPException(status_code=404, detail=str(exc))
     except ExecutionConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    return to_execution_response(record)
+
+    if not wait:
+        response.status_code = 202
+        return to_execution_response(record)
+    return await _await_phase(
+        execution_id,
+        "_experiment_finished",
+        ELCM_PHASE_MAX_WAIT_SECONDS,
+        response,
+        experiment_name=request.experiment.name,
+    )
 
 
 @app.delete(
     "/executions/{execution_id}/tn",
     response_model=ExecutionResponse,
-    status_code=202,
+    status_code=200,
+    responses=PHASE_RESPONSES,
     tags=["executions"],
     dependencies=[Depends(verify_api_key)],
 )
-async def delete_execution_tn(execution_id: str):
+async def delete_execution_tn(
+    execution_id: str,
+    response: Response,
+    wait: bool = Query(
+        True,
+        description=(
+            "Si es true (por defecto) la respuesta no llega hasta que la TN esta "
+            "purgada. Con false se devuelve 202 al instante."
+        ),
+    ),
+):
     """Dispara el bloque de borrado de la TN (deleted + purged) bajo demanda.
+
+    Con `wait=true` la respuesta llega cuando la TN esta purgada: 200 si se
+    purgo, 502 si el destroy fallo (la TN sigue existiendo y el borrado se
+    puede reintentar). Tope de espera: 50 min; al agotarse se responde 504 y el
+    borrado continua en segundo plano.
 
     La respuesta indica en `tn_id` que Trial Network se esta borrando.
 
-    Respuestas: 202 borrado lanzado; 404 la ejecucion no existe o no tiene TN;
-    409 hay un experimento en curso o el borrado ya se lanzo/completo.
+    Respuestas: 200 TN purgada; 202 borrado lanzado (wait=false); 404 la
+    ejecucion no existe o no tiene TN; 409 hay un experimento en curso o el
+    borrado ya se lanzo/completo; 504 sigue en curso al agotarse el tope.
     """
     try:
         record = start_tn_teardown(execution_id)
@@ -492,7 +635,11 @@ async def delete_execution_tn(execution_id: str):
         raise HTTPException(status_code=404, detail=str(exc))
     except ExecutionConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    return to_execution_response(record)
+
+    if not wait:
+        response.status_code = 202
+        return to_execution_response(record)
+    return await _await_phase(execution_id, "_tn_purged", TEARDOWN_MAX_WAIT_SECONDS, response)
 
 
 @app.get(

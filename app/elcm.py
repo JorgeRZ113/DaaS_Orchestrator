@@ -166,6 +166,65 @@ def extract_testcase_name(testcase_path: str) -> str:
     return str(data["Name"])
 
 
+def resolve_ue_file(ue_ref: str) -> Path:
+    """Resuelve un UE del body a su fichero real (normalmente en examples/).
+
+    Igual que `resolve_testcase_file`: los UEs se suben tal cual, sin re-renderizar.
+    Fail-fast si el fichero no existe.
+    """
+    candidate = Path(ue_ref)
+    if candidate.exists() and candidate.is_file():
+        return candidate.resolve()
+
+    resolved = _resolve_examples_path(ue_ref)
+    if resolved and Path(resolved).is_file():
+        return Path(resolved).resolve()
+
+    raise FileNotFoundError(f"UE file not found: {ue_ref}")
+
+
+def extract_ue_name(ue_path: str) -> str:
+    """Devuelve el nombre interno de un fichero UE (ELCM los registra por ese nombre).
+
+    Un UE NO es un TestCase V2: es una lista de acciones estilo V1 donde la clave
+    raíz es el nombre del UE (`UeLoader.ProcessData`). Por eso no puede declarar
+    `Name`/`Version` (el endpoint de subida rechaza `Name` sin `Version: 2`) y cada
+    acción de primer nivel debe traer `Order` (`ActionInformation.FromMapping` con
+    `isFirstLevel=True`). Se valida aquí para fallar antes de subir nada.
+    """
+    path = Path(ue_path)
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    if not isinstance(data, dict) or not data:
+        raise ValueError(f"UE '{path.name}' must be a YAML mapping with a single root key")
+
+    forbidden = [key for key in ("Name", "Version") if key in data]
+    if forbidden:
+        raise ValueError(
+            f"UE '{path.name}' declares {', '.join(forbidden)}: that is TestCase V2 syntax. "
+            f"A UE file is a V1 action list whose root key is the UE name."
+        )
+
+    if len(data) > 1:
+        raise ValueError(
+            f"UE '{path.name}' defines multiple root keys ({', '.join(sorted(data))}); "
+            f"ELCM expects exactly one UE per file"
+        )
+
+    name, actions = next(iter(data.items()))
+    if not isinstance(actions, list) or not actions:
+        raise ValueError(f"UE '{path.name}' root key '{name}' must hold a non-empty action list")
+
+    for index, action in enumerate(actions):
+        if not isinstance(action, dict) or "Order" not in action:
+            raise ValueError(
+                f"UE '{path.name}' action #{index} has no 'Order': it is mandatory on "
+                f"first level tasks"
+            )
+
+    return str(name)
+
+
 def _find_task_config(node: Any, task_name: str) -> dict | None:
     """Busca recursivamente el `Config` del primer task `task_name` en la estructura.
 
@@ -244,7 +303,11 @@ async def generate_experiment_descriptor(
     payload["Application"] = experiment.name
     # Referenciar cada TestCase por su Name interno (ELCM los registra por Name).
     payload["TestCases"] = [extract_testcase_name(path) for path in testcase_paths if path]
-    payload["UEs"] = list(experiment.ues_paths)
+    # Los UEs se referencian igual, por su nombre interno (la clave raíz del fichero),
+    # no por la ruta: ELCM los registra en `Facility.ues` bajo ese nombre.
+    payload["UEs"] = [
+        extract_ue_name(str(resolve_ue_file(ue_ref))) for ue_ref in experiment.ues_paths if ue_ref
+    ]
 
     filename = f"experiment_descriptor_{artifacts._sanitize_path_component(experiment.name)}.json"
     output_path = _generated_dir(execution_id) / filename
@@ -277,8 +340,15 @@ async def upload_test_cases(
     user_id: int = 1,
     elcm_base_url: str | None = None,
     execution_id: str | None = None,
+    *,
+    file_type: str = "testcase",
 ) -> None:
-    """Upload test cases to ELCM."""
+    """Upload test cases (o UEs) to ELCM.
+
+    `file_type` selecciona la carpeta destino en ELCM: `testcase` -> TestCases/<user>,
+    `ues` -> UEs/<user>. Sin el valor correcto el fichero acaba en la carpeta
+    equivocada y `Facility` nunca lo registra.
+    """
     base_url = _resolve_elcm_url(elcm_base_url)
     async with httpx.AsyncClient(timeout=ELCM_REQUEST_TIMEOUT) as client:
         for testcase_path in testcase_paths:
@@ -306,7 +376,7 @@ async def upload_test_cases(
             # Upload to ELCM
             files = {
                 "test_case": (path.name, file_content),
-                "file_type": (None, "testcase"),
+                "file_type": (None, file_type),
                 "user_id": (None, str(user_id)),
             }
 
@@ -324,7 +394,7 @@ async def upload_test_cases(
                 )
                 _log_http_response("ELCM", response)
                 response.raise_for_status()
-                logger.info("ELCM testcase/UE uploaded successfully: %s", path.name)
+                logger.info("ELCM %s uploaded successfully: %s", file_type, path.name)
             except httpx.HTTPStatusError as exc:
                 _log_http_response("ELCM", exc.response)
                 detail = _response_error_detail(exc.response)
