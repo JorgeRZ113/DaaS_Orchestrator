@@ -39,7 +39,7 @@ def _write(tmp_path, name, content):
 
 
 def test_extract_capture_metrics_reads_measurement_and_simple_metrics(tmp_path):
-    ping = _write(tmp_path, "TestCase_ping.yml", PING_YAML)
+    ping = _write(tmp_path, "TC_ping.yml", PING_YAML)
     capture = _write(tmp_path, "TestCase_prometheus_capture2.yml", CAPTURE_YAML)
 
     result = elcm.extract_capture_metrics([ping, capture])
@@ -59,6 +59,6 @@ def test_extract_capture_metrics_ignores_files_without_capture_in_name(tmp_path)
 
 
 def test_extract_capture_metrics_none_when_no_capture(tmp_path):
-    ping = _write(tmp_path, "TestCase_ping.yml", PING_YAML)
+    ping = _write(tmp_path, "TC_ping.yml", PING_YAML)
 
     assert elcm.extract_capture_metrics([ping]) is None

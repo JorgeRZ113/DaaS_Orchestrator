@@ -13,6 +13,7 @@ class _FakeAsyncClient:
     def __init__(self, response: httpx.Response):
         self._response = response
         self.post_calls: list[str] = []
+        self.post_kwargs: list[dict] = []
 
     async def __aenter__(self):
         return self
@@ -22,6 +23,7 @@ class _FakeAsyncClient:
 
     async def post(self, url: str, **kwargs) -> httpx.Response:
         self.post_calls.append(url)
+        self.post_kwargs.append(kwargs)
         return self._response
 
 
@@ -151,7 +153,7 @@ async def test_collect_results_200_not_found_fails_without_retry(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_upload_test_cases_logs_success_on_200(monkeypatch, tmp_path, caplog):
-    testcase_path = tmp_path / "TestCase_ping.yml"
+    testcase_path = tmp_path / "TC_ping.yml"
     testcase_path.write_text("name: ping", encoding="utf-8")
     fake_client = _FakeAsyncClient(_upload_response(200, "uploaded"))
 
@@ -159,11 +161,31 @@ async def test_upload_test_cases_logs_success_on_200(monkeypatch, tmp_path, capl
     monkeypatch.setattr(elcm, "_resolve_examples_path", lambda _: str(testcase_path))
     caplog.set_level("INFO")
 
-    await elcm.upload_test_cases(["TestCase_ping.yml"], elcm_base_url=ELCM_BASE_URL)
+    await elcm.upload_test_cases(["TC_ping.yml"], elcm_base_url=ELCM_BASE_URL)
 
     assert len(fake_client.post_calls) == 1
     assert fake_client.post_calls[0].endswith("/elcm/api/v1/facility/upload_test_case")
-    assert "ELCM testcase/UE uploaded successfully: TestCase_ping.yml" in caplog.text
+    assert "ELCM testcase uploaded successfully: TC_ping.yml" in caplog.text
+    # Por defecto se sube como TestCase.
+    assert fake_client.post_kwargs[0]["files"]["file_type"] == (None, "testcase")
+
+
+@pytest.mark.asyncio
+async def test_upload_test_cases_sends_ues_file_type(monkeypatch, tmp_path):
+    # Los UEs tienen que subirse con file_type="ues": con "testcase" acabarian en
+    # la carpeta equivocada de ELCM y Facility no los registraria nunca.
+    ue_path = tmp_path / "UE_Variables.yml"
+    ue_path.write_text("UE_Variables:\n  - Order: 0\n    Task: Run.Publish\n", encoding="utf-8")
+    fake_client = _FakeAsyncClient(_upload_response(200, "uploaded"))
+
+    monkeypatch.setattr(elcm.httpx, "AsyncClient", lambda timeout=None: fake_client)
+
+    await elcm.upload_test_cases([str(ue_path)], elcm_base_url=ELCM_BASE_URL, file_type="ues")
+
+    assert len(fake_client.post_calls) == 1
+    files = fake_client.post_kwargs[0]["files"]
+    assert files["file_type"] == (None, "ues")
+    assert files["test_case"][0] == "UE_Variables.yml"
 
 
 @pytest.mark.asyncio
@@ -183,7 +205,7 @@ async def test_upload_test_cases_fails_without_retry_and_reports_backend_error(
     status_code,
     backend_message,
 ):
-    testcase_path = tmp_path / "TestCase_ping.yml"
+    testcase_path = tmp_path / "TC_ping.yml"
     testcase_path.write_text("name: ping", encoding="utf-8")
     fake_client = _FakeAsyncClient(_upload_response(status_code, {"message": backend_message}))
 
@@ -191,7 +213,7 @@ async def test_upload_test_cases_fails_without_retry_and_reports_backend_error(
     monkeypatch.setattr(elcm, "_resolve_examples_path", lambda _: str(testcase_path))
 
     with pytest.raises(elcm.TnUploadTestCaseError) as exc_info:
-        await elcm.upload_test_cases(["TestCase_ping.yml"], elcm_base_url=ELCM_BASE_URL)
+        await elcm.upload_test_cases(["TC_ping.yml"], elcm_base_url=ELCM_BASE_URL)
 
     message = str(exc_info.value)
     assert backend_message in message

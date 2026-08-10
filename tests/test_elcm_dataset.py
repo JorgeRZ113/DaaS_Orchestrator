@@ -113,3 +113,57 @@ async def test_generate_dataset_testcase_rejects_unknown_kind():
 
 def test_elcm_dataset_templates_registry_has_csv_and_dashboard():
     assert set(ELCM_DATASET_TEMPLATES) == {"csv", "dashboard"}
+
+
+# --- Variables globales del bloque `dataset` inyectadas en el render ---
+
+
+@pytest.mark.asyncio
+@requires_ytt
+async def test_csv_dataset_uses_overlay_defaults_when_nothing_is_injected():
+    output_path = await generate_elcm_dataset_testcase("csv", execution_id="exec-ds-defaults")
+    payload = yaml.safe_load(Path(output_path).read_text(encoding="utf-8"))
+    config = payload["Sequence"][0]["Config"]
+
+    assert config["Host"] == "192.168.199.2"
+    assert config["Port"] == 8086
+    assert '"OPEN5GS_KPIS"' in config["CustomQuery"]
+    assert 'from(bucket: "testing")' in config["CustomQuery"]
+
+
+@pytest.mark.asyncio
+@requires_ytt
+async def test_csv_dataset_injects_measurement_bucket_and_influx_host():
+    # Lo que el orquestador construye a partir de dataset.measurement /
+    # dataset.influx_host / dataset.influx_port / dataset.influx_bucket.
+    data_values = {
+        "dataset": {
+            "measurement": "MI_MEASUREMENT",
+            "bucket": "mi_bucket",
+            "influx": {"host": "10.11.27.5", "port": 8087},
+        }
+    }
+    output_path = await generate_elcm_dataset_testcase(
+        "csv", execution_id="exec-ds-vars", data_values=data_values
+    )
+    payload = yaml.safe_load(Path(output_path).read_text(encoding="utf-8"))
+    config = payload["Sequence"][0]["Config"]
+
+    assert config["Host"] == "10.11.27.5"
+    assert config["Port"] == 8087
+    assert 'from(bucket: "mi_bucket")' in config["CustomQuery"]
+    assert '"_measurement"] == "MI_MEASUREMENT"' in config["CustomQuery"]
+    # La query Flux tiene que quedar en UNA sola linea: ELCM no la acepta partida.
+    assert "\n" not in config["CustomQuery"]
+
+
+@pytest.mark.asyncio
+@requires_ytt
+async def test_csv_dataset_orders_are_in_the_delivery_band():
+    # Banda 800-899 (entrega): por debajo iria antes que los TestCases
+    # funcionales del usuario (100-699) y el CSV saldria vacio.
+    output_path = await generate_elcm_dataset_testcase("csv", execution_id="exec-ds-orders")
+    payload = yaml.safe_load(Path(output_path).read_text(encoding="utf-8"))
+
+    orders = [action["Order"] for action in payload["Sequence"]]
+    assert orders == [800, 801]

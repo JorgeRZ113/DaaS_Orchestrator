@@ -24,7 +24,7 @@ def _headers() -> dict[str, str]:
 ELCM_BODY = {
     "experiment": {
         "name": "exp-demo",
-        "testcase_paths": ["TestCase_ping.yml"],
+        "testcase_paths": ["TC_ping.yml"],
         "ues_paths": [],
     }
 }
@@ -67,7 +67,7 @@ def test_elcm_returns_404_when_execution_missing() -> None:
 def test_elcm_returns_409_while_experiment_running(isolated_executions) -> None:
     _add_record("tn-a", ExecutionState.running_experiment, tn_id="tn-a")
 
-    response = client.post("/executions/tn-a/elcm", json=ELCM_BODY, headers=_headers())
+    response = client.post("/executions/tn-a/elcm?wait=false", json=ELCM_BODY, headers=_headers())
 
     assert response.status_code == 409
     assert "already running" in response.json()["detail"]
@@ -77,7 +77,7 @@ def test_elcm_returns_409_while_experiment_running(isolated_executions) -> None:
 def test_elcm_returns_409_when_tn_not_ready(isolated_executions) -> None:
     _add_record("tn-a", ExecutionState.deploying)
 
-    response = client.post("/executions/tn-a/elcm", json=ELCM_BODY, headers=_headers())
+    response = client.post("/executions/tn-a/elcm?wait=false", json=ELCM_BODY, headers=_headers())
 
     assert response.status_code == 409
     assert isolated_executions == []
@@ -86,7 +86,7 @@ def test_elcm_returns_409_when_tn_not_ready(isolated_executions) -> None:
 def test_elcm_accepts_experiment_on_ready_tn(isolated_executions) -> None:
     _add_record("tn-a", ExecutionState.tn_ready, tn_id="tn-a")
 
-    response = client.post("/executions/tn-a/elcm", json=ELCM_BODY, headers=_headers())
+    response = client.post("/executions/tn-a/elcm?wait=false", json=ELCM_BODY, headers=_headers())
 
     assert response.status_code == 202
     body = response.json()
@@ -105,7 +105,7 @@ def test_elcm_stores_per_experiment_dataset(isolated_executions) -> None:
         "dataset": {"output": ["csv", "logs"]},
     }
 
-    response = client.post("/executions/tn-a/elcm", json=body, headers=_headers())
+    response = client.post("/executions/tn-a/elcm?wait=false", json=body, headers=_headers())
 
     assert response.status_code == 202
     record = orchestrator.executions["tn-a"]
@@ -116,7 +116,7 @@ def test_elcm_stores_per_experiment_dataset(isolated_executions) -> None:
 def test_elcm_defaults_dataset_to_logs_when_omitted(isolated_executions) -> None:
     _add_record("tn-a", ExecutionState.tn_ready, tn_id="tn-a")
 
-    response = client.post("/executions/tn-a/elcm", json=ELCM_BODY, headers=_headers())
+    response = client.post("/executions/tn-a/elcm?wait=false", json=ELCM_BODY, headers=_headers())
 
     assert response.status_code == 202
     record = orchestrator.executions["tn-a"]
@@ -131,7 +131,7 @@ def test_elcm_rejects_duplicate_experiment_name(isolated_executions) -> None:
         experiments=[ExperimentRun(name="exp-demo", status="FINISHED")],
     )
 
-    response = client.post("/executions/tn-a/elcm", json=ELCM_BODY, headers=_headers())
+    response = client.post("/executions/tn-a/elcm?wait=false", json=ELCM_BODY, headers=_headers())
 
     assert response.status_code == 409
     assert "unique name" in response.json()["detail"]
@@ -147,7 +147,7 @@ def test_elcm_allows_second_experiment_with_new_name(isolated_executions) -> Non
     )
     body = {"experiment": {"name": "exp-demo-2", "testcase_paths": ["tc.yml"], "ues_paths": []}}
 
-    response = client.post("/executions/tn-a/elcm", json=body, headers=_headers())
+    response = client.post("/executions/tn-a/elcm?wait=false", json=body, headers=_headers())
 
     assert response.status_code == 202
     record = orchestrator.executions["tn-a"]
@@ -167,7 +167,7 @@ def test_remove_tn_returns_404_when_execution_missing() -> None:
 def test_remove_tn_returns_404_when_tn_id_missing(isolated_executions) -> None:
     _add_record("tn-a", ExecutionState.failed)
 
-    response = client.delete("/executions/tn-a/tn", headers=_headers())
+    response = client.delete("/executions/tn-a/tn?wait=false", headers=_headers())
 
     assert response.status_code == 404
     assert "tn_id missing" in response.json()["detail"]
@@ -176,7 +176,7 @@ def test_remove_tn_returns_404_when_tn_id_missing(isolated_executions) -> None:
 def test_remove_tn_returns_409_while_experiment_running(isolated_executions) -> None:
     _add_record("tn-a", ExecutionState.running_experiment, tn_id="tn-a")
 
-    response = client.delete("/executions/tn-a/tn", headers=_headers())
+    response = client.delete("/executions/tn-a/tn?wait=false", headers=_headers())
 
     assert response.status_code == 409
     assert isolated_executions == []
@@ -185,7 +185,7 @@ def test_remove_tn_returns_409_while_experiment_running(isolated_executions) -> 
 def test_remove_tn_returns_409_when_already_destroyed(isolated_executions) -> None:
     _add_record("tn-a", ExecutionState.destroyed, tn_id="tn-a")
 
-    response = client.delete("/executions/tn-a/tn", headers=_headers())
+    response = client.delete("/executions/tn-a/tn?wait=false", headers=_headers())
 
     assert response.status_code == 409
     assert isolated_executions == []
@@ -194,7 +194,7 @@ def test_remove_tn_returns_409_when_already_destroyed(isolated_executions) -> No
 def test_remove_tn_triggers_teardown_and_reports_tn_id(isolated_executions) -> None:
     _add_record("tn-a", ExecutionState.tn_ready, tn_id="tn-real-id")
 
-    response = client.delete("/executions/tn-a/tn", headers=_headers())
+    response = client.delete("/executions/tn-a/tn?wait=false", headers=_headers())
 
     assert response.status_code == 202
     body = response.json()
@@ -207,7 +207,7 @@ def test_remove_tn_triggers_teardown_and_reports_tn_id(isolated_executions) -> N
 def test_remove_tn_allowed_from_failed_state_with_tn(isolated_executions) -> None:
     _add_record("tn-a", ExecutionState.failed, tn_id="tn-real-id")
 
-    response = client.delete("/executions/tn-a/tn", headers=_headers())
+    response = client.delete("/executions/tn-a/tn?wait=false", headers=_headers())
 
     assert response.status_code == 202
     assert isolated_executions == ["teardown:tn-a"]

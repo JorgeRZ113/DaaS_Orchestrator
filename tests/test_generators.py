@@ -162,16 +162,22 @@ async def test_generate_tnlcm_descriptor_resolves_compound_ueransim_template():
 async def test_experiment_descriptor_references_testcases_by_internal_name(tmp_path):
     # Los TestCases se toman verbatim (no se re-renderizan) y el descriptor los
     # referencia por su Name interno, no por el nombre de fichero.
-    tc_one = tmp_path / "TestCase_ping.yml"
+    tc_one = tmp_path / "TC_ping.yml"
     tc_one.write_text("Version: 2\nName: Test_ping\nStandard: True\n", encoding="utf-8")
     tc_two = tmp_path / "otro_fichero.yml"
     tc_two.write_text("Version: 2\nName: TC_Custom\nStandard: True\n", encoding="utf-8")
+    # Un UE es formato V1: la clave raiz es su nombre y cada accion lleva Order.
+    ue_one = tmp_path / "fichero_de_ue.yml"
+    ue_one.write_text(
+        "UE_Variables:\n  - Order: 0\n    Task: Run.Publish\n    Config:\n      SutIp: '10.0.0.1'\n",
+        encoding="utf-8",
+    )
 
     assert elcm.resolve_testcase_file(str(tc_one)) == tc_one.resolve()
     assert elcm.extract_testcase_name(str(tc_one)) == "Test_ping"
 
     experiment_path = await elcm.generate_experiment_descriptor(
-        ExperimentConfig(name="exp-demo", testcase_paths=["a", "b"], ues_paths=["ue-1"]),
+        ExperimentConfig(name="exp-demo", testcase_paths=["a", "b"], ues_paths=[str(ue_one)]),
         [str(tc_one), str(tc_two)],
         execution_id="exec-elcm",
     )
@@ -183,7 +189,8 @@ async def test_experiment_descriptor_references_testcases_by_internal_name(tmp_p
     assert payload["Application"] == "exp-demo"
     # Referencia por Name interno (no por stem de fichero).
     assert payload["TestCases"] == ["Test_ping", "TC_Custom"]
-    assert payload["UEs"] == ["ue-1"]
+    # Los UEs tambien van por nombre interno (clave raiz), no por ruta ni por stem.
+    assert payload["UEs"] == ["UE_Variables"]
 
 
 def test_resolve_testcase_file_missing_raises(tmp_path):

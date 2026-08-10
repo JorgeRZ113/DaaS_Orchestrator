@@ -2,7 +2,7 @@ import zipfile
 
 import pytest
 
-from app.utils.results_bundle import extract_csv_bundle
+from app.utils.results_bundle import extract_csv_bundle, extract_results_bundle
 
 
 def test_extract_csv_bundle_keeps_only_csv(tmp_path):
@@ -28,6 +28,28 @@ def test_extract_csv_bundle_keeps_only_csv(tmp_path):
     assert names == ["csv_query_9.csv"]
     assert [p.name for p in csv_files] == ["csv_query_9.csv"]
     assert (dest / "csv_query_9.csv").read_text(encoding="utf-8").startswith("time,value")
+
+
+def test_extract_results_bundle_keeps_all_files(tmp_path):
+    # Entrega `files`: se queda con TODOS los ficheros, no solo los .csv.
+    inner_zip = tmp_path / "data_9.zip"
+    with zipfile.ZipFile(inner_zip, "w") as zf:
+        zf.writestr("result.csv", "a,b\n1,2\n")
+        zf.writestr("report.txt", "hello\n")
+
+    outer = tmp_path / "9.zip"
+    with zipfile.ZipFile(outer, "w") as zf:
+        zf.writestr("Executor.log", "log\n")
+        zf.write(inner_zip, "data_9.zip")
+    inner_zip.unlink()
+
+    dest = tmp_path / "result"
+    files = extract_results_bundle(outer, dest)
+
+    # Logs borrados y ZIP interno descomprimido+borrado; quedan csv Y txt.
+    names = sorted(p.name for p in dest.iterdir())
+    assert names == ["report.txt", "result.csv"]
+    assert sorted(p.name for p in files) == ["report.txt", "result.csv"]
 
 
 def test_extract_csv_bundle_rejects_non_zip(tmp_path):

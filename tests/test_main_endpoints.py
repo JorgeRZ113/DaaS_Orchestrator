@@ -149,7 +149,9 @@ def test_post_execution_returns_409_when_tnlcm_deploy_is_busy(monkeypatch) -> No
         "experiment": {"name": "exp-a", "testcase_paths": ["tc.yml"], "ues_paths": []},
         "dataset": {"output": "logs"},
     }
-    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+    response = client.post(
+        "/executions?wait=false", json=payload, headers={"x-api-key": settings.api_key}
+    )
 
     assert response.status_code == 409
     assert "curso" in response.json()["detail"]
@@ -182,14 +184,16 @@ def test_post_execution_accepts_flat_component_template_fields(monkeypatch) -> N
         },
         "experiment": {
             "name": "exp-demo",
-            "testcase_paths": ["TestCase_ping.yml"],
+            "testcase_paths": ["TC_ping.yml"],
             "ues_paths": [],
         },
         "dataset": {"output": "logs"},
         "auto_start_elcm": True,
     }
 
-    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+    response = client.post(
+        "/executions?wait=false", json=payload, headers={"x-api-key": settings.api_key}
+    )
 
     assert response.status_code == 202
     body = response.json()
@@ -217,14 +221,16 @@ def test_post_execution_rejects_unknown_flat_component_field(monkeypatch) -> Non
         },
         "experiment": {
             "name": "exp-demo",
-            "testcase_paths": ["TestCase_ping.yml"],
+            "testcase_paths": ["TC_ping.yml"],
             "ues_paths": [],
         },
         "dataset": {"output": "logs"},
         "auto_start_elcm": True,
     }
 
-    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+    response = client.post(
+        "/executions?wait=false", json=payload, headers={"x-api-key": settings.api_key}
+    )
 
     assert response.status_code == 400
     detail = response.json()["detail"]
@@ -260,14 +266,16 @@ def test_post_execution_accepts_flat_mongodb_fields_without_version(monkeypatch)
         },
         "experiment": {
             "name": "exp-demo",
-            "testcase_paths": ["TestCase_ping.yml"],
+            "testcase_paths": ["TC_ping.yml"],
             "ues_paths": [],
         },
         "dataset": {"output": "logs"},
         "auto_start_elcm": True,
     }
 
-    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+    response = client.post(
+        "/executions?wait=false", json=payload, headers={"x-api-key": settings.api_key}
+    )
 
     assert response.status_code == 202
     body = response.json()
@@ -297,14 +305,16 @@ def test_post_execution_rejects_mongodb_without_required_credentials(monkeypatch
         },
         "experiment": {
             "name": "exp-demo",
-            "testcase_paths": ["TestCase_ping.yml"],
+            "testcase_paths": ["TC_ping.yml"],
             "ues_paths": [],
         },
         "dataset": {"output": "logs"},
         "auto_start_elcm": True,
     }
 
-    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+    response = client.post(
+        "/executions?wait=false", json=payload, headers={"x-api-key": settings.api_key}
+    )
 
     assert response.status_code == 400
     invalid_fields = response.json()["detail"]["invalid_fields"]
@@ -343,14 +353,16 @@ def test_post_execution_rejects_empty_string_in_component_field(monkeypatch) -> 
         },
         "experiment": {
             "name": "exp-demo",
-            "testcase_paths": ["TestCase_ping.yml"],
+            "testcase_paths": ["TC_ping.yml"],
             "ues_paths": [],
         },
         "dataset": {"output": "logs"},
         "auto_start_elcm": True,
     }
 
-    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+    response = client.post(
+        "/executions?wait=false", json=payload, headers={"x-api-key": settings.api_key}
+    )
 
     assert response.status_code == 400
     detail = response.json()["detail"]
@@ -371,13 +383,15 @@ def test_post_execution_rejects_whitespace_only_and_reports_all_paths(monkeypatc
         },
         "experiment": {
             "name": "exp-demo",
-            "testcase_paths": ["", "TestCase_ping.yml"],  # vacío dentro de lista
+            "testcase_paths": ["", "TC_ping.yml"],  # vacío dentro de lista
             "ues_paths": [],
         },
         "dataset": {"output": "logs"},
     }
 
-    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+    response = client.post(
+        "/executions?wait=false", json=payload, headers={"x-api-key": settings.api_key}
+    )
 
     assert response.status_code == 400
     empty_fields = response.json()["detail"]["empty_fields"]
@@ -413,13 +427,15 @@ def test_post_execution_does_not_flag_empty_strings_from_server_defaults(monkeyp
         },
         "experiment": {
             "name": "exp-demo",
-            "testcase_paths": ["TestCase_ping.yml"],
+            "testcase_paths": ["TC_ping.yml"],
             "ues_paths": [],
         },
         "dataset": {"output": "logs"},
     }
 
-    response = client.post("/executions", json=payload, headers={"x-api-key": settings.api_key})
+    response = client.post(
+        "/executions?wait=false", json=payload, headers={"x-api-key": settings.api_key}
+    )
 
     assert response.status_code == 202
 
