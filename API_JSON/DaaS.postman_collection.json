@@ -90,7 +90,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn_deveop_20_3\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"adminadmin\"\n      }\n    },\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"fix/uma-test-raul-oneke-onevm-path\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": [\n      \"logs\",\n      \"csv\",\n      \"dashboard\",\n      \"raw\"\n    ]\n  },\n  \"auto_start_elcm\": true,\n  \"ephemeral_tn\": false\n}",
+              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn_deveop_20_3\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"adminadmin\"\n      }\n    },\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"fix/uma-test-raul-oneke-onevm-path\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": [\n      \"logs\",\n      \"csv\",\n      \"dashboard\",\n      \"raw\",\n      \"files\"\n    ]\n  },\n  \"auto_start_elcm\": true,\n  \"ephemeral_tn\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -106,7 +106,7 @@
                 "executions"
               ]
             },
-            "description": "Despliega la Trial Network (TNLCM + VPN). El comportamiento posterior depende de dos flags:\n\n• auto_start_elcm (default true): si true, lanza automáticamente el 1er experimento definido en \"experiment\". Si false, la TN queda en TN_READY esperando llamadas manuales a /elcm y \"experiment\" es opcional.\n\n• ephemeral_tn (default false): SOLO aplica con auto_start_elcm=true. Si true, la TN es de un solo uso y se borra automáticamente tras el 1er experimento. Si false (habitual), la TN se queda viva para recibir más experimentos. Se IGNORA cuando auto_start_elcm=false.\n\n⚠️ Ya NO hay borrado automático por defecto: la TN persiste hasta un DELETE /executions/{id}/tn (o el borrado del modo efímero).\n\n📦 dataset.output — formato(s) de entrega. Acepta un único nombre o una lista combinable, p. ej. [logs, csv]:\n• logs → logs del experimento ELCM (result/logs.json + metadata.json)\n• csv → inyecta un TestCase y descarga+extrae el ZIP de resultados de ELCM (result/csv_query_<id>.csv)\n• dashboard → inyecta un TestCase de Grafana y entrega la URL del dashboard (result/dashboard.json)\n• raw → consulta InfluxDB directamente vía Flux, un CSV por measurement (result/raw_<measurement>.csv)\nTodas las salidas del dataset se guardan en artifacts/<execution_id>/result/<experimento>/ (una subcarpeta por experimento). El campo dataset también puede enviarse por experimento en POST /executions/{id}/elcm.\n\n🚫 Validación de vacíos — antes de cualquier otra validación, si CUALQUIER campo del body llega como \"\" (o solo espacios), en cualquier sección o elemento de lista, se rechaza con 400 y la ejecución NO arranca. La respuesta lista las rutas afectadas en detail.empty_fields (dot-path, p. ej. infrastructure.component.base.grafana_password): rellena el valor o elimina el campo del body y reenvía el POST. Solo se inspecciona lo que envías (no los defaults del servidor)."
+            "description": "Despliega la Trial Network (TNLCM + VPN). El comportamiento posterior depende de dos flags:\n\n• auto_start_elcm (default true): si true, lanza automáticamente el 1er experimento definido en \"experiment\". Si false, la TN queda en TN_READY esperando llamadas manuales a /elcm y \"experiment\" es opcional.\n\n• ephemeral_tn (default false): SOLO aplica con auto_start_elcm=true. Si true, la TN es de un solo uso y se borra automáticamente tras el 1er experimento. Si false (habitual), la TN se queda viva para recibir más experimentos. Se IGNORA cuando auto_start_elcm=false.\n\n⚠️ Ya NO hay borrado automático por defecto: la TN persiste hasta un DELETE /executions/{id}/tn (o el borrado del modo efímero).\n\n📦 dataset.output — formato(s) de entrega. Acepta un único nombre o una lista combinable, p. ej. [logs, csv]:\n• logs → logs del experimento ELCM (result/logs.json + metadata.json)\n• csv → inyecta un TestCase y descarga+extrae el ZIP de resultados de ELCM (result/csv_query_<id>.csv)\n• dashboard → inyecta un TestCase de Grafana y entrega la URL del dashboard (result/dashboard.json)\n• raw → consulta InfluxDB directamente vía Flux, un CSV por measurement (result/raw_<measurement>.csv)\n• files → descarga y extrae el ZIP de resultados y se queda con TODOS los ficheros del experimento (sin TestCase): borra los .log y descomprime los ZIP internos\nTodas las salidas del dataset se guardan en artifacts/<execution_id>/result/<experimento>/ (una subcarpeta por experimento). El campo dataset también puede enviarse por experimento en POST /executions/{id}/elcm.\n\n🚫 Validación de vacíos — antes de cualquier otra validación, si CUALQUIER campo del body llega como \"\" (o solo espacios), en cualquier sección o elemento de lista, se rechaza con 400 y la ejecución NO arranca. La respuesta lista las rutas afectadas en detail.empty_fields (dot-path, p. ej. infrastructure.component.base.grafana_password): rellena el valor o elimina el campo del body y reenvía el POST. Solo se inspecciona lo que envías (no los defaults del servidor)."
           },
           "response": [
             {
@@ -114,25 +114,44 @@
               "originalRequest": {
                 "method": "POST",
                 "header": [
-                  { "key": "x-api-key", "value": "{{apiKey}}", "type": "text" },
-                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  }
                 ],
                 "body": {
                   "mode": "raw",
                   "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"\"\n      }\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  }\n}",
-                  "options": { "raw": { "language": "json" } }
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
                 },
                 "url": {
                   "raw": "{{baseUrl}}/executions",
-                  "host": [ "{{baseUrl}}" ],
-                  "path": [ "executions" ]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "executions"
+                  ]
                 }
               },
               "status": "Bad Request",
               "code": 400,
               "_postman_previewlanguage": "json",
               "header": [
-                { "key": "Content-Type", "value": "application/json" }
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
               ],
               "cookie": [],
               "body": "{\n  \"detail\": {\n    \"empty_fields\": [\n      \"infrastructure.component.base.grafana_password\"\n    ],\n    \"message\": \"Algunos campos llegaron vacíos (\\\"\\\"). Rellénalos con un valor o elimínalos del body y reenvía el POST.\"\n  }\n}"
@@ -176,6 +195,86 @@
               ]
             },
             "description": "🧪 INYECTAR UN EXPERIMENTO sobre la TN viva\n\nLanza un experimento ELCM sobre la Trial Network ya desplegada. Se puede llamar tantas veces como experimentos quieras ejecutar (uno a la vez). La TN NO se borra al terminar: vuelve a TN_READY.\n\n📥 Body:\n{\n  \"experiment\": {\n    \"name\": \"exp-demo\",          // ⚠️ ÚNICO por TN (no repetir nombres)\n    \"testcase_paths\": [\"TestCase_ping.yml\"],\n    \"ues_paths\": []\n  },\n  \"dataset\": {                    // opcional; por defecto [\"logs\"]\n    \"output\": [\"logs\"]           // logs | csv | dashboard | raw (combinables)\n  }\n}\n\n📦 dataset POR EXPERIMENTO: cada llamada puede pedir una salida de datos distinta. Las respuestas se guardan en artifacts/{id}/result/<experimento>/ (una subcarpeta por nombre de experimento).\n\n📋 Qué hace automáticamente:\n1. Genera el Experiment Descriptor (UEs + TestCases del body) en artifacts/{id}/archivos_generados/ (junto al TN Descriptor)\n2. Sube los test cases a ELCM (se toman de examples/)\n3. Lanza el experimento\n4. Polling cada 10s hasta \"Finished\" (timeout 1h)\n5. Recoge el dataset pedido en artifacts/{id}/result/<experimento>/\n6. Vuelve a TN_READY (la TN sigue viva)\n\n🔢 Respuestas:\n• 202 Accepted → experimento aceptado y en marcha\n• 404 Not Found → el execution_id no existe\n• 409 Conflict → ya hay un experimento en curso, la TN no está lista (TN_READY), o el nombre de experimento ya se usó en esta TN"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /executions/{execution_id}/elcm (bateria demo + UE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"experiment\": {\n    \"name\": \"exp-demo-bateria\",\n    \"testcase_paths\": [\n      \"TC_Demo_Variables.yml\",\n      \"TC_Demo_Flow.yml\",\n      \"TC_Demo_Python.yml\",\n      \"TC_Check_PublishTasks.yml\"\n    ],\n    \"ues_paths\": [\n      \"UE_Variables_TEMPLATE.yml\"\n    ]\n  },\n  \"dataset\": {\n    \"output\": [\n      \"logs\"\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/elcm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "elcm"
+              ]
+            },
+            "description": "BATERIA DE DEMOSTRACION (no necesita infraestructura)\n\nLanza los TestCases de demo junto con el fichero UE de variables globales.\n\nQue demuestra:\n- UE -> TestCase: el UE publica las variables con Run.Publish (Order 0) y los\n  TestCases las consumen con @[Variable]. Un unico espacio de nombres por\n  ejecucion: lo publicado se ve desde cualquier TestCase.\n- TC_Demo_Variables: las dos sintaxis de expansion (@{...} del motor y @[...]\n  publicadas), derivar variables nuevas y el comportamiento con una inexistente.\n- TC_Demo_Flow: Flow.Sequence / Flow.Parallel (@{Branch}) / Flow.Repeat\n  (@{Iter0}, @{Iter1}) y el patron captura + ventana de medida.\n- TC_Demo_Python: cadena de Run.Evaluate con Python real (agregados,\n  comprensiones de lista, condicional, formateo) para derivar KPIs.\n- TC_Check_PublishTasks: verifica Run.PublishFromFile,\n  Run.PublishFromPreviousTaskLog y Run.UpgradeVerdict con datos deterministas.\n\nANTES DE LANZARLO: copiar examples/UE_Variables_TEMPLATE.yml y rellenar los\nvalores CHANGEME. Para esta bateria de demo basta con dejarlos: los TestCases\nno tocan infraestructura y los valores solo se muestran en el log.\n\nLos Orders van en bandas disjuntas (0 el UE, 100-159 las demos, 500-510 la\nverificacion) porque el Order es GLOBAL a todo el experimento: dos TestCases\ncon el mismo Order se entrelazan de forma arbitraria.\n\nRevisar el resultado con GET /executions/{id}/detail."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /executions/{execution_id}/elcm (dataset con variables)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"experiment\": {\n    \"name\": \"exp-dataset-vars\",\n    \"testcase_paths\": [\n      \"TestCase_prometheus_capture.yml\"\n    ],\n    \"ues_paths\": [\n      \"UE_Variables_TEMPLATE.yml\"\n    ]\n  },\n  \"dataset\": {\n    \"output\": [\n      \"logs\",\n      \"csv\",\n      \"raw\"\n    ],\n    \"measurement\": \"OPEN5GS_KPIS\",\n    \"influx_bucket\": \"testing\",\n    \"influx_port\": 8086\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/elcm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "elcm"
+              ]
+            },
+            "description": "DATASET CON VARIABLES GLOBALES POR MODO\n\nAdemas de 'output', el bloque dataset acepta variables propias del modo de\nsalida que se use. Todas son opcionales.\n\nPrecedencia: valor del body -> valor derivado del despliegue -> default del overlay\n\n| Variable       | Modos                 | Derivado si no se indica                    |\n|----------------|-----------------------|---------------------------------------------|\n| measurement    | csv, dashboard, raw   | Measurement del TestCase de captura         |\n| influx_host    | csv                   | IP de monitorizacion del report TNLCM       |\n| influx_port    | csv                   | 8086                                        |\n| influx_bucket  | csv, raw              | bucket del report TNLCM, o 'testing'        |\n| panel_interval | dashboard             | 5s                                          |\n\nIMPORTANTE: una variable cuyo modo dueno NO este en 'output' se rechaza con\n422. Pedir influx_host con output=['logs'] casi siempre significa que se\nolvido el modo 'csv', y aceptarlo en silencio daria una entrega distinta de\nla esperada.\n\nEn el modo 'raw', indicar 'measurement' acota el volcado a ese measurement en\nvez de exportarlos todos.\n\nPara anadir 'dashboard' al output hace falta un TestCase de captura cuyo\nnombre de fichero contenga '_capture' (de ahi salen las metricas de los\npaneles)."
           },
           "response": []
         },
@@ -357,10 +456,22 @@
                 "register"
               ],
               "query": [
-                { "key": "username", "value": "jorge" },
-                { "key": "password", "value": "jorge" },
-                { "key": "email", "value": "jorgeramirezzotano@uma.es" },
-                { "key": "org", "value": "uma" }
+                {
+                  "key": "username",
+                  "value": "jorge"
+                },
+                {
+                  "key": "password",
+                  "value": "jorge"
+                },
+                {
+                  "key": "email",
+                  "value": "jorgeramirezzotano@uma.es"
+                },
+                {
+                  "key": "org",
+                  "value": "uma"
+                }
               ]
             },
             "description": "Registra usuario en TNLCM (sin auth) y devuelve access/refresh token. Todos los parámetros se pasan por query string."

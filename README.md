@@ -90,7 +90,7 @@ Nota: los tiempos de ELCM se definen como constantes internas en `app/orchestrat
 | `app/artifacts.py` | Persistencia de ejecuciones y artefactos (incluye carpeta `result/`) |
 | `app/utils/` | Utilidades: `ytt_renderer.py`, `custom_yaml.py`, `component_contract.py`, `results_bundle.py` (extrae el CSV del ZIP de resultados), `influx_raw.py` (consulta cruda a InfluxDB), `telemetry.py`, `wireguard.py` |
 | `artifacts/<execution_id>/` | Artefactos de la ejecución: descriptor, reportes TNLCM, `<tn_id>.conf` y `result/` con las salidas del dataset |
-| `examples/` | Ejemplos de payloads y casos de uso |
+| `examples/` | Batería de TestCases y la plantilla de UE, más ejemplos de payloads. Es lo que `testcase_paths`/`ues_paths` resuelven por nombre de fichero |
 
 **Nota importante**: En descriptores de experimento, `TestCases` debe contener nombres lógicos (ej. `testcase_001`), no rutas absolutas.
 
@@ -204,7 +204,7 @@ El formato canónico es: `component.<template>.<field> = value`
   },
   "experiment": {
     "name": "exp-001",
-    "testcase_paths": ["TestCase_ping.yml"],
+    "testcase_paths": ["TC_ping.yml"],
     "ues_paths": []
   }
 }
@@ -237,7 +237,7 @@ El formato canónico es: `component.<template>.<field> = value`
   },
   "experiment": {
     "name": "exp-demo",
-    "testcase_paths": ["TestCase_ping.yml"],
+    "testcase_paths": ["TC_ping.yml"],
     "ues_paths": []
   },
   "dataset": {
@@ -336,7 +336,7 @@ Solo se inspecciona lo que envía el cliente (no los defaults del servidor), y c
 
 ### Campo `dataset.output`
 
-Formato(s) de entrega del dataset. Acepta un **único nombre** (`"logs"`) o una **lista** combinable (`["logs", "csv", "dashboard", "raw"]`). Las respuestas se guardan en `artifacts/<execution_id>/result/<experimento>/`, una subcarpeta por experimento.
+Formato(s) de entrega del dataset. Acepta un **único nombre** (`"logs"`) o una **lista** combinable (`["logs", "csv", "dashboard", "raw", "files"]`). Las respuestas se guardan en `artifacts/<execution_id>/result/<experimento>/`, una subcarpeta por experimento.
 
 `dataset` es **por experimento**: aparece tanto en el body de `POST /executions` (define la salida del primer experimento auto-arrancado) como en el body de `POST /executions/{id}/elcm` (define la salida de ese experimento concreto). Como una misma TN puede lanzar varios experimentos con salidas distintas, cada uno escribe en su propia subcarpeta `result/<experimento>/`.
 
@@ -346,10 +346,96 @@ Formato(s) de entrega del dataset. Acepta un **único nombre** (`"logs"`) o una 
 | `csv` | Inyecta un TestCase que genera un CSV; descarga y extrae el ZIP de resultados de ELCM | `csv_query_<id>.csv` |
 | `dashboard` | Inyecta un TestCase de Grafana; ELCM crea el dashboard (uid `Run<id>`) y se entrega su URL | `dashboard.json` |
 | `raw` | Consulta InfluxDB directamente (Flux, sin TestCase) volcando cada measurement | `raw_<measurement>.csv` |
+| `files` | Descarga el ZIP de resultados y extrae TODOS los ficheros del experimento (sin TestCase): borra los `.log` y descomprime los ZIP internos | ficheros del experimento |
 
 - `csv` y `dashboard` **inyectan** su TestCase en el experimento (upload + descriptor) para que ELCM lo ejecute.
-- `raw` **no** inyecta: replica la interfaz east/west consultando InfluxDB con el token del report TNLCM (nunca se persiste).
+- `raw` y `files` **no** inyectan. `raw` replica la interfaz east/west consultando InfluxDB con el token del report TNLCM (nunca se persiste); `files` es la entrega de `csv` sin generar nada: recoge tal cual los ficheros que el experimento ya produjo.
 - Compatibilidad: el string suelto (`"output": "logs"`) se sigue aceptando y se normaliza a lista.
+
+### Variables globales de `dataset`
+
+Además de `output`, el bloque `dataset` acepta **variables propias del modo de salida** que se use. Todas son opcionales y se resuelven con esta precedencia:
+
+**valor del body → valor derivado del despliegue → default del overlay**
+
+| Variable | Modos | Valor derivado si no se indica |
+|---|---|---|
+| `measurement` | `csv`, `dashboard`, `raw` | El `Measurement` del TestCase de captura (`*_capture*`) del experimento |
+| `influx_host` | `csv` | La IP de monitorización del report TNLCM de esta TN |
+| `influx_port` | `csv` | `8086` (overlay) |
+| `influx_bucket` | `csv`, `raw` | El bucket del report TNLCM, o `testing` |
+| `panel_interval` | `dashboard` | `5s` (overlay) |
+
+```json
+"dataset": {
+  "output": ["csv", "raw"],
+  "measurement": "OPEN5GS_KPIS",
+  "influx_bucket": "testing"
+}
+```
+
+Una variable cuyo modo dueño **no** esté en `output` se rechaza con 422 (fail-fast): pedir `influx_host` con `"output": ["logs"]` casi siempre significa que se olvidó el modo `csv`, y aceptarlo en silencio produciría una entrega distinta de la esperada. En `raw`, indicar `measurement` acota el volcado a ese measurement en vez de exportarlos todos.
+
+## TestCases y variables globales (UE)
+
+### Variables globales: el fichero UE
+
+Un fichero **UE** no es un TestCase: es una lista de acciones estilo V1 cuya **clave raíz es su nombre**, y aquí se usa con un único `Run.Publish` para definir las variables que consumen todos los TestCases del experimento.
+
+`examples/UE_Variables_TEMPLATE.yml` es la plantilla: se copia, se renombra la clave raíz y **solo se rellenan los valores** (los nombres ya están fijados). Se referencia por nombre de fichero:
+
+```json
+"experiment": {
+  "name": "exp-demo",
+  "testcase_paths": ["TC_Demo_Variables.yml"],
+  "ues_paths": ["UE_Variables_TEMPLATE.yml"]
+}
+```
+
+Reglas del motor que la plantilla ya respeta y que hay que mantener al copiarla:
+
+- **Sin `Name:` ni `Version:`** — el endpoint de subida de ELCM rechaza `Name` sin `Version: 2`, y un UE es formato V1.
+- **`Order` obligatorio** en cada acción de primer nivel. Las variables van en `Order: 0` para publicarse antes que nada.
+- **Un único espacio de nombres por ejecución**: lo publicado por el UE lo ve *cualquier* TestCase del experimento, sin aislamiento por fichero.
+- **En `@[Clave:default]` el default no puede contener `:`** — el Expander hace `split(':')` sin límite y un `ValueError` ahí tumba la fase Run entera. Para IPs y URLs, usar `@[SutIp]` sin default.
+
+Sintaxis de consumo: `@[SutIp]` (publicado), `@[Publish.SutIp]` (grupo explícito), `@[Params.X]` (bloque `Parameters` del descriptor), `@{ExecutionId}` / `@{TempFolder}` / `@{Application}` (valores fijos del motor).
+
+### Mapa de bandas de `Order`
+
+El `Order` es **global a todo el experimento**: las acciones de todos los UEs y TestCases se mezclan en una única lista ordenada por `Order`, y dos TestCases que usen el mismo número se entrelazan de forma arbitraria. Para que la batería sea componible, cada fichero tiene su banda:
+
+| Banda | Uso |
+|---|---|
+| `0–9` | UE / variables globales (`Run.Publish`) |
+| `10–99` | Captura bloqueante (`Run.PrometheusToInflux` + `Run.AddMilestone`) |
+| `100–699` | TestCases funcionales |
+| `700–799` | Reservado |
+| `800–899` | Entrega del dataset (`Run.InfluxToCsv`, `Run.CompressFiles`) |
+| `900–999` | Notificación / cierre |
+
+`tests/test_examples_contract.py` verifica esto en CI: todo fichero nuevo de `examples/` debe declarar su banda en `ORDER_BANDS`.
+
+### Batería de TestCases
+
+| Fichero | Orders | Para qué sirve | Requiere infra |
+|---|---|---|---|
+| `UE_Variables_TEMPLATE.yml` | 0 | Plantilla de variables globales | No |
+| `TC_Demo_Variables.yml` | 100–106 | Demo del mecanismo UE → TestCase: las dos sintaxis de expansión, derivar variables, y qué pasa con una variable inexistente | No |
+| `TC_Demo_Flow.yml` | 120–123 | `Flow.Sequence` / `Flow.Parallel` (`@{Branch}`) / `Flow.Repeat` (`@{Iter0}`, `@{Iter1}`) y el patrón captura + ventana de medida | No |
+| `TC_Demo_Python.yml` | 140–150 | Cadena de `Run.Evaluate` con Python real: agregados, comprensiones de lista, condicional y formateo para derivar KPIs | No |
+| `TC_Util_Inventory.yml` | 300–304 | Inventario del host de ejecución entregado como ZIP en `/results` | No |
+| `TC_Util_Connectivity.yml` | 320–326 | Ping al SUT, publica pérdida y RTT medio, y fija el veredicto con `Run.UpgradeVerdict` | Sí |
+| `TC_Util_RestApi.yml` | 340–343 | `Run.RestApi` con los parámetros reales (`Host`/`Port`/`Endpoint`) y veredicto por código HTTP | Sí |
+| `TC_Check_PublishTasks.yml` | 500–510 | Verifica `Run.PublishFromFile`, `Run.PublishFromPreviousTaskLog` y `Run.UpgradeVerdict` con datos deterministas | No |
+| `TC_Util_ExportCsv.yml` | 820–822 | Export manual de InfluxDB a CSV+ZIP con query propia (alternativa a `dataset.output: ["csv"]`) | Sí |
+
+Los que tocan infraestructura **asumen el componente ya configurado** (los grandes, tipo UERANSIM u Open5GS, requieren su configuración previa) y **empiezan comprobándolo**, de modo que fallan con un mensaje claro en vez de producir un dataset vacío.
+
+Dos trampas del motor que la batería documenta en sus cabeceras:
+
+- **`Run.InfluxToCsv` y `Run.CliExecute` no registran nada en `GeneratedFiles`.** Sin un `Run.CompressFiles` posterior, el fichero se genera, se ve en el log y se pierde: no llega a `GET /execution/{id}/results`.
+- **Las variables de flujo no se heredan en flujos anidados.** `@{Branch}` solo se sustituye en los hijos *directos* de `Flow.Parallel`, y `@{Iter0}`/`@{Iter1}` en los de `Flow.Repeat`.
 
 ## Flujo de uso recomendado
 
@@ -507,6 +593,9 @@ Reglas de interpretación:
 | 2026-07 | **raw**: consulta directa a InfluxDB v2 (Flux) replicando la interfaz east/west (`app/utils/influx_raw.py`), un CSV por measurement |
 | 2026-07 | `app/generators.py` dividido en el paquete `app/generators/` (`tnlcm_overlay`, `tnlcm_renderer`, `elcm_dataset`) |
 | 2026-07 | **`dataset` por experimento**: `POST /executions/{id}/elcm` admite su propio `dataset.output`; cada experimento escribe en `result/<experimento>/`. El **Experiment Descriptor** se genera por ejecución (JSON, sin `ytt`) desde las UEs/TestCases del `experiment` y se guarda junto al TN Descriptor; se elimina el fallback a `examples/` |
+| 2026-08 | **Variables globales vía UE**: `ues_paths` funciona de verdad (los UEs se suben con `file_type="ues"` y el descriptor los referencia por su nombre interno, no por la ruta); nueva plantilla `examples/UE_Variables_TEMPLATE.yml` con `Run.Publish` y nombres fijados |
+| 2026-08 | **Batería de TestCases** en `examples/` (demo, utilidad y verificación de `PublishFromFile`/`PublishFromPreviousTaskLog`/`UpgradeVerdict`) con **bandas de `Order` disjuntas** para que sean componibles; contrato verificado en CI (`tests/test_examples_contract.py`) |
+| 2026-08 | **Variables globales de `dataset`** (`measurement`, `influx_host`/`influx_port`/`influx_bucket`, `panel_interval`) validadas por modo de salida; el TestCase CSV deja de llevar measurement/bucket/IP hardcodeados y pasa a la banda de entrega (`Order` 800/801) |
 | 2026-07 | **TestCases verbatim + fix de comillas**: los TestCases del body se suben **tal cual** desde `examples/` (ya no se re-renderizan: eso corrompía comillas/indentación) y el descriptor los referencia por su `Name:` interno. Los TestCases de dataset (csv/dashboard) se re-serializan forzando comillas dobles para que `ytt` no rompa el entrecomillado (queries de Prometheus, `@{ExecutionId}`) |
 
 ## Uso con Postman
