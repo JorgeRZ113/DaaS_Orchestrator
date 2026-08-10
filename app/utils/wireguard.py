@@ -8,6 +8,13 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Topes de los subprocesos. El helper normal no espera a ningun humano, asi que
+# basta un tope corto. El camino elevado abre un dialogo UAC y se queda parado
+# hasta que alguien lo acepta: sin este tope, la peticion HTTP que espera a la
+# VPN quedaria colgada indefinidamente (§8.1).
+HELPER_TIMEOUT_SECONDS = 30
+ELEVATION_TIMEOUT_SECONDS = 120
+
 
 class WireGuardError(RuntimeError):
     """Raised when WireGuard command execution fails."""
@@ -15,6 +22,14 @@ class WireGuardError(RuntimeError):
 
 class WireGuardManualDeploymentRequired(WireGuardError):
     """Raised when the user cancels the privileged WireGuard deployment prompt."""
+
+
+class WireGuardElevationTimeout(WireGuardManualDeploymentRequired):
+    """Raised when the UAC elevation prompt is not answered within the timeout.
+
+    Hereda de `WireGuardManualDeploymentRequired` para que el orquestador la
+    trate por el mismo camino (VPN en MANUAL_REQUIRED) sin ramas adicionales.
+    """
 
 
 def _artifacts_dir_for_execution(execution_id: str) -> Path:
@@ -64,12 +79,18 @@ def _hide_window_kwargs() -> dict[str, object]:
 
 def _run_helper(action: str, tn_id: str, conf_path: str) -> subprocess.CompletedProcess[str]:
     command = _helper_command(action, tn_id, conf_path)
-    return subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        **_hide_window_kwargs(),
-    )
+    try:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=HELPER_TIMEOUT_SECONDS,
+            **_hide_window_kwargs(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise WireGuardError(
+            f"WireGuard {action} timed out for {tn_id} " f"after {HELPER_TIMEOUT_SECONDS}s"
+        ) from exc
 
 
 def _raise_helper_error(action: str, tn_id: str, result: subprocess.CompletedProcess[str]) -> None:
@@ -94,12 +115,24 @@ def _run_helper_elevated(action: str, tn_id: str, conf_path: str) -> None:
         f"-ArgumentList @({arg_list}) -Verb RunAs -WindowStyle Hidden -PassThru -Wait; "
         f"exit $p.ExitCode"
     )
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_script],
-        capture_output=True,
-        text=True,
-        **_hide_window_kwargs(),
-    )
+    # El tope corta la espera del dialogo UAC. Matar PowerShell mata al que
+    # espera, pero el dialogo puede seguir en pantalla: si alguien lo acepta
+    # despues, el tunel podria subir igualmente. Por eso el mensaje habla de
+    # confirmacion no recibida, no de ausencia de tunel.
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=ELEVATION_TIMEOUT_SECONDS,
+            **_hide_window_kwargs(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise WireGuardElevationTimeout(
+            f"WireGuard {action} elevation was not confirmed within "
+            f"{ELEVATION_TIMEOUT_SECONDS}s; manual VPN deployment is required"
+        ) from exc
+
     if result.returncode != 0:
         if _needs_manual_deployment(result):
             raise WireGuardManualDeploymentRequired(
