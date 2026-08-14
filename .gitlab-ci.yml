@@ -6,6 +6,7 @@ workflow:
 
 stages:
   - lint
+  - unit
   - test
   - build
 
@@ -40,7 +41,15 @@ lint:
   stage: lint
   script:
     - python -m ruff check app tests
-    - python -m black --check tests
+    - python -m black --check app tests
+
+# Ciclo corto: solo las pruebas unitarias. No necesita el binario `ytt`, asi que
+# corta el pipeline en segundos cuando se rompe algo basico, sin pagar la
+# descarga ni la suite completa.
+unit:
+  stage: unit
+  script:
+    - python -m pytest -q -m unit
 
 pytest:
   stage: test
@@ -51,7 +60,10 @@ pytest:
     - chmod +x /usr/local/bin/ytt
     - ytt --version
   script:
-    - python -m pytest -q --maxfail=1 --disable-warnings --cov=app --cov-report=term-missing
+    # El umbral es un SUELO, no una meta: va justo por debajo de la cobertura
+    # actual (77 %) para que absorba el ruido normal y salte ante una caida real.
+    # Cuando la cobertura suba de forma estable, se sube tambien el suelo.
+    - python -m pytest -q --maxfail=1 --disable-warnings --cov=app --cov-report=term-missing --cov-fail-under=75
 
 build:
   stage: build
