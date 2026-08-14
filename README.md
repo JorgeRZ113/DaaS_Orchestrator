@@ -25,6 +25,7 @@ El flujo es reproducible, guiado por:
 - **Telemetría granular**: Métricas por fase (TNLCM create/activate, ELCM total) con `execution_id` para correlación
 - **Resumen legible**: `GET /executions/{id}/summary` y `summary.md`/`summary.json` traducen la telemetría a pasos, duraciones y errores en lenguaje natural para el experimentador ([`docs/TELEMETRY.md`](docs/TELEMETRY.md))
 - **Persistencia de artefactos**: `DatasetDescriptor` guardado inmediatamente en `artifacts/<execution_id>/`
+- **Arquitectura por capas y suite verificable**: `app/` separado en `api`/`services`/`adapters`/`rendering`/`storage`/`domain`/`core`, con 365 pruebas clasificadas por nivel, puerta de cobertura en CI y pruebas de mutación sobre la política de reintentos
 
 ## Requisitos
 
@@ -46,6 +47,63 @@ pip install -e .
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+## Pruebas y calidad
+
+La suite esta organizada por **niveles**, y el nivel lo marca el directorio: no
+hay que anotar nada en cada fichero, `tests/conftest.py` deriva el marcador de la
+carpeta en la que vive la prueba.
+
+| Nivel | Casos | Que ejercita | Tiempo |
+|---|---:|---|---:|
+| `unit` | 70 | Logica pura: sin red, sin disco | **0,6 s** |
+| `integration` | 37 | Varios modulos, disco y binario `ytt` | 12 s |
+| `adapters` | 44 | Contrato HTTP con TNLCM/ELCM/InfluxDB (transporte simulado) | 0,8 s |
+| `api` | 76 | Endpoints via `TestClient` | 1,2 s |
+| `contract` | 99 | Los ficheros de `templates/ELCM/TestCase/` contra las reglas de ELCM | 1 s |
+| `system` | 38 | Ciclo de vida completo con dobles solo en los bordes | 4 s |
+
+```bash
+pip install -e ".[dev]"
+
+python -m pytest -m unit          # ciclo corto de desarrollo (no necesita ytt)
+python -m pytest                  # suite completa
+python -m pytest --cov=app --cov-report=term-missing
+```
+
+**Puerta de calidad en CI** (`.gitlab-ci.yml`): `ruff check app tests`,
+`black --check app tests`, una etapa `unit` que corta el pipeline en segundos sin
+descargar el binario `ytt`, y la suite completa con `--cov-fail-under=75`
+(cobertura actual: 77,5 %).
+
+**Pruebas de mutacion** (opcional, no corre en CI): miden si los `assert`
+detectan cambios reales del codigo, no solo si la linea se ejecuta. La
+herramienta introduce alteraciones pequenas en el fuente (invertir una
+comparacion, cambiar un operador, tocar una constante) y cuenta cuantas detecta
+la suite; las que sobreviven senalan una asercion que falta.
+
+```bash
+pip install -e ".[mutation]"
+cosmic-ray init mutation.toml .mutation/session.sqlite
+cosmic-ray exec mutation.toml .mutation/session.sqlite
+cr-report .mutation/session.sqlite
+```
+
+Se usa `cosmic-ray` y no `mutmut` porque este ultimo no soporta Windows nativo
+(exigiria WSL). [`mutation.toml`](mutation.toml) apunta **solo** a
+`app/core/retry.py`: mutar codigo que las unitarias no ejercitan produce
+supervivientes por falta de cobertura, no de aserciones, y eso ensucia la senal.
+La corrida completa tarda unos 9 min.
+
+Resultado **[medido 2026-08-11]**: de 255 mutantes, 70,6 % -> 79,6 % bruto tras
+anadir 7 pruebas; descontados los 52 equivalentes, los supervivientes reales
+pasaron de 23 a 0. Encontro cuatro carencias en codigo que la cobertura daba por
+verificado al 97 %, entre ellas que el catalogo de politicas de reintento
+(codigos reintentables, numero de intentos) no estaba fijado por ninguna prueba.
+
+La estrategia completa, con la clasificacion de los 365 casos y las mediciones,
+esta en [`docs/VERIFICACION_Y_VALIDACION.md`](docs/VERIFICACION_Y_VALIDACION.md)
+(las pruebas de mutacion, en su §6.4).
 
 ## Configuracion `.env`
 
@@ -71,7 +129,7 @@ LOG_LEVEL=INFO
 TELEMETRY_REPORT_ARTIFACTS=true
 ```
 
-Nota: los tiempos de ELCM se definen como constantes internas en `app/orchestrator.py`: `ELCM_POLL_INTERVAL_SECONDS` (sondeo de estado) y `ELCM_EXECUTION_TIMEOUT_SECONDS` (timeout del experimento). La TN **no** se destruye por defecto al terminar: queda viva (`TN_READY`) hasta un `DELETE /executions/{id}/tn` o, si `ephemeral_tn=true`, tras el primer experimento.
+Nota: los tiempos de ELCM se definen como constantes internas en `app/services/orchestrator.py`: `ELCM_POLL_INTERVAL_SECONDS` (sondeo de estado) y `ELCM_EXECUTION_TIMEOUT_SECONDS` (timeout del experimento). La TN **no** se destruye por defecto al terminar: queda viva (`TN_READY`) hasta un `DELETE /executions/{id}/tn` o, si `ephemeral_tn=true`, tras el primer experimento.
 
 ## Estructura de Archivos Clave
 
@@ -79,18 +137,23 @@ Nota: los tiempos de ELCM se definen como constantes internas en `app/orchestrat
 |---|---|
 | `templates/TNLCM/` | Templates renderizables con `ytt` para TNLCM. Base: `base_tnlcm_descriptor.yaml`; componentes: `<nombre>_sample_tnlcm_descriptor.yaml` |
 | `templates/TNLCM/overlays/` | Overlays TNLCM que definen campos editables por template |
-| `templates/ELCM/TestCase/` | Fragmentos y bases de TestCase para experimentos |
+| `templates/ELCM/TestCase/` | **Biblioteca de TestCases y UEs**: es lo que `testcase_paths`/`ues_paths` resuelven por nombre de fichero, y de donde se suben a ELCM tal cual |
 | `templates/ELCM/templates/` + `templates/ELCM/overlays/` | TestCases de dataset renderizables con `ytt`: `prometheus_to_csv_dataset` (salida `csv`) y `prometheus_to_grafana_dashboard` (salida `dashboard`) |
 | `templates/ELCM/template_experiment_descriptor.json` | Plantilla base del Experiment Descriptor; se rellena por experimento (UEs + TestCases) y se genera en `artifacts/<id>/archivos_generados/` |
-| `app/main.py` | App FastAPI y definición de endpoints |
-| `app/orchestrator.py` | Orquestador principal: fases TNLCM + ELCM, ciclo de vida de la TN y recolección del dataset |
-| `app/tnlcm.py` / `app/elcm.py` | Adaptadores HTTP a TNLCM y ELCM |
-| `app/health.py` | Health de servicios (`/health/services`) y componentes (`/health/components`) |
-| `app/generators/` | Generadores con `ytt`: `tnlcm_overlay.py`, `tnlcm_renderer.py` (descriptor TNLCM) y `elcm_dataset.py` (TestCases de dataset csv/dashboard) |
-| `app/artifacts.py` | Persistencia de ejecuciones y artefactos (incluye carpeta `result/`) |
-| `app/utils/` | Utilidades: `ytt_renderer.py`, `custom_yaml.py`, `component_contract.py`, `results_bundle.py` (extrae el CSV del ZIP de resultados), `influx_raw.py` (consulta cruda a InfluxDB), `telemetry.py`, `wireguard.py` |
+| `app/main.py` | Raíz de composición: monta los routers y expone `app` |
+| `app/api/` | Capa HTTP: `routers/` (health, auth, admin, executions, experiments), `deps.py`, `phases.py` (desenlace de fase → código HTTP), `validation.py`, `errors.py` |
+| `app/services/orchestrator.py` | Coordinador fino: arranca fases y expone el ciclo de vida a la API |
+| `app/services/state.py` · `phases/` | Estado y persistencia de las ejecuciones; una fase por módulo (`tnlcm`, `elcm`, `teardown`) más `results.py` con la recolección del dataset |
+| `app/adapters/tnlcm.py` / `app/adapters/elcm.py` | Adaptadores HTTP a TNLCM y ELCM |
+| `app/observability/health.py` | Health de servicios (`/health/services`) y componentes (`/health/components`) |
+| `app/rendering/` | `paths.py` (resolucion de plantillas), `overlays.py` (registro y campos editables), `ytt.py` (binario ytt), `yaml_style.py`; generadores en `tnlcm/overlay.py` + `tnlcm/renderer.py` (descriptor TNLCM) y `elcm/dataset.py` (TestCases de dataset csv/dashboard) |
+| `app/storage/artifacts.py` | Persistencia de ejecuciones y artefactos (incluye carpeta `result/`) |
+| `app/core/` · `app/domain/` | Config y reintentos (`config.py`, `retry.py`); modelos (`enums.py`, `descriptor.py`, `execution.py`, `component_contract.py`) |
+| `app/api/schemas/` | Contratos HTTP de entrada (`requests.py`) y salida (`responses.py`) |
+| `app/storage/` · `app/observability/` | `results_bundle.py` (extrae el CSV del ZIP de resultados); `telemetry.py`, `execution_summary.py`, `health.py` |
 | `artifacts/<execution_id>/` | Artefactos de la ejecución: descriptor, reportes TNLCM, `<tn_id>.conf` y `result/` con las salidas del dataset |
-| `examples/` | Batería de TestCases y la plantilla de UE, más ejemplos de payloads. Es lo que `testcase_paths`/`ues_paths` resuelven por nombre de fichero |
+| `tests/` | Suite por niveles: `unit/`, `integration/`, `adapters/`, `api/`, `contract/`, `system/`, más `conftest.py` con las fixtures compartidas |
+| `examples/` | Ejemplos de payloads y el descriptor de infraestructura que resuelve `infrastructure.descriptor_path` (`EXAMPLES_DIR`). Los TestCases/UEs **ya no se resuelven aquí**: viven en `templates/ELCM/TestCase/` |
 
 **Nota importante**: En descriptores de experimento, `TestCases` debe contener nombres lógicos (ej. `testcase_001`), no rutas absolutas.
 
@@ -122,7 +185,7 @@ Header requerido para endpoints de ejecucion:
 
 ### `GET /health/components`
 - Requiere header `x-api-key`.
-- Health HTTP de los servicios fijos monitorizables (InfluxDB, Grafana, Prometheus, ELCM), según el diccionario estático de `app/health.py`.
+- Health HTTP de los servicios fijos monitorizables (InfluxDB, Grafana, Prometheus, ELCM), según el diccionario estático de `app/observability/health.py`.
 
 ### `POST /executions` (UNIFICADO)
 
@@ -158,7 +221,7 @@ Header requerido para endpoints de ejecucion:
 - Lanza un experimento ELCM sobre la Trial Network ya desplegada y **viva** (estado `TN_READY`).
 - Body: `{"experiment": {"name": "...", "testcase_paths": [...], "ues_paths": [...]}, "dataset": {"output": [...]}}`.
 - **`dataset` por experimento**: cada llamada puede pedir una salida de datos distinta (`logs`/`csv`/`dashboard`/`raw`). Si se omite, por defecto `logs`. Las respuestas se guardan en `artifacts/<execution_id>/result/<experimento>/` (una subcarpeta por nombre de experimento).
-- **Experiment Descriptor generado**: la lista de UEs y TestCases se rellena a partir del `experiment` y el descriptor se genera por ejecución (JSON, sin `ytt`), guardándose junto al TN Descriptor en `artifacts/<execution_id>/archivos_generados/experiment_descriptor_<experimento>.json`. Los ficheros de TestCases se siguen tomando de `examples/`.
+- **Experiment Descriptor generado**: la lista de UEs y TestCases se rellena a partir del `experiment` y el descriptor se genera por ejecución (JSON, sin `ytt`), guardándose junto al TN Descriptor en `artifacts/<execution_id>/archivos_generados/experiment_descriptor_<experimento>.json`. Los ficheros de TestCases y UEs se toman de `templates/ELCM/TestCase/`.
 - Repetible tantas veces como experimentos quieras (uno a la vez); cada experimento debe tener un **nombre único** dentro de la TN.
 - Respuestas: `202` aceptado; `404` la ejecución no existe; `409` hay un experimento en curso, la TN no está lista o el nombre está repetido.
 
@@ -249,7 +312,7 @@ El formato canónico es: `component.<template>.<field> = value`
 
 ### Formatos Soportados de `component`
 
-El validador centralizado (`app/utils/component_contract.py`) acepta dos formatos:
+El validador centralizado (`app/domain/component_contract.py`) acepta dos formatos:
 
 #### 1. **Formato Plano (CANÓNICO, Recomendado)**
 
@@ -382,7 +445,7 @@ Una variable cuyo modo dueño **no** esté en `output` se rechaza con 422 (fail-
 
 Un fichero **UE** no es un TestCase: es una lista de acciones estilo V1 cuya **clave raíz es su nombre**, y aquí se usa con un único `Run.Publish` para definir las variables que consumen todos los TestCases del experimento.
 
-`examples/UE_Variables_TEMPLATE.yml` es la plantilla: se copia, se renombra la clave raíz y **solo se rellenan los valores** (los nombres ya están fijados). Se referencia por nombre de fichero:
+`templates/ELCM/TestCase/UE_Variables_TEMPLATE.yml` es la plantilla: se copia, se renombra la clave raíz y **solo se rellenan los valores** (los nombres ya están fijados). Se referencia por nombre de fichero:
 
 ```json
 "experiment": {
@@ -414,13 +477,14 @@ El `Order` es **global a todo el experimento**: las acciones de todos los UEs y 
 | `800–899` | Entrega del dataset (`Run.InfluxToCsv`, `Run.CompressFiles`) |
 | `900–999` | Notificación / cierre |
 
-`tests/test_examples_contract.py` verifica esto en CI: todo fichero nuevo de `examples/` debe declarar su banda en `ORDER_BANDS`.
+`tests/contract/test_testcase_library_contract.py` verifica esto en CI: todo fichero nuevo de `templates/ELCM/TestCase/` debe declarar su banda en `ORDER_BANDS`.
 
 ### Batería de TestCases
 
 | Fichero | Orders | Para qué sirve | Requiere infra |
 |---|---|---|---|
 | `UE_Variables_TEMPLATE.yml` | 0 | Plantilla de variables globales | No |
+| `TC_V2_BASE_TEMPLATE.yml` | 10–30 | Esqueleto de TestCase V2 (`Sequence`, `Dashboard`, `KPIs`) del que partir para escribir uno nuevo | No |
 | `TC_Demo_Variables.yml` | 100–106 | Demo del mecanismo UE → TestCase: las dos sintaxis de expansión, derivar variables, y qué pasa con una variable inexistente | No |
 | `TC_Demo_Flow.yml` | 120–123 | `Flow.Sequence` / `Flow.Parallel` (`@{Branch}`) / `Flow.Repeat` (`@{Iter0}`, `@{Iter1}`) y el patrón captura + ventana de medida | No |
 | `TC_Demo_Python.yml` | 140–150 | Cadena de `Run.Evaluate` con Python real: agregados, comprensiones de lista, condicional y formateo para derivar KPIs | No |
@@ -441,7 +505,7 @@ Dos trampas del motor que la batería documenta en sus cabeceras:
 
 ### Ciclo de vida de la TN y estados
 
-La Trial Network se queda **viva por defecto** para aceptar varios experimentos. Comportamiento según los flags del `DataDescriptor`:
+La Trial Network se queda **viva por defecto** para aceptar varios experimentos. Comportamiento según los flags del `DatasetDescriptor`:
 
 - `auto_start_elcm=false` → despliega y se queda en `TN_READY`. No borra nada; espera llamadas manuales a `/elcm`. (`ephemeral_tn` se ignora.)
 - `auto_start_elcm=true` + `ephemeral_tn=false` (habitual) → despliega, lanza el 1er experimento y vuelve a `TN_READY`. Acepta más `/elcm` o el borrado manual.
@@ -503,19 +567,19 @@ Si necesitas control granular:
 
 ## Arquitectura de Componentes y Validación
 
-### Extractor Centralizado (`app/utils/component_contract.py`)
+### Extractor Centralizado (`app/domain/component_contract.py`)
 
 El módulo `extract_component_template_values()` centraliza la lógica de:
 1. **Normalización**: Convierte formato plano → estrutura sección/campo
 2. **Validación**: Verifica contra campos editables del overlay TNLCM
-3. **Reutilización**: Se usa en `app/main.py` (validación) y `app/generators/` (extracción durante render)
+3. **Reutilización**: Se usa en `app/api/validation.py` (validación del payload) y `app/rendering/` (extracción durante render)
 
 **Consumidores:**
 
 | Módulo | Uso |
 |---|---|
-| `app/main.py` | Validación en `_validate_components_or_raise()` dentro de `POST /executions` |
-| `app/generators/` | Extracción de campos editables antes de render `ytt` en `generate_tnlcm_descriptor()` |
+| `app/api/validation.py` | `validate_components_or_raise()`, invocada por `POST /executions` |
+| `app/rendering/` | Extracción de campos editables antes de render `ytt` en `generate_tnlcm_descriptor()` |
 
 **Ventajas de centralización:**
 - Evita duplicación de lógica validación ↔ generación
@@ -528,12 +592,12 @@ Cada template TNLCM tiene un overlay que define qué campos pueden ser editados 
 
 - **Ubicación**: `templates/TNLCM/overlays/<template_name>.yaml`
 - **Estructura**: Define secciones y campos editables (ej. `monitoring: [influxdb_user, influxdb_password, ...]`)
-- **Carga**: Automática mediante `overlay_editable_fields_for_template()` en `app/utils/ytt_renderer.py`
+- **Carga**: Automática mediante `overlay_editable_fields_for_template()` en `app/rendering/overlays.py`
 
 ## Automatizacion WireGuard
 
-- Implementacion en `app/utils/wireguard.py`.
-- Helper de sistema en `app/utils/wireguard_helper.py`.
+- Implementacion en `app/adapters/wireguard.py`.
+- Helper de sistema en `app/adapters/wireguard_helper.py`.
 - El contenido de la VPN se toma del campo `wireguard_client_config` del reporte TNLCM, sin parseos extra.
 - El archivo de interfaz se guarda como `<tn_id>.conf`.
 - Linux: usa `wg-quick` y si la interfaz ya existe se actualiza (`down` + `up`).
@@ -567,6 +631,9 @@ Reglas de interpretación:
 
 | Fecha | Cambio |
 |---|---|
+| 2026-08 | `orchestrator.py` (1.632 L) descompuesto en `state.py`, `phases/{tnlcm,elcm,teardown,results}.py`, `errors.py`, `background.py` y `reporting.py`; el coordinador queda en 187 L |
+| 2026-08 | `main.py` (802 L) dividido en `app/api/`: 5 routers mas deps/phases/validation/errors; `main.py` queda en 67 L de composicion |
+| 2026-08 | Reorganizacion de `app/` por capas: `core/`, `domain/`, `services/`, `adapters/`, `rendering/`, `storage/`, `observability/`; desaparecen `app/utils/` y `app/generators/` |
 | 2026-03 | Persistencia de ejecuciones en `executions.json` |
 | 2026-03 | `execution_id` determinista (`infrastructure.name`) |
 | 2026-03 | Fases separadas: `POST /executions/tnlcm` y `POST /executions/{execution_id}/elcm` |
@@ -584,8 +651,8 @@ Reglas de interpretación:
 | 2026-05 | **Telemetría Orchestrator-Céntrica**: Métricas granulares de fase (TNLCM create/activate, ELCM total, ejecución end-to-end) |
 | 2026-05 | **API Unificada**: Endpoint `/executions` unificado con `auto_start_elcm` (defecto `true`) para flujo automático TNLCM+ELCM |
 | 2026-05 | Rediseño del resumen TNLCM: claves fijas `tn_init`/`monitoring`/`elcm` y componentes auxiliares ordenados |
-| 2026-05-17 | Convertidos templates TNLCM base a `ytt` (`@ytt:data` / `@data.values`) y añadida documentación sobre qué valores debe contener el `DataDescriptor` |
-| **2026-05-30** | **Extractor Centralizado**: Módulo `app/utils/component_contract.py` con `extract_component_template_values()` para normalizar y validar campos `component.<template>.<field>` contra editables del overlay; soporta formatos plano y anidado con retrocompatibilidad |
+| 2026-05-17 | Convertidos templates TNLCM base a `ytt` (`@ytt:data` / `@data.values`) y añadida documentación sobre qué valores debe contener el `DatasetDescriptor` |
+| **2026-05-30** | **Extractor Centralizado**: Módulo `app/domain/component_contract.py` con `extract_component_template_values()` para normalizar y validar campos `component.<template>.<field>` contra editables del overlay; soporta formatos plano y anidado con retrocompatibilidad |
 | 2026-07 | **Ciclo de vida persistente**: la TN queda viva (`TN_READY`) tras cada experimento; nuevos estados y `DELETE /executions/{id}/tn` para borrado manual; `ephemeral_tn` para TN de un solo uso |
 | 2026-07 | **Health desdoblado**: `/health/services` (liveness orquestador + TNLCM) y `/health/components` (InfluxDB/Grafana/Prometheus/ELCM) |
 | 2026-07 | **`dataset.output` multi-formato**: acepta lista o string de `logs`/`csv`/`dashboard`/`raw`; las respuestas se guardan en `artifacts/<execution_id>/result/` |
@@ -597,6 +664,7 @@ Reglas de interpretación:
 | 2026-08 | **Batería de TestCases** en `examples/` (demo, utilidad y verificación de `PublishFromFile`/`PublishFromPreviousTaskLog`/`UpgradeVerdict`) con **bandas de `Order` disjuntas** para que sean componibles; contrato verificado en CI (`tests/test_examples_contract.py`) |
 | 2026-08 | **Variables globales de `dataset`** (`measurement`, `influx_host`/`influx_port`/`influx_bucket`, `panel_interval`) validadas por modo de salida; el TestCase CSV deja de llevar measurement/bucket/IP hardcodeados y pasa a la banda de entrega (`Order` 800/801) |
 | 2026-07 | **TestCases verbatim + fix de comillas**: los TestCases del body se suben **tal cual** desde `examples/` (ya no se re-renderizan: eso corrompía comillas/indentación) y el descriptor los referencia por su `Name:` interno. Los TestCases de dataset (csv/dashboard) se re-serializan forzando comillas dobles para que `ytt` no rompa el entrecomillado (queries de Prometheus, `@{ExecutionId}`) |
+| 2026-08 | **Biblioteca de TestCases en `templates/ELCM/TestCase/`**: `testcase_paths`/`ues_paths` dejan de resolver contra `examples/` (`EXAMPLES_DIR`) y lo hacen contra la biblioteca de plantillas, que cuelga de la raíz del repositorio y no de `cwd`. La búsqueda es **por nombre de fichero** sobre un directorio plano, así que un `../` en la referencia no saca la resolución de ahí. El contrato de CI pasa a `tests/contract/test_testcase_library_contract.py`; `EXAMPLES_DIR` queda solo para `infrastructure.descriptor_path` |
 
 ## Uso con Postman
 
@@ -659,5 +727,5 @@ Si necesitas validar el flujo completo, usa primero la coleccion Postman y revis
 
 Para problemas de validación de componentes, consulta la sección "Validación de Componentes" arriba y revisa los overlays TNLCM en `templates/TNLCM/overlays/`.
 
-Para entender en detalle la arquitectura del extractor de componentes, ver `app/utils/component_contract.py` y sus consumidores en `app/main.py` y `app/generators/`.
+Para entender en detalle la arquitectura del extractor de componentes, ver `app/domain/component_contract.py` y sus consumidores en `app/main.py` y `app/rendering/`.
 
