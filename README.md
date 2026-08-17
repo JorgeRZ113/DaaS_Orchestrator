@@ -174,7 +174,7 @@ Header requerido para endpoints de ejecucion:
 | `POST` | `/executions/{execution_id}/elcm` | Si | Si (`experiment` + `dataset`) | Lanza un experimento sobre la TN viva (repetible, nombre único, salida de datos por experimento) |
 | `DELETE` | `/executions/{execution_id}/tn` | Si | No | Borrado manual de la TN (deleted + purged) |
 | `GET` | `/executions/{execution_id}` | Si | No | Estado resumido |
-| `GET` | `/executions/{execution_id}/detail` | Si | No | Estado detallado + artefactos |
+| `GET` | `/executions/{execution_id}/detail` | Si | No | Estado detallado + artefactos + `tn_state` en vivo desde TNLCM |
 | `GET` | `/executions/{execution_id}/summary` | Si | No | Resumen legible para experimentadores (`?format=markdown` para texto) |
 
 ## Endpoints actuales (detalle)
@@ -241,6 +241,8 @@ Header requerido para endpoints de ejecucion:
 
 ### `GET /executions/{execution_id}/detail`
 - Devuelve detalle completo (incluye ids y artifacts).
+- Añade `tn_state`: el estado que TNLCM reporta en ese momento para la TN (`created`, `activated`, `destroyed`...), consultado en vivo contra TNLCM y no persistido en el registro.
+- Es best-effort: queda a `null` si la ejecución todavía no tiene TN, si TNLCM ya no la conoce o si no responde; el resto de la respuesta no se ve afectada.
 
 ### `GET /executions/{execution_id}/summary`
 - Resumen legible para experimentadores: qué pasó en cada fase, cuánto tardó y dónde han quedado los resultados, sin vocabulario interno.
@@ -700,6 +702,7 @@ Los tests validan:
 - **`docs/INFORME_TNLCM.md`**: Guía rápida para ejecutar pruebas TNLCM
 - **`docs/INFORME_ELCM.md`**: Guía rápida para ejecutar pruebas ELCM
 - **`docs/CI_CD_VARIABLES.md`**: Variables de deployment y configuración
+- **`docs/INCIDENCIA_TNLCM_ACTIVATE_500.md`**: Informe del fallo en el que `activate` devuelve 500 mientras el despliegue sigue vivo en Jenkins, y la colisión despliegue/destrucción que deja el `tn_id` inutilizable
 - **`Recursos/300526_Resumen.md`**: Documentación técnica detallada archivo por archivo (SI EXISTE)
 
 ### Documentación Legacy (NO Usar)
@@ -723,7 +726,7 @@ Los siguientes archivos contienen snapshots históricos de fases anteriores del 
 Si necesitas validar el flujo completo, usa primero la coleccion Postman y revisa estos dos endpoints para inspeccionar qué ha pasado:
 
 - `GET /executions/{execution_id}/summary` - qué pasó en cada fase, cuánto tardó y qué falló, en lenguaje natural
-- `GET /executions/{execution_id}/detail` - registro completo con artifacts y el error en crudo
+- `GET /executions/{execution_id}/detail` - registro completo con artifacts, el error en crudo y el `tn_state` que TNLCM reporta ahora mismo para la TN
 
 Para problemas de validación de componentes, consulta la sección "Validación de Componentes" arriba y revisa los overlays TNLCM en `templates/TNLCM/overlays/`.
 
