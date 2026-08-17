@@ -13,14 +13,17 @@ from app.api.phases import (
     await_phase,
     to_execution_response,
 )
-from app.api.schemas.responses import ExecutionResponse, ExecutionSummary
+from app.api.schemas.responses import (
+    ExecutionDetailResponse,
+    ExecutionResponse,
+    ExecutionSummary,
+)
 from app.api.validation import (
     reject_empty_strings_or_raise,
     validate_components_or_raise,
     validate_elcm_or_raise,
 )
 from app.domain.descriptor import DatasetDescriptor
-from app.domain.execution import ExecutionRecord
 from app.observability.execution_summary import build_execution_summary, render_summary_markdown
 from app.observability.telemetry import format_duration_display, telemetry
 from app.rendering.tnlcm.overlay import InvalidDatasetDescriptorError
@@ -197,13 +200,22 @@ async def get_execution_status(execution_id: str):
     return to_execution_response(record)
 
 
-@router.get("/executions/{execution_id}/detail", response_model=ExecutionRecord)
+@router.get("/executions/{execution_id}/detail", response_model=ExecutionDetailResponse)
 async def get_execution_detail(execution_id: str):
-    """Devuelve el registro completo (incluye artifacts y error)."""
+    """Devuelve el registro completo (incluye artifacts y error).
+
+    A los campos del record se suma `tn_state`: el estado que TNLCM reporta en
+    ese momento para la TN (`created`, `activated`, `destroyed`...), consultado
+    en vivo contra TNLCM. Sirve para ver el detalle real de la TN cuando el
+    `status` propio se queda corto (p. ej. la TN se destruyo por fuera). Es
+    best-effort: llega a null si la ejecucion aun no tiene TN o si TNLCM no
+    responde, sin que eso afecte al resto de la respuesta.
+    """
     record = orchestrator.get_execution(execution_id)
     if not record:
         raise HTTPException(status_code=404, detail="Ejecucion no encontrada")
-    return record
+    tn_state = await orchestrator.probe_tn_state(record)
+    return ExecutionDetailResponse(**record.model_dump(), tn_state=tn_state)
 
 
 @router.get(

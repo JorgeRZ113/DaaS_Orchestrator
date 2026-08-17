@@ -30,6 +30,15 @@ async def wait_for_phase(execution_id: str, signal: str, timeout: float):
     return await state.wait_for_phase(execution_id, signal, timeout)
 
 
+async def probe_tn_state(record: ExecutionRecord) -> str | None:
+    """Delegacion fina hacia la fase TNLCM (ver `get_execution`).
+
+    El estado que TNLCM reporta para la TN, best-effort: None si no hay TN o si
+    no se pudo consultar.
+    """
+    return await tnlcm_phase.probe_tn_state(record)
+
+
 # Topes de espera de los endpoints bloqueantes. Viven aqui, en el coordinador,
 # porque son contrato con la capa HTTP: cadena de timeouts anidados
 # cliente > MAX_WAIT del endpoint > tope de la fase. Al vencer se responde 504 y

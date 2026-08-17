@@ -10,6 +10,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from app.domain.enums import ExecutionState
+from app.domain.execution import ExecutionRecord
 
 
 class ExecutionResponse(BaseModel):
@@ -26,6 +27,22 @@ class ExecutionResponse(BaseModel):
     tn_id: Optional[str] = None
     vpn_status: Optional[str] = None
     error: Optional[str] = None
+
+
+class ExecutionDetailResponse(ExecutionRecord):
+    """El registro completo mas el estado que TNLCM reporta ahora mismo para la TN.
+
+    Extiende el record en lugar de duplicarlo: el detalle siempre expuso el
+    `ExecutionRecord` tal cual y el campo nuevo se suma a el, sin tocar el resto
+    del contrato. `tn_state` no vive en el record a proposito, porque se
+    quedaria viejo en cuanto TNLCM cambiara la TN por su cuenta: se pregunta en
+    cada consulta del detalle.
+    """
+
+    # Estado normalizado (minusculas) del campo `state` que devuelve TNLCM:
+    # `created`, `activated`, `destroyed`... Queda a null si la ejecucion aun no
+    # tiene TN, si TNLCM ya no la conoce (404) o si no se pudo consultar.
+    tn_state: Optional[str] = None
 
 
 class ExecutionStep(BaseModel):

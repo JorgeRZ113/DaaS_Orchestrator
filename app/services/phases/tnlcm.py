@@ -14,6 +14,7 @@ from app.adapters import tnlcm, wireguard
 from app.adapters.wireguard import WireGuardManualDeploymentRequired
 from app.domain.descriptor import DatasetDescriptor
 from app.domain.enums import ExecutionState
+from app.domain.execution import ExecutionRecord
 from app.observability.telemetry import telemetry
 from app.rendering.tnlcm.renderer import generate_tnlcm_descriptor
 from app.services import reporting, state
@@ -320,6 +321,30 @@ async def _ensure_tunnel_up(execution_id: str) -> None:
         return
 
     state.update(execution_id, vpn_status="UP", vpn_error=None)
+
+
+async def probe_tn_state(record: ExecutionRecord) -> str | None:
+    """Pregunta a TNLCM en que estado esta ahora mismo la TN de una ejecucion.
+
+    Es puramente informativo (lo consume `GET /executions/{id}/detail`): no toca
+    el record ni reconcilia nada, para eso esta `_reconcile_live_tn`. Best-effort
+    por definicion: devuelve None si la ejecucion todavia no tiene TN, si TNLCM
+    no responde o si no hay token cargado, porque un fallo consultando el estado
+    no puede tumbar la consulta del detalle.
+    """
+    if not record.tn_id:
+        return None
+
+    try:
+        return await tnlcm.get_tn_state(record.tn_id)
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning(
+            "[%s] Could not read TN %s state for detail: %s",
+            record.execution_id,
+            record.tn_id,
+            exc,
+        )
+        return None
 
 
 async def _reconcile_live_tn(execution_id: str) -> None:
