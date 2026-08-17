@@ -1,3 +1,4 @@
+import httpx
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -123,7 +124,7 @@ def test_get_execution_status_returns_404_when_missing(monkeypatch) -> None:
     assert response.json()["detail"] == "Ejecucion no encontrada"
 
 
-def test_get_execution_detail_returns_record(monkeypatch) -> None:
+def test_get_execution_detail_returns_record_with_live_tn_state(monkeypatch) -> None:
     record = ExecutionRecord(
         execution_id="tn-demo",
         status=ExecutionState.completed,
@@ -132,12 +133,61 @@ def test_get_execution_detail_returns_record(monkeypatch) -> None:
     )
     monkeypatch.setattr("app.services.orchestrator.get_execution", lambda execution_id: record)
 
+    async def _fake_get_tn_state(tn_id, client=None):
+        assert tn_id == "tn-demo"
+        return "activated"
+
+    monkeypatch.setattr("app.adapters.tnlcm.get_tn_state", _fake_get_tn_state)
+
     response = client.get("/executions/tn-demo/detail", headers={"x-api-key": settings.api_key})
 
     assert response.status_code == 200
     body = response.json()
     assert body["execution_id"] == "tn-demo"
     assert body["status"] == "COMPLETED"
+    assert body["tn_state"] == "activated"
+
+
+def test_get_execution_detail_leaves_tn_state_null_when_tnlcm_fails(monkeypatch) -> None:
+    """Un fallo consultando TNLCM no puede tumbar la consulta del detalle."""
+    record = ExecutionRecord(
+        execution_id="tn-demo",
+        status=ExecutionState.completed,
+        message="done",
+        tn_id="tn-demo",
+    )
+    monkeypatch.setattr("app.services.orchestrator.get_execution", lambda execution_id: record)
+
+    async def _raise_transport_error(tn_id, client=None):
+        raise httpx.ConnectError("TNLCM unreachable")
+
+    monkeypatch.setattr("app.adapters.tnlcm.get_tn_state", _raise_transport_error)
+
+    response = client.get("/executions/tn-demo/detail", headers={"x-api-key": settings.api_key})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "COMPLETED"
+    assert body["tn_state"] is None
+
+
+def test_get_execution_detail_skips_tnlcm_when_there_is_no_tn(monkeypatch) -> None:
+    record = ExecutionRecord(
+        execution_id="tn-demo",
+        status=ExecutionState.pending,
+        message="Execution created",
+    )
+    monkeypatch.setattr("app.services.orchestrator.get_execution", lambda execution_id: record)
+
+    async def _should_not_run(tn_id, client=None):
+        raise AssertionError("TNLCM should not be queried without a tn_id")
+
+    monkeypatch.setattr("app.adapters.tnlcm.get_tn_state", _should_not_run)
+
+    response = client.get("/executions/tn-demo/detail", headers={"x-api-key": settings.api_key})
+
+    assert response.status_code == 200
+    assert response.json()["tn_state"] is None
 
 
 def test_post_execution_returns_409_when_tnlcm_deploy_is_busy(monkeypatch) -> None:
