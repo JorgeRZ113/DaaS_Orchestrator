@@ -1,7 +1,8 @@
 """Lanzamiento de experimentos ELCM sobre una TN ya viva."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
+from app.api.body_formats import MultiFormatRoute, descriptor_source_of, yaml_request_body
 from app.api.deps import verify_api_key
 from app.api.phases import EXPERIMENT_PHASE_RESPONSES, await_phase, to_execution_response
 from app.api.schemas.requests import ElcmExperimentRequest
@@ -10,7 +11,11 @@ from app.api.validation import validate_elcm_or_raise
 from app.services import orchestrator
 from app.services.errors import ExecutionConflictError, ExecutionNotFoundError
 
-router = APIRouter(tags=["executions"], dependencies=[Depends(verify_api_key)])
+router = APIRouter(
+    tags=["executions"],
+    dependencies=[Depends(verify_api_key)],
+    route_class=MultiFormatRoute,
+)
 
 
 @router.post(
@@ -18,11 +23,15 @@ router = APIRouter(tags=["executions"], dependencies=[Depends(verify_api_key)])
     response_model=ExecutionResponse,
     status_code=200,
     responses=EXPERIMENT_PHASE_RESPONSES,
+    openapi_extra=yaml_request_body(
+        "ElcmExperimentRequest", "Peticion de experimento en YAML (fichero .yaml)"
+    ),
 )
 async def post_execution_elcm(
     execution_id: str,
     request: ElcmExperimentRequest,
     response: Response,
+    http_request: Request,
     wait: bool = Query(
         True,
         description=(
@@ -45,7 +54,11 @@ async def post_execution_elcm(
 
     El body admite `dataset.output` propio: cada experimento puede pedir una
     salida de datos distinta (logs/csv/dashboard/raw), que se recolecta en
-    artifacts/<execution_id>/result/<experimento>/.
+    artifacts/<execution_id>/result/<experimento>/, junto a un
+    `experiment_request.yaml` con lo que se pidio.
+
+    Admite los mismos tres formatos de entrada que POST /executions: body JSON,
+    body YAML o fichero YAML subido en el campo `descriptor`.
 
     Si la ejecucion quedo en DESTROYED o FAILED pero TNLCM sigue teniendo la TN
     viva, se recupera automaticamente (reabriendo el tunel WireGuard) para poder
@@ -62,7 +75,10 @@ async def post_execution_elcm(
 
     try:
         record = await orchestrator.start_elcm_phase(
-            execution_id, request.experiment, request.dataset
+            execution_id,
+            request.experiment,
+            request.dataset,
+            descriptor_source_of(http_request),
         )
     except ExecutionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

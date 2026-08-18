@@ -3,9 +3,10 @@
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 
+from app.api.body_formats import MultiFormatRoute, descriptor_source_of, yaml_request_body
 from app.api.deps import verify_api_key
 from app.api.phases import (
     EXPERIMENT_PHASE_RESPONSES,
@@ -36,7 +37,11 @@ from app.services.errors import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["executions"], dependencies=[Depends(verify_api_key)])
+router = APIRouter(
+    tags=["executions"],
+    dependencies=[Depends(verify_api_key)],
+    route_class=MultiFormatRoute,
+)
 
 
 @router.post(
@@ -44,10 +49,14 @@ router = APIRouter(tags=["executions"], dependencies=[Depends(verify_api_key)])
     response_model=ExecutionResponse,
     status_code=200,
     responses=EXPERIMENT_PHASE_RESPONSES,
+    openapi_extra=yaml_request_body(
+        "DatasetDescriptor", "Dataset Descriptor en YAML (fichero .yaml)"
+    ),
 )
 async def post_execution(
     descriptor: DatasetDescriptor,
     response: Response,
+    request: Request,
     wait: bool = Query(
         True,
         description=(
@@ -71,6 +80,11 @@ async def post_execution(
 
     dataset.output acepta un nombre o una lista combinable de: logs, csv, dashboard,
     raw. Las respuestas del dataset se guardan en artifacts/<execution_id>/result/.
+
+    El descriptor admite tres formatos de entrada, todos equivalentes: body JSON,
+    body YAML (Content-Type: application/yaml) o fichero YAML subido como
+    multipart en el campo `descriptor`. Se persiste siempre en YAML, y ademas en
+    JSON cuando el JSON fue lo que se envio.
     """
     reject_empty_strings_or_raise(descriptor)
 
@@ -107,7 +121,9 @@ async def post_execution(
         f"{descriptor.infrastructure.name}"
     )
     try:
-        record = await orchestrator.create_tnlcm_execution(descriptor)
+        record = await orchestrator.create_tnlcm_execution(
+            descriptor, descriptor_source_of(request)
+        )
         if not wait:
             response.status_code = 202
             return to_execution_response(record)
