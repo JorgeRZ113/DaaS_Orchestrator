@@ -18,6 +18,11 @@ dependencies = [
     "pyyaml",
     "python-dotenv",
     "httpx",
+    # Ningun modulo la importa directamente: la exige Starlette al llamar a
+    # `request.form()`, que es como `api/body_formats.py` lee el descriptor
+    # subido como fichero. Sin ella la subida multipart revienta con un 500 en
+    # tiempo de peticion, no al arrancar.
+    "python-multipart",
 ]
 
 [project.optional-dependencies]

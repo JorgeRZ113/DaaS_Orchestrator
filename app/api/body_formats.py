@@ -66,11 +66,6 @@ class JsonLikeLoader(yaml.SafeLoader):
 JsonLikeLoader.yaml_implicit_resolvers = {}
 
 for _tag, _pattern, _first_chars in (
-    # El resolver de null lleva "" entre sus primeros caracteres a proposito:
-    # es la clave con la que PyYAML resuelve el escalar VACIO (`clave:` sin nada
-    # detras). Sin ella, `ueransim_both:` se resolveria como cadena vacia en vez
-    # de como null, y acabaria rechazado por reject_empty_strings_or_raise con un
-    # 400 de campos vacios en lugar de entenderse como «usa los defaults».
     ("tag:yaml.org,2002:bool", r"^(?:true|True|TRUE|false|False|FALSE)$", "tTfF"),
     ("tag:yaml.org,2002:int", r"^-?(?:0|[1-9][0-9]*)$", "-0123456789"),
     (
@@ -78,6 +73,11 @@ for _tag, _pattern, _first_chars in (
         r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?$",
         "-0123456789",
     ),
+    # El resolver de null lleva "" entre sus primeros caracteres a proposito:
+    # es la clave con la que PyYAML resuelve el escalar VACIO (`clave:` sin nada
+    # detras). Sin ella, `ueransim_both:` se resolveria como cadena vacia en vez
+    # de como null, y acabaria rechazado por reject_empty_strings_or_raise con un
+    # 400 de campos vacios en lugar de entenderse como «usa los defaults».
     ("tag:yaml.org,2002:null", r"^(?:null|Null|NULL|~|)$", ["~", "n", "N", ""]),
 ):
     JsonLikeLoader.add_implicit_resolver(_tag, re.compile(_pattern), list(_first_chars))
