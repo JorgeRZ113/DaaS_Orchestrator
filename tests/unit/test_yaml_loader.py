@@ -168,3 +168,37 @@ def test_valid_mapping_is_returned_untouched() -> None:
     assert parse_yaml_descriptor("infrastructure:\n  name: tn_demo\n") == {
         "infrastructure": {"name": "tn_demo"}
     }
+
+
+# --- escalar vacio: `clave:` sin nada detras ---
+
+
+@pytest.mark.parametrize("document", ["v:", "v: null", "v: ~", "v: NULL"])
+def test_empty_and_explicit_nulls_resolve_to_none(document: str) -> None:
+    """`componente:` a secas tiene que ser null, no cadena vacia.
+
+    PyYAML resuelve el escalar vacio con la clave "" en la tabla de resolvers, no
+    con el primer caracter. Si se omite, `ueransim_both:` llega como "" y
+    `reject_empty_strings_or_raise` lo rechaza con un 400 de campos vacios en vez
+    de entenderse como «despliegalo con sus defaults».
+    """
+    assert _load(document)["v"] is None
+
+
+def test_empty_scalar_matches_pyyaml_default() -> None:
+    """En esto no se busca desviarse de PyYAML, solo en el esquema de tipos."""
+    assert _load("v:")["v"] == yaml.safe_load("v:")["v"]
+
+
+def test_quoted_empty_string_is_still_a_string() -> None:
+    """Un `v: ''` explicito es una cadena vacia, y debe seguir siendolo."""
+    assert _load("v: ''")["v"] == ""
+
+
+def test_component_left_empty_parses_as_none() -> None:
+    """El caso real que motiva lo anterior, tal cual se escribe en el descriptor."""
+    parsed = parse_yaml_descriptor(
+        "infrastructure:\n  name: tn\n  component:\n    base:\n    ueransim_both:\n"
+    )
+
+    assert parsed["infrastructure"]["component"] == {"base": None, "ueransim_both": None}

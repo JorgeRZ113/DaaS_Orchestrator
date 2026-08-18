@@ -29,6 +29,21 @@ class InfrastructureConfig(BaseModel):
         description="Parametros extra para el despliegue",
     )
 
+    @field_validator("component", mode="before")
+    @classmethod
+    def _empty_component_means_defaults(cls, value: Any) -> Any:
+        """Aceptar un componente sin valores como «despliegalo con sus defaults».
+
+        En JSON eso se escribe `"ueransim_both": {}`; en YAML lo natural es dejar
+        la clave vacia, y eso llega como None. Sin esta coercion el modelo
+        respondia 422 por un caso que `validate_components_or_raise` ya da por
+        bueno explicitamente ("un valor no-dict significa: usa los defaults"), de
+        modo que el mismo descriptor valido en JSON se rechazaba en YAML.
+        """
+        if not isinstance(value, dict):
+            return value
+        return {key: ({} if sub_value is None else sub_value) for key, sub_value in value.items()}
+
     def tnlcm_template_ref(self) -> str | None:
         """Devuelve la referencia seleccionada para el template TNLCM."""
         for key in ("template_tnlcm", "template", "descriptor", "descriptor_path"):
