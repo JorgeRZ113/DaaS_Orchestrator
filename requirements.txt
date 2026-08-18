@@ -5,3 +5,5 @@ pydantic
 pyyaml
 python-dotenv
 httpx
+# La exige Starlette para `request.form()`: subida multipart del descriptor.
+python-multipart

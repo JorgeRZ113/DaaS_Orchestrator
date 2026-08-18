@@ -1,0 +1,32 @@
+# Despliegue sin experimento: primero la infraestructura, los experimentos despues.
+#
+# Con auto_start_elcm: false la peticion solo levanta la Trial Network y se
+# detiene ahi. Los experimentos se lanzan luego, tantas veces como haga falta:
+#
+#   curl -X POST http://localhost:8000/executions/tn_demo_manual/elcm \
+#        -H "x-api-key: $API_KEY" \
+#        -H "Content-Type: application/yaml" \
+#        --data-binary @examples/descriptors/05_experimento_elcm.yaml
+#
+# Es el modo util cuando se quieren comparar varios experimentos sobre EXACTAMENTE
+# la misma infraestructura: si cada uno redesplegase su TN, las diferencias de
+# despliegue contaminarian la comparacion.
+
+infrastructure:
+  name: tn_demo_manual
+
+  component:
+    base:
+      influxdb_user: admin
+      influxdb_password: adminadmin
+      grafana_password: adminadmin
+
+  parameters:
+    library_reference_type: branch
+    library_reference_value: develop
+
+# Sin auto-start el bloque `experiment` es opcional y el pipeline lo ignora.
+auto_start_elcm: false
+
+# Se ignora cuando auto_start_elcm es false: la TN queda viva por definicion.
+ephemeral_tn: false

@@ -1,14 +1,26 @@
 #! Overlay para `prometheus_to_csv_dataset.yaml`
 #! TestCase de entrega de datos: Prometheus -> InfluxDB -> CSV -> ZIP
 #!
-#! Valores validados contra el despliegue de laboratorio (ejecucion 8, OK).
-#! El generador rellena estos campos a partir del DataDescriptor y de los
-#! componentes presentes en la Trial Network.
+#! Estos son los DEFAULTS. El orquestador los sobrescribe en runtime con un
+#! overlay #@data/values extra, con esta precedencia:
+#!   1. variable del bloque `dataset` del body (dataset.measurement,
+#!      dataset.influx_host, dataset.influx_port, dataset.influx_bucket)
+#!   2. valor derivado del despliegue (IP de monitorizacion del report TNLCM,
+#!      Measurement del TestCase de captura *_capture*)
+#!   3. el default de aqui
+#!
+#! Toda clave que el orquestador pueda inyectar TIENE que existir en este fichero:
+#! ytt rechaza data values con claves no declaradas.
 
 #@data/values
 ---
 dataset:
   name: "TC_Dataset_PrometheusToCsv"
+
+  #! Measurement de InfluxDB del que se extraen los datos.
+  measurement: "OPEN5GS_KPIS"
+  #! Bucket de InfluxDB (organizacion por defecto del despliegue de monitorizacion).
+  bucket: "testing"
 
   influx:
     host: "192.168.199.2"

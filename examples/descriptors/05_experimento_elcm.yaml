@@ -1,0 +1,33 @@
+# Peticion de experimento sobre una TN que ya esta viva.
+#
+# Este fichero NO es un Dataset Descriptor: es el cuerpo de
+# POST /executions/{execution_id}/elcm, que solo lleva los bloques `experiment`
+# y `dataset`. La infraestructura ya existe y no se vuelve a describir.
+#
+#   curl -X POST http://localhost:8000/executions/tn_demo_manual/elcm \
+#        -H "x-api-key: $API_KEY" \
+#        -H "Content-Type: application/yaml" \
+#        --data-binary @examples/descriptors/05_experimento_elcm.yaml
+#
+# Se puede llamar tantas veces como experimentos se quieran encadenar sobre la
+# misma TN (uno cada vez). Cada nombre debe ser unico dentro de la TN: ELCM los
+# registra por nombre y un duplicado se rechaza con 409.
+
+experiment:
+  name: exp-bateria-demo
+
+  # Se ejecutan en orden. La biblioteca vive en templates/ELCM/TestCase/ y la
+  # resolucion es por nombre de fichero.
+  testcase_paths:
+    - TC_Demo_Variables.yml
+    - TC_Demo_Flow.yml
+    - TC_Demo_Python.yml
+    - TC_Check_PublishTasks.yml
+
+  ues_paths:
+    - UE_Variables_TEMPLATE.yml
+
+dataset:
+  # Cada experimento puede pedir una salida distinta; se recolecta en
+  # artifacts/<execution_id>/result/<nombre_del_experimento>/.
+  output: [logs]

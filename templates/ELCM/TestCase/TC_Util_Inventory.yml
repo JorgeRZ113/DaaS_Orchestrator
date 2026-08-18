@@ -1,0 +1,70 @@
+# =============================================================================
+# UTILIDAD: inventario del entorno de ejecucion (entrega un ZIP descargable)
+# =============================================================================
+# Proposito: dejar constancia de sobre que maquina y con que recursos se ejecuto
+# el experimento. Util para reproducibilidad y para depurar resultados raros
+# ("la CPU estaba al 100%", "no quedaba disco"). El resultado se entrega como
+# ZIP en GET /execution/{id}/results.
+#
+# Banda de Order: 300-309. Prerrequisitos: NINGUNO.
+# Se ejecuta en el host donde corre ELCM (Run.CliExecute usa shell local). Para
+# inventariar el SUT en lugar del host de ELCM, cambiar Run.CliExecute por
+# Run.CliSsh usando @[SutIp] / @[SshUser] / @[SshCertificate].
+#
+# EL Run.CompressFiles FINAL NO ES OPCIONAL:
+#   Run.CliExecute escribe el fichero en el TempFolder pero NO lo registra en
+#   GeneratedFiles, y ELCM solo copia a Results/<id>.zip lo que este registrado
+#   ahi ANTES de limpiar el TempFolder. Sin la compresion, el inventario se
+#   genera, se ve en el log y se pierde: no aparece en /results.
+# =============================================================================
+Version: 2
+Name: "TC_Util_Inventory"
+Sequence:
+  - Order: 300
+    Task: "Run.CliExecute"
+    Config:
+      CWD: "@{TempFolder}"
+      Parameters: "sh -c 'F=inventory_@{ExecutionId}.txt; { echo \"=== fecha ===\"; date -Is; echo \"=== host ===\"; hostname; uname -a; echo \"=== uptime y carga ===\"; uptime; echo \"=== interfaces ===\"; ip -br a; echo \"=== rutas ===\"; ip route; echo \"=== disco ===\"; df -h; echo \"=== memoria ===\"; free -m; echo \"=== cpu ===\"; nproc; } > $F 2>&1'"
+
+  # Volcar el fichero al log para poder consultarlo desde GET /executions/{id}/detail
+  # sin necesidad de descargar el ZIP.
+  - Order: 301
+    Task: "Run.CliExecute"
+    Config:
+      CWD: "@{TempFolder}"
+      Parameters: "cat inventory_@{ExecutionId}.txt"
+
+  # Extraer un dato concreto del log de la task anterior para dejarlo publicado
+  # y que otros TestCases lo puedan usar con @[InventoryHostname].
+  # OJO: PreviousTaskLog es el log de la task de PRIMER NIVEL inmediatamente
+  # anterior (aqui, el 'cat'). Si se mete cualquier task entre medias, se lee la
+  # equivocada. Las lineas de Run.CliExecute llegan con el prefijo "[CLI]", por
+  # eso el patron empieza por ".*" (re.match ancla al inicio de la linea).
+  - Order: 302
+    Task: "Run.PublishFromPreviousTaskLog"
+    Config:
+      Pattern: '.*Linux (\S+) .*'
+      Keys:
+        - [1, "InventoryHostname"]
+      VerdictOnMatch: "Pass"
+      VerdictOnNoMatch: "NotSet"
+
+  - Order: 303
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "Inventario recogido en el host '@[InventoryHostname:desconocido]' para la ejecucion @{ExecutionId}"
+
+  # OBLIGATORIO: registra el fichero en GeneratedFiles para que llegue a /results.
+  - Order: 304
+    Task: "Run.CompressFiles"
+    Config:
+      Files:
+        - "@{TempFolder}/inventory_@{ExecutionId}.txt"
+      Output: "@{TempFolder}/inventory_@{ExecutionId}.zip"
+
+Standard: True
+Distributed: False
+Parameters: {}
+Dashboard: {}
+KPIs: {}

@@ -5,7 +5,7 @@
 #! vm_kvm auxiliares (generador de trafico y destino externo).
 #!
 #! Son OPCIONALES las IPs, los puertos y las MACs: cada uno viaja con el valor del
-#! sample de 6G-Library como default y puede sobrescribirse desde el DataDescriptor.
+#! sample de 6G-Library como default y puede sobrescribirse desde el DatasetDescriptor.
 #! Lo que no es IP/puerto/MAC (switch_id, interfaces, hop_metadata_len, max_hop,
 #! ins_mask, rep_md_bits, priority) se mantiene literal.
 #!
