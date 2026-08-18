@@ -241,7 +241,7 @@ async def test_ephemeral_tn_is_ignored_when_manual_start(monkeypatch) -> None:
     """Con auto_start_elcm=False el flag ephemeral_tn no debe activarse en el record."""
     monkeypatch.setattr(
         "app.storage.artifacts.persist_dataset_descriptor",
-        lambda execution_id, descriptor: "desc.json",
+        lambda execution_id, descriptor, source=None: ["desc.yaml"],
     )
     descriptor = DatasetDescriptor(
         infrastructure={"name": "tn-manual"},
@@ -258,7 +258,7 @@ async def test_ephemeral_tn_is_ignored_when_manual_start(monkeypatch) -> None:
 async def test_ephemeral_tn_kept_when_auto_start(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.storage.artifacts.persist_dataset_descriptor",
-        lambda execution_id, descriptor: "desc.json",
+        lambda execution_id, descriptor, source=None: ["desc.yaml"],
     )
     descriptor = DatasetDescriptor(
         infrastructure={"name": "tn-auto"},

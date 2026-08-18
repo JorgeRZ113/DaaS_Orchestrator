@@ -252,7 +252,7 @@ def test_elcm_endpoint_rejects_invalid_body_without_touching_the_record(
 def test_executions_endpoint_rejects_invalid_experiment_before_deploying(
     isolated_executions, monkeypatch
 ) -> None:
-    async def _should_not_run(descriptor):
+    async def _should_not_run(descriptor, source=None):
         raise AssertionError("an invalid body must not create a TNLCM execution")
 
     monkeypatch.setattr("app.services.orchestrator.create_tnlcm_execution", _should_not_run)

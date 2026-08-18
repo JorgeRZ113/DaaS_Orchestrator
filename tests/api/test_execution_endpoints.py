@@ -191,7 +191,7 @@ def test_get_execution_detail_skips_tnlcm_when_there_is_no_tn(monkeypatch) -> No
 
 
 def test_post_execution_returns_409_when_tnlcm_deploy_is_busy(monkeypatch) -> None:
-    async def _raise_busy(descriptor):
+    async def _raise_busy(descriptor, source=None):
         raise TnlcmDeploymentInProgressError("deploy en curso")
 
     monkeypatch.setattr("app.services.orchestrator.create_tnlcm_execution", _raise_busy)
@@ -210,7 +210,7 @@ def test_post_execution_returns_409_when_tnlcm_deploy_is_busy(monkeypatch) -> No
 
 
 def test_post_execution_accepts_flat_component_template_fields(monkeypatch) -> None:
-    async def _ok_record(descriptor):
+    async def _ok_record(descriptor, source=None):
         return ExecutionRecord(
             execution_id=descriptor.infrastructure.name,
             status=ExecutionState.pending,
@@ -253,7 +253,7 @@ def test_post_execution_accepts_flat_component_template_fields(monkeypatch) -> N
 
 
 def test_post_execution_rejects_unknown_flat_component_field(monkeypatch) -> None:
-    async def _ok_record(descriptor):
+    async def _ok_record(descriptor, source=None):
         return ExecutionRecord(
             execution_id=descriptor.infrastructure.name,
             status=ExecutionState.pending,
@@ -290,7 +290,7 @@ def test_post_execution_rejects_unknown_flat_component_field(monkeypatch) -> Non
 
 
 def test_post_execution_accepts_flat_mongodb_fields_without_version(monkeypatch) -> None:
-    async def _ok_record(descriptor):
+    async def _ok_record(descriptor, source=None):
         return ExecutionRecord(
             execution_id=descriptor.infrastructure.name,
             status=ExecutionState.pending,
@@ -337,7 +337,7 @@ def test_post_execution_accepts_flat_mongodb_fields_without_version(monkeypatch)
 def test_post_execution_rejects_mongodb_without_required_credentials(monkeypatch) -> None:
     # Las credenciales de mongodb son obligatorias: debe cortar con 400 en el POST
     # en vez de aceptar y fallar luego al generar el descriptor.
-    async def _ok_record(descriptor):
+    async def _ok_record(descriptor, source=None):
         return ExecutionRecord(
             execution_id=descriptor.infrastructure.name,
             status=ExecutionState.pending,
@@ -386,7 +386,7 @@ def test_post_execution_rejects_mongodb_without_required_credentials(monkeypatch
 def test_post_execution_rejects_empty_string_in_component_field(monkeypatch) -> None:
     called = {"create": False}
 
-    async def _should_not_run(descriptor):  # pragma: no cover - no debe llamarse
+    async def _should_not_run(descriptor, source=None):  # pragma: no cover - no debe llamarse
         called["create"] = True
         return None
 
@@ -425,7 +425,9 @@ def test_post_execution_rejects_empty_string_in_component_field(monkeypatch) -> 
 
 
 def test_post_execution_rejects_whitespace_only_and_reports_all_paths(monkeypatch) -> None:
-    monkeypatch.setattr("app.services.orchestrator.create_tnlcm_execution", lambda descriptor: None)
+    monkeypatch.setattr(
+        "app.services.orchestrator.create_tnlcm_execution", lambda descriptor, source=None: None
+    )
 
     payload = {
         "infrastructure": {
@@ -457,7 +459,7 @@ def test_post_execution_rejects_whitespace_only_and_reports_all_paths(monkeypatc
 def test_post_execution_does_not_flag_empty_strings_from_server_defaults(monkeypatch) -> None:
     # Body válido y mínimo: los defaults del servidor (p.ej. message="") no deben
     # marcarse como vacíos porque solo inspeccionamos lo que envió el cliente.
-    async def _ok_record(descriptor):
+    async def _ok_record(descriptor, source=None):
         return ExecutionRecord(
             execution_id=descriptor.infrastructure.name,
             status=ExecutionState.pending,

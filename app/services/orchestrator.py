@@ -3,7 +3,12 @@ import time
 
 
 from app.storage import artifacts
-from app.domain.descriptor import DatasetDescriptor, DatasetRequest, ExperimentConfig
+from app.domain.descriptor import (
+    DatasetDescriptor,
+    DatasetRequest,
+    DescriptorSource,
+    ExperimentConfig,
+)
 from app.domain.enums import ExecutionState
 from app.domain.execution import ExecutionRecord
 from app.observability.telemetry import format_duration_display, telemetry
@@ -52,7 +57,14 @@ TEARDOWN_MAX_WAIT_SECONDS = 3000  # 50 min
 state.load_from_disk()
 
 
-async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionRecord:
+async def create_tnlcm_execution(
+    descriptor: DatasetDescriptor, source: DescriptorSource | None = None
+) -> ExecutionRecord:
+    """`source` indica en que formato llego el descriptor, para persistirlo igual.
+
+    Es opcional para que cualquier llamante programatico (tests incluidos) pueda
+    seguir invocando esto con el descriptor a secas.
+    """
     execution_id = descriptor.infrastructure.name.strip()
     telemetry.increment_counter(
         "requests_total", labels={"service": "orchestrator", "operation": "create"}
@@ -90,7 +102,7 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
         pass
 
     try:
-        descriptor_path = artifacts.persist_dataset_descriptor(execution_id, descriptor)
+        descriptor_paths = artifacts.persist_dataset_descriptor(execution_id, descriptor, source)
 
         record = ExecutionRecord(
             execution_id=execution_id,
@@ -100,7 +112,7 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
             ephemeral_tn=descriptor.auto_start_elcm and descriptor.ephemeral_tn,
             dataset_output=list(descriptor.dataset.output),
             dataset_variables=dict(descriptor.dataset.variables()),
-            artifacts=[descriptor_path],
+            artifacts=list(descriptor_paths),
         )
         state.executions[execution_id] = record
         logger.debug(
@@ -138,7 +150,10 @@ async def create_tnlcm_execution(descriptor: DatasetDescriptor) -> ExecutionReco
 
 
 async def start_elcm_phase(
-    execution_id: str, experiment: ExperimentConfig, dataset: DatasetRequest
+    execution_id: str,
+    experiment: ExperimentConfig,
+    dataset: DatasetRequest,
+    source: DescriptorSource | None = None,
 ) -> ExecutionRecord:
     """Lanza un experimento manual sobre la TN viva (endpoint /elcm).
 
@@ -155,7 +170,12 @@ async def start_elcm_phase(
         raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
 
     await tnlcm_phase._reconcile_live_tn(execution_id)
-    return elcm_phase._begin_experiment(execution_id, experiment, dataset, ephemeral=False)
+    record = elcm_phase._begin_experiment(execution_id, experiment, dataset, ephemeral=False)
+
+    # Despues de `_begin_experiment`: si el nombre esta repetido o hay otro
+    # experimento en curso, la peticion se rechaza y no debe dejar rastro.
+    artifacts.persist_experiment_request(execution_id, experiment, dataset, source)
+    return record
 
 
 def start_tn_teardown(execution_id: str) -> ExecutionRecord:

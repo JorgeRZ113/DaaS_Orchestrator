@@ -9,7 +9,7 @@ tiempo de ejecucion, no contra un esquema estatico: de ahi la dependencia de
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.rendering.overlays import overlay_editable_fields_for_template
 
@@ -308,3 +308,30 @@ class DatasetDescriptor(BaseModel):
 
     def tnlcm_data_values(self, template_ref: str | None = None) -> dict[str, Any]:
         return self.infrastructure.tnlcm_data_values(template_ref=template_ref)
+
+
+class DescriptorSource(BaseModel):
+    """Procedencia del descriptor: en que formato llego y con que texto exacto.
+
+    El descriptor puede entrar por tres vias (body JSON, body YAML o fichero YAML
+    subido) y todas desembocan en el mismo `DatasetDescriptor`, asi que el modelo
+    validado ya no dice como se escribio. Esa informacion hace falta mas abajo,
+    en `storage`, para decidir que se persiste: el YAML siempre, y el JSON solo
+    cuando el JSON fue lo que se envio.
+
+    `raw` guarda el texto tal cual llego. Se conserva para poder persistirlo
+    verbatim: una reserializacion perderia los comentarios, que son justamente lo
+    que aporta YAML frente a JSON.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    format: Literal["json", "yaml"]
+    raw: Optional[str] = Field(
+        default=None,
+        description="Texto original del descriptor; None cuando llego como JSON ya parseado",
+    )
+
+    @property
+    def is_yaml(self) -> bool:
+        return self.format == "yaml"

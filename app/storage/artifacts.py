@@ -6,8 +6,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from app.core.config import settings
-from app.domain.descriptor import DatasetDescriptor
+from app.domain.descriptor import (
+    DatasetDescriptor,
+    DatasetRequest,
+    DescriptorSource,
+    ExperimentConfig,
+)
 from app.domain.execution import ExecutionRecord
 from app.observability.execution_summary import build_execution_summary, render_summary_markdown
 from app.observability.telemetry import telemetry
@@ -250,36 +257,123 @@ async def build_execution_summary_artifacts(
     return [summary_json_path, summary_md_path]
 
 
-def persist_dataset_descriptor(execution_id: str, descriptor: DatasetDescriptor) -> str:
-    """
-    Persists the DatasetDescriptor to a JSON file in the artifact directory.
+def _dump_yaml(data: Any) -> str:
+    """Serializa a YAML legible, como lo escribiria una persona.
 
-    Excludes temporary fields like descriptor_path (only needed for template resolution during generation).
+    Deliberadamente NO usa `rendering.yaml_style`: aquel entrecomilla todos los
+    valores y convierte los nulos en cadenas vacias porque lo exige el parser de
+    ELCM, y aplicarlo aqui produciria un descriptor incomodo de leer y de editar.
+    """
+    return yaml.safe_dump(
+        data,
+        sort_keys=False,
+        allow_unicode=True,
+        default_flow_style=False,
+        indent=2,
+    )
+
+
+def persist_dataset_descriptor(
+    execution_id: str,
+    descriptor: DatasetDescriptor,
+    source: DescriptorSource | None = None,
+) -> list[str]:
+    """Deja constancia del DatasetDescriptor que origino la ejecucion.
+
+    El YAML se escribe siempre, porque es el formato que el anteproyecto define
+    para el descriptor. El JSON solo se anade cuando el JSON fue lo que se envio:
+    asi queda la peticion tal cual llego sin ensuciar el directorio con una
+    traduccion que nadie pidio.
+
+    Cuando el origen es YAML se guarda el texto **verbatim**. Reserializar desde
+    el modelo perderia los comentarios, que son lo que aporta YAML frente a JSON
+    y lo que convierte este fichero en documentacion del experimento.
+
+    Devuelve las rutas escritas, en orden de relevancia (el YAML primero).
     """
     base_dir = _artifact_base_dir(execution_id)
     _ensure_dir(base_dir)
-    descriptor_path = os.path.join(base_dir, "dataset_descriptor.json")
 
-    # Exclude descriptor_path: it's only used for template resolution during generation,
-    # not needed in persisted state (descriptor is already generated/available)
+    # Exclude descriptor_path: it's only used for template resolution during
+    # generation, not needed in persisted state.
     descriptor_dict = descriptor.model_dump(
         exclude={"infrastructure": {"descriptor_path"}}, exclude_none=False
     )
 
-    with open(descriptor_path, "w", encoding="utf-8") as f:
-        json.dump(descriptor_dict, f, indent=2)
+    written: list[str] = []
 
-    logger.info(f"[{execution_id}] dataset_descriptor.json saved")
-    return descriptor_path
+    yaml_path = os.path.join(base_dir, "dataset_descriptor.yaml")
+    if source is not None and source.is_yaml and source.raw is not None:
+        yaml_content = source.raw
+    else:
+        yaml_content = _dump_yaml(descriptor_dict)
+    with open(yaml_path, "w", encoding="utf-8") as f:
+        f.write(yaml_content)
+    written.append(yaml_path)
+    logger.info(f"[{execution_id}] dataset_descriptor.yaml saved")
+
+    if source is None or not source.is_yaml:
+        json_path = os.path.join(base_dir, "dataset_descriptor.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(descriptor_dict, f, indent=2)
+        written.append(json_path)
+        logger.info(f"[{execution_id}] dataset_descriptor.json saved")
+
+    return written
+
+
+def persist_experiment_request(
+    execution_id: str,
+    experiment: ExperimentConfig,
+    dataset: DatasetRequest,
+    source: DescriptorSource | None = None,
+) -> str:
+    """Deja constancia de con que se lanzo cada experimento ELCM.
+
+    Una misma TN admite varios experimentos, cada uno con su propia salida de
+    datos, asi que el fichero vive junto a los resultados de ese experimento. Sin
+    esto la traza queda incompleta: se sabe que se obtuvo, pero no que se pidio.
+    """
+    result_dir = _artifact_result_dir(execution_id, experiment.name)
+    _ensure_dir(result_dir)
+    request_path = os.path.join(result_dir, "experiment_request.yaml")
+
+    if source is not None and source.is_yaml and source.raw is not None:
+        content = source.raw
+    else:
+        content = _dump_yaml(
+            {
+                "experiment": experiment.model_dump(),
+                "dataset": dataset.model_dump(exclude_none=True),
+            }
+        )
+
+    with open(request_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    logger.info(f"[{execution_id}] experiment_request.yaml saved for '{experiment.name}'")
+    return request_path
 
 
 def load_dataset_descriptor(execution_id: str) -> DatasetDescriptor:
-    """Loads a previously persisted DatasetDescriptor from the artifact directory."""
-    descriptor_path = os.path.join(_artifact_base_dir(execution_id), "dataset_descriptor.json")
-    if not os.path.exists(descriptor_path):
-        raise FileNotFoundError(f"Descriptor not found for execution {execution_id}")
-    with open(descriptor_path, "r", encoding="utf-8") as f:
-        return DatasetDescriptor.model_validate_json(f.read())
+    """Loads a previously persisted DatasetDescriptor from the artifact directory.
+
+    Prioriza el YAML, que es el formato actual, y cae al JSON para poder leer
+    ejecuciones anteriores al cambio.
+    """
+    base_dir = _artifact_base_dir(execution_id)
+
+    yaml_path = os.path.join(base_dir, "dataset_descriptor.yaml")
+    if os.path.exists(yaml_path):
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            return DatasetDescriptor.model_validate(yaml.safe_load(f.read()))
+
+    json_path = os.path.join(base_dir, "dataset_descriptor.json")
+    if os.path.exists(json_path):
+        with open(json_path, "r", encoding="utf-8") as f:
+            return DatasetDescriptor.model_validate_json(f.read())
+
+    raise FileNotFoundError(f"Descriptor not found for execution {execution_id}")
 
 
 def load_tnlcm_report_summary(execution_id: str) -> dict[str, Any]:
