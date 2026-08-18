@@ -1,0 +1,333 @@
+# REFERENCIA DE COMPONENTES -- campos editables de infrastructure.component
+#
+# Este fichero NO es un descriptor: es el catalogo de que se puede tocar de cada
+# componente a dia de hoy. Sirve para copiar el bloque que interese y pegarlo
+# bajo `infrastructure.component` de tu descriptor.
+#
+# Esta GENERADO a partir de templates/TNLCM/overlays/*.overlay.yaml, que es la
+# unica fuente de verdad: el esquema de `component` no es estatico, lo declaran
+# los overlays en tiempo de ejecucion. Una prueba comprueba que este fichero
+# sigue coincidiendo con ellos, asi que si anades un campo a un overlay y no lo
+# reflejas aqui, el pipeline lo avisa.
+#
+# COMO USARLO
+#   * Todos los campos son OPCIONALES salvo los marcados [OBLIGATORIO]. Lo que no
+#     indiques se queda con el valor por defecto del overlay.
+#   * Para desplegar un componente sin cambiarle nada, basta con nombrarlo y
+#     dejarlo vacio:
+#
+#         component:
+#           ueransim_both:
+#
+#   * Los campos se muestran agrupados por seccion, que es la forma
+#     inequivoca. Tambien se admite el formato plano (el campo directamente bajo
+#     el componente, sin la seccion), y es el recomendado en el README, pero OJO:
+#     en los componentes marcados con [AMBIGUO EN PLANO] hay nombres repetidos en
+#     dos secciones y en formato plano solo gana uno.
+#
+# Generado con: ver tests/integration/test_component_reference.py
+
+
+# --------------------------------------------------------------------------
+# base  --  9 campos editables
+#   obligatorios: grafana_password, influxdb_password, influxdb_user
+# --------------------------------------------------------------------------
+base:
+  monitoring:
+    grafana_password: ""   # [OBLIGATORIO]
+    grafana_version: ""
+    influxdb_bucket: ""
+    influxdb_org: ""
+    influxdb_password: ""   # [OBLIGATORIO]
+    influxdb_token: ""
+    influxdb_user: ""   # [OBLIGATORIO]
+    influxdb_version: ""
+    prometheus_version: ""
+
+# --------------------------------------------------------------------------
+# int_p4_sw  --  31 campos editables  [AMBIGUO EN PLANO: name]
+#   sin campos obligatorios declarados todavia
+# --------------------------------------------------------------------------
+int_p4_sw:
+  int_p4_sw:
+    collector_interface: ""
+    collector_ip: ""
+    collector_mac: ""
+    collector_port: ""
+    external_size: ""
+    fwd_rule_1_dst_addr: ""
+    fwd_rule_1_port: ""
+    fwd_rule_2_dst_addr: ""
+    fwd_rule_2_port: ""
+    generator_size: ""
+    sink_dp_ip: ""
+    sink_dp_mac: ""
+    sink_egress_spec: ""
+    sink_reporting_port: ""
+    source_egress_port: ""
+    source_ingress_port: ""
+    vnet_1_first_ip: ""
+    vnet_2_first_ip: ""
+    vnet_3_first_ip: ""
+    vnet_4_first_ip: ""
+    vnet_collector_first_ip: ""
+    vnet_gw: ""
+  network:
+    address_size: ""
+    dns: ""
+    first_ip: ""
+    gw: ""
+    name: ""
+    netmask: ""
+  vm:
+    name: ""
+    networks: ""
+    size: ""
+
+# --------------------------------------------------------------------------
+# mongodb  --  7 campos editables
+#   obligatorios: database, express_password, express_user, password, user
+# --------------------------------------------------------------------------
+mongodb:
+  mongodb:
+    database: ""   # [OBLIGATORIO]
+    express_password: ""   # [OBLIGATORIO]
+    express_user: ""   # [OBLIGATORIO]
+    name: ""
+    password: ""   # [OBLIGATORIO]
+    user: ""   # [OBLIGATORIO]
+    version: ""
+
+# --------------------------------------------------------------------------
+# ocf  --  32 campos editables  [AMBIGUO EN PLANO: vnet_address_size, vnet_first_ip, vnet_netmask]
+#   sin campos obligatorios declarados todavia
+# --------------------------------------------------------------------------
+ocf:
+  network:
+    address_size: ""
+    dns: ""
+    first_ip: ""
+    gw: ""
+    name: ""
+    netmask: ""
+  ocf:
+    branch: ""
+    oneKE_cni_plugin: ""
+    oneKE_longhorn: ""
+    oneKE_metallb: ""
+    oneKE_metallb_range: ""
+    oneKE_multus: ""
+    oneKE_nginx_passthough: ""
+    oneKE_traefik: ""
+    oneKE_version: ""
+    vnet_address_size: ""
+    vnet_first_ip: ""
+    vnet_gw: ""
+    vnet_netmask: ""
+  oneKE:
+    cni_plugin: ""
+    external_vnet: ""
+    longhorn: ""
+    metallb: ""
+    metallb_range: ""
+    multus: ""
+    nginx_passthough: ""
+    traefik: ""
+    version: ""
+    vnet_address_size: ""
+    vnet_first_ip: ""
+    vnet_netmask: ""
+    worker_nodes: ""
+
+# --------------------------------------------------------------------------
+# oneKE  --  19 campos editables
+#   sin campos obligatorios declarados todavia
+# --------------------------------------------------------------------------
+oneKE:
+  network:
+    address_size: ""
+    dns: ""
+    first_ip: ""
+    gw: ""
+    name: ""
+    netmask: ""
+  oneKE:
+    cni_plugin: ""
+    external_vnet: ""
+    longhorn: ""
+    metallb: ""
+    metallb_range: ""
+    multus: ""
+    nginx_passthough: ""
+    traefik: ""
+    version: ""
+    vnet_address_size: ""
+    vnet_first_ip: ""
+    vnet_netmask: ""
+    worker_nodes: ""
+
+# --------------------------------------------------------------------------
+# open5gs_vm  --  30 campos editables
+#   sin campos obligatorios declarados todavia
+# --------------------------------------------------------------------------
+open5gs_vm:
+  network:
+    address_size: ""
+    dns: ""
+    first_ip: ""
+    gw: ""
+    name: ""
+    netmask: ""
+  open5gs_vm:
+    amf_n2_ip: ""
+    apn: ""
+    external_vnet: ""
+    install_webui: ""
+    key: ""
+    loglevel: ""
+    mcc: ""
+    mnc: ""
+    msin: ""
+    n2_address_size: ""
+    n2_first_ip: ""
+    n2_netmask: ""
+    n3_address_size: ""
+    n3_first_ip: ""
+    n3_netmask: ""
+    opc: ""
+    s_nssai_sd: ""
+    s_nssai_sst: ""
+    size: ""
+    tac: ""
+    ue_count: ""
+    ue_subnet: ""
+    upf_n3_ip: ""
+    use_nightly: ""
+
+# --------------------------------------------------------------------------
+# tn_init  --  7 campos editables
+#   sin campos obligatorios declarados todavia
+# --------------------------------------------------------------------------
+tn_init:
+  bastion:
+    fw_exceptions: ""
+    nat_exceptions: ""
+    routemanager_add: ""
+    vpn_allowedips: ""
+    vpn_clients: ""
+  network_vxlan:
+    address_size: ""
+    first_ip: ""
+
+# --------------------------------------------------------------------------
+# ueransim_both  --  37 campos editables
+#   sin campos obligatorios declarados todavia
+# --------------------------------------------------------------------------
+ueransim_both:
+  ueransim_both:
+    gnb_amf_n2_ip: ""
+    gnb_mcc: ""
+    gnb_mnc: ""
+    gnb_slices_sd: ""
+    gnb_slices_sst: ""
+    gnb_tac: ""
+    n2_address_size: ""
+    n2_first_ip: ""
+    n2_netmask: ""
+    networks: ""
+    open5gs_amf_n2_ip: ""
+    open5gs_apn: ""
+    open5gs_external_vnet: ""
+    open5gs_key: ""
+    open5gs_mcc: ""
+    open5gs_mnc: ""
+    open5gs_msin: ""
+    open5gs_opc: ""
+    open5gs_s_nssai_sd: ""
+    open5gs_s_nssai_sst: ""
+    open5gs_size: ""
+    open5gs_tac: ""
+    open5gs_ue_count: ""
+    open5gs_ue_subnet: ""
+    open5gs_upf_n3_ip: ""
+    run_gnb: ""
+    run_ue: ""
+    ue_gnbsearchlist: ""
+    ue_key: ""
+    ue_linked_gnb: ""
+    ue_mcc: ""
+    ue_mnc: ""
+    ue_msin: ""
+    ue_opc: ""
+    ue_session_apn: ""
+    ue_session_sd: ""
+    ue_session_sst: ""
+
+# --------------------------------------------------------------------------
+# ueransim_split  --  39 campos editables
+#   sin campos obligatorios declarados todavia
+# --------------------------------------------------------------------------
+ueransim_split:
+  ueransim_split:
+    gnb_amf_n2_ip: ""
+    gnb_mcc: ""
+    gnb_mnc: ""
+    gnb_networks: ""
+    gnb_run_gnb: ""
+    gnb_run_ue: ""
+    gnb_slices_sd: ""
+    gnb_slices_sst: ""
+    gnb_tac: ""
+    n2_address_size: ""
+    n2_first_ip: ""
+    n2_netmask: ""
+    open5gs_amf_n2_ip: ""
+    open5gs_apn: ""
+    open5gs_external_vnet: ""
+    open5gs_key: ""
+    open5gs_mcc: ""
+    open5gs_mnc: ""
+    open5gs_msin: ""
+    open5gs_opc: ""
+    open5gs_s_nssai_sd: ""
+    open5gs_s_nssai_sst: ""
+    open5gs_size: ""
+    open5gs_tac: ""
+    open5gs_ue_count: ""
+    open5gs_ue_subnet: ""
+    open5gs_upf_n3_ip: ""
+    ue_gnbsearchlist: ""
+    ue_key: ""
+    ue_mcc: ""
+    ue_mnc: ""
+    ue_msin: ""
+    ue_networks: ""
+    ue_opc: ""
+    ue_run_gnb: ""
+    ue_run_ue: ""
+    ue_session_apn: ""
+    ue_session_sd: ""
+    ue_session_sst: ""
+
+# --------------------------------------------------------------------------
+# vm_kvm  --  3 campos editables
+#   sin campos obligatorios declarados todavia
+# --------------------------------------------------------------------------
+vm_kvm:
+  vm:
+    name: ""
+    networks: ""
+    size: ""
+
+# --------------------------------------------------------------------------
+# vnet  --  6 campos editables
+#   sin campos obligatorios declarados todavia
+# --------------------------------------------------------------------------
+vnet:
+  network:
+    address_size: ""
+    dns: ""
+    first_ip: ""
+    gw: ""
+    name: ""
+    netmask: ""

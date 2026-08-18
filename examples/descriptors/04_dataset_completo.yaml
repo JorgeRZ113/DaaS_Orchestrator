@@ -1,0 +1,51 @@
+# Dataset multi-formato: la misma ejecucion entrega logs, CSV, dashboard y crudo.
+#
+# Las variables del bloque `dataset` pertenecen a un modo concreto (ver la tabla
+# en docs/DATASET_DESCRIPTOR.md). Declarar una variable sin activar su modo es un
+# error de configuracion, no un valor que se ignore en silencio: la API responde
+# 422 antes de desplegar nada.
+
+infrastructure:
+  name: tn_demo_dataset
+
+  component:
+    base:
+      influxdb_user: admin
+      influxdb_password: adminadmin
+      grafana_password: adminadmin
+
+    # Componente sin valores: se despliega con los defaults de su overlay.
+    # Basta con nombrarlo y dejarlo vacio; el equivalente en JSON es
+    # "ueransim_both": {}. Ojo al nombre: no existe un componente `ueransim`,
+    # son `ueransim_both` (gNB y UE juntos) y `ueransim_split` (separados).
+    ueransim_both:
+
+  parameters:
+    library_reference_type: branch
+    library_reference_value: develop
+
+experiment:
+  name: exp-dataset-completo
+  testcase_paths:
+    # Este TestCase publica metricas en InfluxDB; sin el, los modos csv/raw
+    # no tendrian de donde leer.
+    - TestCase_prometheus_capture.yml
+  ues_paths:
+    - UE_Variables_TEMPLATE.yml
+
+dataset:
+  output: [logs, csv, dashboard, raw]
+
+  # Measurement del que se extraen las series. Si se omite, se deriva del
+  # TestCase de captura.
+  measurement: OPEN5GS_KPIS
+
+  # Modos csv y raw. Si se omiten, se derivan del report de TNLCM.
+  influx_bucket: testing
+  influx_port: 8086
+
+  # Modo dashboard: intervalo de refresco de los paneles de Grafana.
+  panel_interval: 10s
+
+auto_start_elcm: true
+ephemeral_tn: false

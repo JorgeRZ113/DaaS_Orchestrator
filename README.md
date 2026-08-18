@@ -195,7 +195,34 @@ Header requerido para endpoints de ejecucion:
 - Si `auto_start_elcm=false`, solo ejecuta TNLCM y requiere llamar a `POST /executions/{execution_id}/elcm` manualmente.
 - Devuelve `execution_id`, `status`, `message`.
 - `dataset.output` define el/los formato(s) de entrega (ver sección "Campo `dataset.output`").
+- **Acepta el descriptor en YAML o en JSON** (ver "Formatos de entrada del descriptor").
 - Ver la colección Postman `API_JSON/DaaS.postman_collection.json` y la sección "Ciclo de vida de la TN" para el detalle del flujo.
+
+### Formatos de entrada del descriptor
+
+`POST /executions` y `POST /executions/{execution_id}/elcm` admiten tres codificaciones del mismo cuerpo. Las tres desembocan en el mismo modelo, con idéntica validación y los mismos códigos de error.
+
+**Fichero YAML** (forma de referencia):
+
+```bash
+curl -X POST "http://localhost:8000/executions?wait=false" -H "x-api-key: $API_KEY" -H "Content-Type: application/yaml" --data-binary @examples/descriptors/01_minimo_base.yaml
+```
+
+**Fichero subido** (es lo que usa el selector de fichero de Swagger, en el campo `descriptor`):
+
+```bash
+curl -X POST "http://localhost:8000/executions?wait=false" -H "x-api-key: $API_KEY" -F "descriptor=@examples/descriptors/01_minimo_base.yaml"
+```
+
+**JSON** (sin cambios respecto a la colección Postman existente):
+
+```bash
+curl -X POST "http://localhost:8000/executions?wait=false" -H "x-api-key: $API_KEY" -H "Content-Type: application/json" -d @Recursos/post_executions_minimal_base.json
+```
+
+YAML es el formato de referencia: el descriptor está pensado para escribirse, comentarse y versionarse, y los comentarios solo existen en YAML. JSON se mantiene por comodidad.
+
+Especificación completa de campos, tipos y errores en [`docs/DATASET_DESCRIPTOR.md`](docs/DATASET_DESCRIPTOR.md). Ejemplos ejecutables en [`examples/descriptors/`](examples/descriptors/).
 
 ### `POST /refresh`
 - Recarga sin reinicio solo configuracion mutable en memoria del proceso actual.
