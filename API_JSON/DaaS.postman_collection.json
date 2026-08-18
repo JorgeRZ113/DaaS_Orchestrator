@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c0d4f4e1-3e6a-4e06-a7fb-9b7c0f2c9c01",
     "name": "DaaS Orchestrator - API Unificada",
-    "description": "🚀 FLUJO UNIFICADO DaaS (Data as a Service) — TN PERSISTENTE MULTI-EXPERIMENTO\n\n🔐 Paso previo opcional (TNLCM):\n0. POST /tnlcm/token/refresh → obtiene access_token con TNLCM_USER/TNLCM_PASSWORD\n\n📍 FLUJO PRINCIPAL - POST /executions:\n1. POST /executions → Despliega la Trial Network (TNLCM + VPN) y, según flags, lanza el primer experimento\n2. GET /executions/{id} → Consulta estado y progreso\n3. GET /executions/{id}/detail → Consulta detalle completo (incluye historial de experimentos)\n4. GET /executions/{id}/summary → Resumen legible: qué pasó en cada fase, cuánto tardó y qué falló, en lenguaje natural (añade ?format=markdown para verlo como texto)\n\n♻️ CICLO DE VIDA (la TN se queda VIVA por defecto):\nMatriz de comportamiento según los flags del DatasetDescriptor:\n• auto_start_elcm=false → Despliega y se queda en TN_READY. NO borra nada. Espera llamadas manuales a /elcm. (ephemeral_tn se ignora en este modo)\n• auto_start_elcm=true + ephemeral_tn=false (HABITUAL) → Despliega, lanza el 1er experimento y vuelve a TN_READY. Acepta más /elcm o el borrado manual.\n• auto_start_elcm=true + ephemeral_tn=true (UN SOLO USO) → Despliega, lanza el 1er experimento y borra la TN automáticamente (DESTROYED).\n\n🧪 Inyectar experimentos (TN viva):\n- POST /executions/{id}/elcm con body {\"experiment\": {...}} → lanza un experimento sobre la TN. Repetible N veces (uno a la vez). Cada experimento debe tener un NOMBRE ÚNICO.\n\n🗑️ Borrado manual (deleted + purged):\n- DELETE /executions/{id}/tn → destruye la TN cuando tú decidas.\n\n🔄 Estados: PENDING → VALIDATING → DEPLOYING → TN_READY ⇄ RUNNING_EXPERIMENT/COLLECTING → DESTROYING → DESTROYED (o FAILED)\n\n✅ El execution_id se guarda automáticamente en {{executionId}}",
+    "description": "🚀 FLUJO UNIFICADO DaaS (Data as a Service) — TN PERSISTENTE MULTI-EXPERIMENTO\n\n🔐 Paso previo opcional (TNLCM):\n0. POST /tnlcm/token/refresh → obtiene access_token con TNLCM_USER/TNLCM_PASSWORD\n\n📍 FLUJO PRINCIPAL - POST /executions:\n1. POST /executions → Despliega la Trial Network (TNLCM + VPN) y, según flags, lanza el primer experimento\n2. GET /executions/{id} → Consulta estado y progreso\n3. GET /executions/{id}/detail → Consulta detalle completo (incluye historial de experimentos)\n4. GET /executions/{id}/summary → Resumen legible: qué pasó en cada fase, cuánto tardó y qué falló, en lenguaje natural (añade ?format=markdown para verlo como texto)\n\n♻️ CICLO DE VIDA (la TN se queda VIVA por defecto):\nMatriz de comportamiento según los flags del DatasetDescriptor:\n• auto_start_elcm=false → Despliega y se queda en TN_READY. NO borra nada. Espera llamadas manuales a /elcm. (ephemeral_tn se ignora en este modo)\n• auto_start_elcm=true + ephemeral_tn=false (HABITUAL) → Despliega, lanza el 1er experimento y vuelve a TN_READY. Acepta más /elcm o el borrado manual.\n• auto_start_elcm=true + ephemeral_tn=true (UN SOLO USO) → Despliega, lanza el 1er experimento y borra la TN automáticamente (DESTROYED).\n\n🧪 Inyectar experimentos (TN viva):\n- POST /executions/{id}/elcm con body {\"experiment\": {...}} → lanza un experimento sobre la TN. Repetible N veces (uno a la vez). Cada experimento debe tener un NOMBRE ÚNICO.\n\n🗑️ Borrado manual (deleted + purged):\n- DELETE /executions/{id}/tn → destruye la TN cuando tú decidas.\n\n🔄 Estados: PENDING → VALIDATING → DEPLOYING → TN_READY ⇄ RUNNING_EXPERIMENT/COLLECTING → DESTROYING → DESTROYED (o FAILED)\n\n✅ El execution_id se guarda automáticamente en {{executionId}}\n\n📄 FORMATOS DE ENTRADA (POST /executions y POST /{execution_id}/elcm)\nLos tres son equivalentes y desembocan en el mismo modelo, con la misma validacion y los mismos codigos de error:\n  • application/json      → cuerpo JSON (las peticiones de siempre)\n  • application/yaml      → cuerpo YAML, en raw/Text + cabecera Content-Type\n  • multipart/form-data   → fichero subido en el campo 'descriptor'\n\nYAML es el formato de referencia: el descriptor se escribe, se comenta y se versiona, y los comentarios solo existen en YAML.\nSi se envia YAML se persiste verbatim en dataset_descriptor.yaml; si se envia JSON se guardan el .yaml generado y el .json original.\n\nEspecificacion: docs/DATASET_DESCRIPTOR.md — Ejemplos: examples/descriptors/",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -90,7 +90,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn_deveop_20_3\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"adminadmin\"\n      }\n    },\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"fix/uma-test-raul-oneke-onevm-path\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": [\n      \"logs\",\n      \"csv\",\n      \"dashboard\",\n      \"raw\",\n      \"files\"\n    ]\n  },\n  \"auto_start_elcm\": true,\n  \"ephemeral_tn\": false\n}",
+              "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn_deveop_20_3\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"adminadmin\"\n      }\n    },\n    \"parameters\": {\n      \"library_reference_type\": \"branch\",\n      \"library_reference_value\": \"fix/uma-test-raul-oneke-onevm-path\"\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TC_ping.yml\",\n      \"TestCase_prometheus_capture.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": [\n      \"logs\",\n      \"csv\",\n      \"dashboard\",\n      \"raw\",\n      \"files\"\n    ]\n  },\n  \"auto_start_elcm\": true,\n  \"ephemeral_tn\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -127,7 +127,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"\"\n      }\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  }\n}",
+                  "raw": "{\n  \"infrastructure\": {\n    \"name\": \"tn-demo\",\n    \"component\": {\n      \"base\": {\n        \"influxdb_user\": \"admin\",\n        \"influxdb_password\": \"adminadmin\",\n        \"grafana_password\": \"\"\n      }\n    }\n  },\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TC_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": \"logs\"\n  }\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -159,6 +159,105 @@
           ]
         },
         {
+          "name": "POST /executions (YAML)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "  const data = pm.response.json();",
+                  "  if (data.execution_id) pm.collectionVariables.set('executionId', data.execution_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/yaml",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "# Mismo descriptor que la peticion JSON de arriba, en YAML.\n# Content-Type: application/yaml -> el servidor lo decodifica al mismo modelo.\ninfrastructure:\n  name: tn_deveop_20_3\n  component:\n    base:\n      influxdb_user: admin\n      influxdb_password: adminadmin\n      grafana_password: adminadmin\n  parameters:\n    library_reference_type: branch\n    library_reference_value: fix/uma-test-raul-oneke-onevm-path\n\nexperiment:\n  name: exp-demo\n  testcase_paths:\n    - TC_ping.yml\n    # Los modos csv/dashboard/raw exigen un TestCase de captura (*_capture*)\n    - TestCase_prometheus_capture.yml\n  ues_paths: []\n\ndataset:\n  output: [logs, csv, dashboard, raw, files]\n\nauto_start_elcm: true\nephemeral_tn: false\n",
+              "options": {
+                "raw": {
+                  "language": "text"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/executions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions"
+              ]
+            },
+            "description": "Mismo endpoint y mismo resultado que la peticion JSON: cambia solo la codificacion del cuerpo.\n\nRequiere la cabecera Content-Type: application/yaml. El desplegable de Postman no ofrece YAML, asi que el cuerpo va como raw/Text y el tipo se declara en la cabecera.\n\nAl ser YAML, el descriptor se persiste VERBATIM en artifacts/<execution_id>/dataset_descriptor.yaml, comentarios incluidos, y NO se genera el .json.\n\nErrores propios de esta via: 400 con {yaml_error, line, column} si la sintaxis falla; 413 si el cuerpo pasa de 1 MiB."
+          }
+        },
+        {
+          "name": "POST /executions (fichero YAML)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "  const data = pm.response.json();",
+                  "  if (data.execution_id) pm.collectionVariables.set('executionId', data.execution_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "descriptor",
+                  "type": "file",
+                  "src": [],
+                  "description": "Fichero .yaml del Dataset Descriptor. Pulsa 'Select Files' y elige uno de examples/descriptors/."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/executions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions"
+              ]
+            },
+            "description": "Subida del descriptor como fichero (multipart/form-data, campo 'descriptor'). Es la via que usa el selector de fichero de Swagger en /docs.\n\nNO pongas Content-Type a mano: Postman lo genera con el boundary del multipart.\n\nAntes de enviar hay que seleccionar el fichero en el campo 'descriptor' (el src no se versiona porque es una ruta local de cada maquina).\n\nSi el campo se llama de otra forma, la respuesta es 400 con {missing_field: 'descriptor'}."
+          }
+        },
+        {
           "name": "POST /executions/{execution_id}/elcm",
           "request": {
             "method": "POST",
@@ -176,7 +275,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TestCase_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": [\n      \"logs\"\n    ]\n  }\n}",
+              "raw": "{\n  \"experiment\": {\n    \"name\": \"exp-demo\",\n    \"testcase_paths\": [\n      \"TC_ping.yml\"\n    ],\n    \"ues_paths\": []\n  },\n  \"dataset\": {\n    \"output\": [\n      \"logs\"\n    ]\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -194,7 +293,7 @@
                 "elcm"
               ]
             },
-            "description": "🧪 INYECTAR UN EXPERIMENTO sobre la TN viva\n\nLanza un experimento ELCM sobre la Trial Network ya desplegada. Se puede llamar tantas veces como experimentos quieras ejecutar (uno a la vez). La TN NO se borra al terminar: vuelve a TN_READY.\n\n📥 Body:\n{\n  \"experiment\": {\n    \"name\": \"exp-demo\",          // ⚠️ ÚNICO por TN (no repetir nombres)\n    \"testcase_paths\": [\"TestCase_ping.yml\"],\n    \"ues_paths\": []\n  },\n  \"dataset\": {                    // opcional; por defecto [\"logs\"]\n    \"output\": [\"logs\"]           // logs | csv | dashboard | raw (combinables)\n  }\n}\n\n📦 dataset POR EXPERIMENTO: cada llamada puede pedir una salida de datos distinta. Las respuestas se guardan en artifacts/{id}/result/<experimento>/ (una subcarpeta por nombre de experimento).\n\n📋 Qué hace automáticamente:\n1. Genera el Experiment Descriptor (UEs + TestCases del body) en artifacts/{id}/archivos_generados/ (junto al TN Descriptor)\n2. Sube los test cases a ELCM (se toman de examples/)\n3. Lanza el experimento\n4. Polling cada 10s hasta \"Finished\" (timeout 1h)\n5. Recoge el dataset pedido en artifacts/{id}/result/<experimento>/\n6. Vuelve a TN_READY (la TN sigue viva)\n\n🔢 Respuestas:\n• 202 Accepted → experimento aceptado y en marcha\n• 404 Not Found → el execution_id no existe\n• 409 Conflict → ya hay un experimento en curso, la TN no está lista (TN_READY), o el nombre de experimento ya se usó en esta TN"
+            "description": "🧪 INYECTAR UN EXPERIMENTO sobre la TN viva\n\nLanza un experimento ELCM sobre la Trial Network ya desplegada. Se puede llamar tantas veces como experimentos quieras ejecutar (uno a la vez). La TN NO se borra al terminar: vuelve a TN_READY.\n\n📥 Body:\n{\n  \"experiment\": {\n    \"name\": \"exp-demo\",          // ⚠️ ÚNICO por TN (no repetir nombres)\n    \"testcase_paths\": [\"TC_ping.yml\"],\n    \"ues_paths\": []\n  },\n  \"dataset\": {                    // opcional; por defecto [\"logs\"]\n    \"output\": [\"logs\"]           // logs | csv | dashboard | raw (combinables)\n  }\n}\n\n📦 dataset POR EXPERIMENTO: cada llamada puede pedir una salida de datos distinta. Las respuestas se guardan en artifacts/{id}/result/<experimento>/ (una subcarpeta por nombre de experimento).\n\n📋 Qué hace automáticamente:\n1. Genera el Experiment Descriptor (UEs + TestCases del body) en artifacts/{id}/archivos_generados/ (junto al TN Descriptor)\n2. Sube los test cases a ELCM (se toman de examples/)\n3. Lanza el experimento\n4. Polling cada 10s hasta \"Finished\" (timeout 1h)\n5. Recoge el dataset pedido en artifacts/{id}/result/<experimento>/\n6. Vuelve a TN_READY (la TN sigue viva)\n\n🔢 Respuestas:\n• 202 Accepted → experimento aceptado y en marcha\n• 404 Not Found → el execution_id no existe\n• 409 Conflict → ya hay un experimento en curso, la TN no está lista (TN_READY), o el nombre de experimento ya se usó en esta TN"
           },
           "response": []
         },
@@ -277,6 +376,45 @@
             "description": "DATASET CON VARIABLES GLOBALES POR MODO\n\nAdemas de 'output', el bloque dataset acepta variables propias del modo de\nsalida que se use. Todas son opcionales.\n\nPrecedencia: valor del body -> valor derivado del despliegue -> default del overlay\n\n| Variable       | Modos                 | Derivado si no se indica                    |\n|----------------|-----------------------|---------------------------------------------|\n| measurement    | csv, dashboard, raw   | Measurement del TestCase de captura         |\n| influx_host    | csv                   | IP de monitorizacion del report TNLCM       |\n| influx_port    | csv                   | 8086                                        |\n| influx_bucket  | csv, raw              | bucket del report TNLCM, o 'testing'        |\n| panel_interval | dashboard             | 5s                                          |\n\nIMPORTANTE: una variable cuyo modo dueno NO este en 'output' se rechaza con\n422. Pedir influx_host con output=['logs'] casi siempre significa que se\nolvido el modo 'csv', y aceptarlo en silencio daria una entrega distinta de\nla esperada.\n\nEn el modo 'raw', indicar 'measurement' acota el volcado a ese measurement en\nvez de exportarlos todos.\n\nPara anadir 'dashboard' al output hace falta un TestCase de captura cuyo\nnombre de fichero contenga '_capture' (de ahi salen las metricas de los\npaneles)."
           },
           "response": []
+        },
+        {
+          "name": "POST /executions/{execution_id}/elcm (YAML)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/yaml",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "# Cuerpo de /elcm en YAML: solo `experiment` y `dataset`.\n# La infraestructura ya existe y no se vuelve a describir.\nexperiment:\n  name: exp-demo-yaml\n  testcase_paths:\n    - TC_ping.yml\n  ues_paths: []\n\ndataset:\n  output: [logs]\n",
+              "options": {
+                "raw": {
+                  "language": "text"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/elcm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "elcm"
+              ]
+            },
+            "description": "El endpoint de experimentos admite las mismas tres codificaciones que /executions: JSON, YAML y fichero subido.\n\nLo que se envio queda en artifacts/<execution_id>/result/<experimento>/experiment_request.yaml, de modo que cada experimento deja constancia de con que se lanzo.\n\nRecuerda que el nombre del experimento debe ser unico dentro de la TN."
+          }
         },
         {
           "name": "DELETE /executions/{execution_id}/tn",
