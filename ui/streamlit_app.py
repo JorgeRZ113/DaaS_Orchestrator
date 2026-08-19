@@ -2,7 +2,7 @@
 
 Hace dos cosas. La primera es sustituir a Postman en el día a día: lanza
 ejecuciones, consulta estado y resumen, dispara experimentos ELCM y borra la
-Trial Network, hablando con la API por HTTP a través de `api_client.ApiClient`;
+Trial Network, hablando con la API por HTTP a través de `app.client.ApiClient`;
 no accede a la lógica interna del servicio.
 
 La segunda es la que aporta valor propio: **produce el Dataset Descriptor**. El
@@ -29,9 +29,10 @@ import streamlit as st
 import yaml
 
 import descriptor
-from api_client import (
+from app.client import (
     DATASET_MODE_VARIABLES,
     DATASET_OUTPUTS,
+    DEFAULT_BASE_URL,
     ApiClient,
     ApiError,
     Descriptor,
@@ -39,9 +40,6 @@ from api_client import (
     variables_for_outputs,
     yaml_error_position,
 )
-
-DEFAULT_BASE_URL = "http://localhost:8000"
-
 
 # ===== Utilidades compartidas =====
 

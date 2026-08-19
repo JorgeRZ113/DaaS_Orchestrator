@@ -40,8 +40,10 @@ UI_DIR = Path(__file__).resolve().parents[2] / "ui"
 sys.path.insert(0, str(UI_DIR))
 
 descriptor = pytest.importorskip("descriptor", reason="la UI no esta en el arbol")
-api_client = pytest.importorskip("api_client", reason="la UI no esta en el arbol")
 
+# El cliente HTTP ya no vive bajo `ui/`: lo comparten la UI y el CLI, asi que
+# se importa como cualquier modulo de `app/` y no necesita el sys.path de arriba.
+from app import client as api_client  # noqa: E402
 
 COMPONENTS = descriptor.list_components()
 
@@ -223,7 +225,7 @@ def test_generated_elcm_request_validates_against_the_server_model() -> None:
     yaml_text = descriptor.to_yaml(
         descriptor.build_elcm_request(
             experiment=descriptor.build_experiment(
-                "exp-2", "TC_Demo_Flow.yml\n TC_ping.yml ", "UE_Variables.yml"
+                "exp-2", "TC_Demo_Flow.yml\n TC_ping.yml ", "UE_Demo_Variables.yml"
             ),
             dataset=descriptor.build_dataset(["logs"], {}),
         )
@@ -233,7 +235,7 @@ def test_generated_elcm_request_validates_against_the_server_model() -> None:
 
     # Los espacios sobrantes del textarea se recortan y las lineas vacias caen.
     assert model.experiment.testcase_paths == ["TC_Demo_Flow.yml", "TC_ping.yml"]
-    assert model.experiment.ues_paths == ["UE_Variables.yml"]
+    assert model.experiment.ues_paths == ["UE_Demo_Variables.yml"]
 
 
 def test_ui_offers_every_output_format_the_model_accepts() -> None:

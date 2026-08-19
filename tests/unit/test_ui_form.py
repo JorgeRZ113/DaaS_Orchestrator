@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from app import client as api_client
+
 pytest.importorskip("streamlit", reason="la UI es una dependencia opcional")
 
 from streamlit.testing.v1 import AppTest  # noqa: E402
@@ -192,12 +194,12 @@ LAUNCH_BUTTONS = (f"{NEW}_launch", f"{ELCM}_launch", "teardown_launch")
 def blocking_call(monkeypatch):
     """Sustituye la llamada de red por una que el test decide cuando termina.
 
-    Se parchea `api_client.ApiClient`, no el modulo del script: `AppTest`
+    Se parchea `app.client.ApiClient`, no el modulo del script: `AppTest`
     reconstruye el modulo del script en cada pasada, asi que un parche sobre el
-    no sobreviviria; `api_client` vive en `sys.modules` y si.
+    no sobreviviria; `app.client` vive en `sys.modules` y si. Funciona porque se
+    parchean METODOS sobre la clase, y el script hace `from app.client import
+    ApiClient`: los dos nombres apuntan al mismo objeto clase.
     """
-    import api_client
-
     gate = threading.Event()
     outcome: dict[str, object] = {"result": api_client.PhaseResult(200, {"execution_id": "tn-x"})}
 
@@ -280,8 +282,6 @@ def test_the_lock_is_released_when_the_job_finishes(app: AppTest, blocking_call)
 
 def test_a_partial_outcome_is_not_reported_as_success(app: AppTest, blocking_call) -> None:
     """207 significa «terminó, pero incompleto»: pintarlo en verde engaña."""
-    import api_client
-
     gate, outcome = blocking_call
     outcome["result"] = api_client.PhaseResult(207, {"vpn_status": "MANUAL_REQUIRED"})
     _launch_execution(_connected(app))
@@ -292,8 +292,6 @@ def test_a_partial_outcome_is_not_reported_as_success(app: AppTest, blocking_cal
 
 def test_a_504_says_the_work_continues_instead_of_failing(app: AppTest, blocking_call) -> None:
     """El servidor agoto SU tope y sigue trabajando: no es un error."""
-    import api_client
-
     gate, outcome = blocking_call
     outcome["result"] = api_client.ApiError("sigue en curso", status_code=504)
     _launch_execution(_connected(app))

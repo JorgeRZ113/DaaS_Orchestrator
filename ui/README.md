@@ -1,8 +1,9 @@
 # UI web (Streamlit) — DaaS Orchestrator
 
 Interfaz de navegador para operar el orquestador sin Postman. Es una app
-**companion** independiente: habla con la API (FastAPI) por HTTP mediante
-`httpx`, no importa ni comparte proceso con `app/`.
+**companion** independiente: habla con la API (FastAPI) por HTTP y no comparte
+proceso con el servicio. Lo unico que importa de `app/` es `app/client.py`, el
+cliente HTTP que comparte con el CLI (`daas`); no toca la logica interna.
 
 Hace dos cosas. Sustituye a Postman en el día a día (lanzar, consultar, borrar)
 y, sobre todo, **produce el Dataset Descriptor**: lo que sale del formulario no

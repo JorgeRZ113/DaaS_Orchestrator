@@ -1,18 +1,25 @@
 """Cliente HTTP fino para la API del DaaS Orchestrator.
 
-Centraliza las llamadas a los endpoints existentes para que la UI de Streamlit
-no repita la construcción de peticiones ni el manejo de errores. Cada método
+Centraliza las llamadas a los endpoints existentes para que sus consumidores no
+repitan la construcción de peticiones ni el manejo de errores. Cada método
 devuelve el cuerpo JSON ya deserializado en caso de éxito, o levanta `ApiError`
 con un mensaje legible (y el `detail` original disponible para pintarlo).
 
+Lo usan DOS clientes y por eso vive en `app/` y no bajo `ui/`: la interfaz web
+(`ui/streamlit_app.py`) y el CLI (`app/cli.py`). La UI es una dependencia
+opcional que no existe en la rama principal, así que colgar de ella el único
+cliente ataba la mainline a Streamlit; al revés no pasa nada, porque este módulo
+no importa ni Streamlit ni FastAPI.
+
 El descriptor sale de aquí SIEMPRE como **fichero YAML subido**
 (`multipart/form-data`, campo `descriptor`). La API acepta además el cuerpo en
-`application/yaml` y en JSON, y las colecciones Postman las ejercitan, pero la
-interfaz ofrece una sola vía a propósito: teniendo tres, lo único que pasaba era
-mezclarlas. Ver `docs/UI_YAML_MIGRATION.md`.
+`application/yaml` y en JSON, y las colecciones Postman las ejercitan, pero los
+dos consumidores ofrecen una sola vía a propósito: teniendo tres, lo único que
+pasaba era mezclarlas. Ver `docs/UI_YAML_MIGRATION.md`.
 
-Es un cliente SÍNCRONO a propósito: Streamlit ejecuta en un proceso aparte y sin
-event loop, así que usar `httpx` en modo bloqueante es lo correcto aquí.
+Es un cliente SÍNCRONO a propósito: ninguno de los dos consumidores tiene event
+loop —Streamlit ejecuta el script en su propio hilo y el CLI es un proceso de un
+solo uso—, así que usar `httpx` en modo bloqueante es lo correcto aquí.
 """
 
 from __future__ import annotations
@@ -22,6 +29,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+
+# Donde escucha el orquestador cuando nadie dice lo contrario. Lo comparten la UI
+# (panel lateral) y el CLI (--base-url), para que el valor por defecto sea uno.
+DEFAULT_BASE_URL = "http://localhost:8000"
 
 # Timeout por defecto para operaciones ligeras (estado, health, login).
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -202,7 +213,7 @@ def _format_error(status_code: int, detail: Any) -> str:
 
     text = str(detail).strip() if detail else ""
     if status_code == 401:
-        return "API key inválida (revisa la clave en el panel lateral)."
+        return "API key inválida: revisa la clave configurada."
     if status_code == 413:
         return text or "El descriptor supera el tamaño máximo admitido (1 MiB)."
     if status_code == 404:
@@ -306,23 +317,29 @@ class ApiClient:
         `files` es lo que distingue la subida del descriptor del resto de
         llamadas: en multipart el Content-Type lo pone httpx, porque tiene que
         incluir el `boundary`.
+
+        Se abre un `httpx.Client` explícito en vez de llamar a la función de
+        módulo `httpx.request(...)`. No es cosmético: `httpx.request` resuelve la
+        clase `Client` desde los globals de `httpx._api`, así que sustituir
+        `httpx.Client` —que es como las pruebas enchufan un `MockTransport`— NO
+        la afecta y las peticiones se escapan a la red real sin avisar.
         """
         url = f"{self.base_url.rstrip('/')}{path}"
         try:
-            response = httpx.request(
-                method,
-                url,
-                headers=self._headers(auth=auth),
-                json=json,
-                files=files,
-                params=params,
-                timeout=timeout or self.timeout,
-            )
+            with httpx.Client(timeout=timeout or self.timeout) as http_client:
+                response = http_client.request(
+                    method,
+                    url,
+                    headers=self._headers(auth=auth),
+                    json=json,
+                    files=files,
+                    params=params,
+                )
         except httpx.TimeoutException as exc:
             if phase:
                 raise ApiError(
                     "Se agotó la espera del cliente, pero la operación puede seguir "
-                    "en curso: compruébalo en la pestaña Resumen.",
+                    "en curso: compruébalo en el resumen de la ejecución.",
                     status_code=None,
                 ) from exc
             raise ApiError(f"Timeout al contactar {url}") from exc
@@ -335,7 +352,7 @@ class ApiClient:
             if phase:
                 raise ApiError(
                     "Se perdió la conexión con el servidor, pero la operación "
-                    "puede seguir en curso: compruébalo en la pestaña Resumen.",
+                    "puede seguir en curso: compruébalo en el resumen de la ejecución.",
                     status_code=None,
                     detail=str(exc),
                 ) from exc
@@ -344,15 +361,26 @@ class ApiClient:
         payload = _parse_response(response, raw=raw)
         return PhaseResult(response.status_code, payload) if phase else payload
 
-    def _post_descriptor(self, path: str, descriptor: Descriptor, timeout: float) -> Any:
+    def _post_descriptor(
+        self,
+        path: str,
+        descriptor: Descriptor,
+        timeout: float,
+        *,
+        wait: bool = True,
+    ) -> Any:
         """POST del descriptor como fichero subido (`multipart/form-data`).
 
-        Es la unica via que usa la UI. La API tambien acepta el descriptor como
-        cuerpo `application/yaml` o JSON —y las colecciones Postman lo ejercitan—
-        pero ofrecer varias desde la interfaz solo invitaba a mezclarlas.
+        Es la unica via que usan la UI y el CLI. La API tambien acepta el
+        descriptor como cuerpo `application/yaml` o JSON —y las colecciones
+        Postman lo ejercitan— pero ofrecer varias desde la interfaz solo
+        invitaba a mezclarlas.
 
-        El `timeout` es el de la FASE, no el de la red: estos endpoints bloquean
-        hasta que la fase termina.
+        Con `wait=True` el `timeout` es el de la FASE, no el de la red: estos
+        endpoints bloquean hasta que la fase termina. Con `wait=False` el
+        servidor responde 202 al instante, asi que se usa el tope corto: esperar
+        el tope de fase por una respuesta inmediata solo sirve para tapar una
+        caida del servicio durante cuarenta minutos.
         """
         _reject_oversized(len(descriptor.content))
         return self._request(
@@ -360,7 +388,8 @@ class ApiClient:
             path,
             auth=True,
             files={DESCRIPTOR_FIELD: (descriptor.filename, descriptor.content, YAML_MEDIA_TYPE)},
-            timeout=_phase_timeout(timeout),
+            params={"wait": str(wait).lower()},
+            timeout=_phase_timeout(timeout) if wait else DEFAULT_TIMEOUT_SECONDS,
             phase=True,
         )
 
@@ -397,15 +426,18 @@ class ApiClient:
 
     # ----- Ejecuciones -----
 
-    def create_execution(self, descriptor: Descriptor) -> Any:
+    def create_execution(self, descriptor: Descriptor, *, wait: bool = True) -> Any:
         """Lanza una ejecución y espera a que la VPN quede resuelta.
 
         El endpoint bloquea (`wait=true` por defecto): no responde hasta que se
         puede llamar a /elcm. El código HTTP dice cómo fue — 200 túnel arriba,
         207 hay que montarlo a mano, 502 falló el despliegue, 504 se agotó el
         tope del servidor y el despliegue continúa por detrás.
+
+        Con `wait=False` la respuesta es un 202 inmediato y el despliegue sigue
+        por detrás: hay que sondear con `get_execution`.
         """
-        return self._post_descriptor("/executions", descriptor, CREATE_TIMEOUT_SECONDS)
+        return self._post_descriptor("/executions", descriptor, CREATE_TIMEOUT_SECONDS, wait=wait)
 
     def get_execution(self, execution_id: str) -> Any:
         """Estado resumido de una ejecución."""
@@ -436,15 +468,16 @@ class ApiClient:
             timeout=POLL_TIMEOUT_SECONDS,
         )
 
-    def start_elcm(self, execution_id: str, descriptor: Descriptor) -> Any:
+    def start_elcm(self, execution_id: str, descriptor: Descriptor, *, wait: bool = True) -> Any:
         """Lanza un experimento ELCM y espera a que el dataset esté recolectado.
 
         El cuerpo lleva solo `experiment` y `dataset`; la infraestructura ya
         existe y no se vuelve a describir. Bloquea hasta que el dataset está en
-        disco, no solo hasta que el experimento para.
+        disco, no solo hasta que el experimento para; con `wait=False` responde
+        202 al instante.
         """
         return self._post_descriptor(
-            f"/executions/{execution_id}/elcm", descriptor, ELCM_TIMEOUT_SECONDS
+            f"/executions/{execution_id}/elcm", descriptor, ELCM_TIMEOUT_SECONDS, wait=wait
         )
 
     def delete_tn(self, execution_id: str) -> Any:
