@@ -1,5 +1,6 @@
 """Ciclo de vida de una ejecucion: crear la TN, consultarla y borrarla."""
 
+import asyncio
 import logging
 from typing import Literal
 
@@ -25,7 +26,18 @@ from app.api.validation import (
     validate_elcm_or_raise,
 )
 from app.domain.descriptor import DatasetDescriptor
-from app.observability.execution_summary import build_execution_summary, render_summary_markdown
+from app.observability.execution_summary import (
+    build_execution_summary,
+    render_bundle_readme,
+    render_summary_markdown,
+)
+from app.storage import artifacts as artifacts_storage
+from app.storage.execution_bundle import (
+    ExecutionArtifactsNotFoundError,
+    InvalidExecutionIdError,
+    build_execution_zip,
+    resolve_execution_dir,
+)
 from app.observability.telemetry import format_duration_display, telemetry
 from app.rendering.tnlcm.overlay import InvalidDatasetDescriptorError
 from app.services import orchestrator
@@ -264,3 +276,64 @@ async def get_execution_summary(
             render_summary_markdown(summary), media_type="text/markdown; charset=utf-8"
         )
     return summary
+
+
+@router.get(
+    "/executions/{execution_id}/download",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {"application/zip": {}},
+            "description": "ZIP con los artefactos de la ejecucion",
+        },
+        400: {"description": "El execution_id no es utilizable como ruta"},
+        404: {"description": "La ejecucion no tiene carpeta de artefactos"},
+    },
+)
+async def download_execution_bundle(
+    execution_id: str,
+    secrets: bool = Query(
+        False,
+        description=(
+            "Si es true incluye tambien los ficheros con claves de acceso (la "
+            "config de WireGuard y los informes crudos de TNLCM). Por defecto se "
+            "omiten: llevan la clave privada del tunel y el token de InfluxDB."
+        ),
+    ),
+):
+    """Descarga todo lo que ha dejado una ejecucion en un unico ZIP.
+
+    Lleva el descriptor que la produjo, el resumen, los datasets recolectados y
+    los artefactos intermedios, mas un `README.md` generado que explica que es
+    cada cosa. Es el entregable que cierra el ciclo: se archiva o se adjunta sin
+    tener que entrar al servidor a por la carpeta.
+
+    Por defecto NO incluye los ficheros con claves de acceso (§8.7); con
+    `?secrets=true` se piden explicitamente.
+    """
+    record = orchestrator.get_execution(execution_id)
+
+    try:
+        execution_dir = await asyncio.to_thread(
+            resolve_execution_dir, artifacts_storage.artifact_root_dir(), execution_id
+        )
+    except InvalidExecutionIdError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ExecutionArtifactsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    # El README solo se puede generar si la ejecucion sigue en memoria; una
+    # carpeta huerfana (proceso reiniciado) se empaqueta igual, sin el.
+    readme = None
+    if record is not None:
+        readme = render_bundle_readme(build_execution_summary(execution_id, record), record)
+
+    payload = await asyncio.to_thread(
+        build_execution_zip, execution_dir, include_secrets=secrets, readme=readme
+    )
+
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{execution_id}.zip"'},
+    )

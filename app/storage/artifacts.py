@@ -22,7 +22,12 @@ from app.observability.telemetry import telemetry
 logger = logging.getLogger(__name__)
 
 
-def _artifact_root_dir() -> str:
+def artifact_root_dir() -> str:
+    """Raiz donde viven las carpetas de artefactos, una por ejecucion.
+
+    Publica porque la necesita el empaquetado del ZIP desde la capa de API: un
+    nombre con prefijo `_` que cruza la frontera del modulo miente (§8.5).
+    """
     base = settings.artifacts_dir or "./artifacts"
     if os.getenv("PYTEST_CURRENT_TEST"):
         base = os.path.join(base, "tests")
@@ -30,7 +35,7 @@ def _artifact_root_dir() -> str:
 
 
 def _artifact_base_dir(execution_id: str) -> str:
-    return os.path.join(_artifact_root_dir(), execution_id)
+    return os.path.join(artifact_root_dir(), execution_id)
 
 
 def _artifact_generated_dir(execution_id: str) -> str:

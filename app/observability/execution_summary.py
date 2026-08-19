@@ -474,3 +474,70 @@ def render_summary_markdown(summary: Dict[str, Any]) -> str:
 
     lines.append(f"_Generated at {summary['generated_at']}._")
     return "\n".join(lines) + "\n"
+
+
+def render_bundle_readme(summary: Dict[str, Any], record: ExecutionRecord) -> str:
+    """Renderiza el README que acompana al ZIP de la ejecucion.
+
+    No es el `summary.md` otra vez: aquel cuenta COMO fue la ejecucion, y este
+    cuenta QUE hay en el fichero que te acabas de descargar, para que dentro de
+    seis meses se pueda abrir y entender sin volver al orquestador. Es lo que
+    pide la actividad F6.2 del anteproyecto.
+    """
+    icon = _STATUS_ICONS.get(summary.get("outcome", ""), "")
+    lines: List[str] = [
+        f"# Execution bundle — {summary['execution_id']}",
+        "",
+        f"- **Status:** {icon} {summary['status']}",
+    ]
+    if summary.get("total_duration"):
+        lines.append(f"- **Total duration:** {summary['total_duration']}")
+    if summary.get("network"):
+        lines.append(f"- **Trial Network:** `{summary['network']}`")
+    if record.dataset_output:
+        lines.append(f"- **Requested outputs:** {', '.join(record.dataset_output)}")
+    lines.append(f"- **Bundled at:** {summary['generated_at']}")
+    lines.append("")
+
+    if record.experiments:
+        lines.append("## Experiments")
+        lines.append("")
+        for run in record.experiments:
+            detail = f"`{run.name}` — {run.status}"
+            if run.dataset_output:
+                detail += f" — outputs: {', '.join(run.dataset_output)}"
+            lines.append(f"- {detail}")
+            if run.error:
+                lines.append(f"  - error: {run.error}")
+        lines.append("")
+
+    if summary.get("what_went_wrong"):
+        lines.append(f"> **What went wrong:** {summary['what_went_wrong']}")
+        lines.append("")
+
+    lines.append("## What is in here")
+    lines.append("")
+    lines.append("| Path | Contents |")
+    lines.append("|---|---|")
+    lines.append(
+        "| `dataset_descriptor.yaml` | The descriptor that produced this run, verbatim. "
+        "Re-send it to reproduce the experiment |"
+    )
+    lines.append("| `summary.md` / `summary.json` | Human-readable report of what each phase did |")
+    lines.append("| `result/<experiment>/` | The collected dataset, one directory per experiment |")
+    lines.append(
+        "| `archivos_generados/` | Intermediate artifacts: filled overlays, the rendered "
+        "TNLCM descriptor and the ELCM experiment descriptor |"
+    )
+    lines.append("| `telemetry.log` | Timing events, one JSON object per line |")
+    lines.append("| `telemetry_report_*.json` | Timing rollup at the end of each phase |")
+    lines.append("")
+
+    lines.append(
+        "> Files holding access keys (the WireGuard `.conf` and the raw TNLCM reports) "
+        "are **not** included by default. Request them with `?secrets=true` if you need "
+        "them, and handle the bundle accordingly."
+    )
+    lines.append("")
+
+    return "\n".join(lines) + "\n"
