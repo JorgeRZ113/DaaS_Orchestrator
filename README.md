@@ -48,6 +48,37 @@ pip install -e .
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+## CLI (`daas`)
+
+Cliente de consola para operar el orquestador sin navegador ni Postman. Habla
+con la API por HTTP como un cliente cualquiera (no arranca el servicio ni lo
+importa), reutilizando `app/client.py`, el mismo modulo que usa la UI.
+
+```bash
+export DAAS_BASE_URL=http://localhost:8000   # opcional, es el valor por defecto
+export API_KEY=...                           # la misma del .env del servidor
+```
+
+| Orden | Que hace |
+|---|---|
+| `daas run <desc.yaml> [--no-wait]` | Lanza una ejecucion (`POST /executions`) |
+| `daas elcm <id> <exp.yaml>` | Lanza un experimento ELCM sobre una ejecucion existente |
+| `daas status <id>` · `detail <id>` | Estado resumido / registro completo |
+| `daas summary <id> [--format md]` | Resumen legible, en JSON o Markdown |
+| `daas download <id> [--secrets] [-o f.zip]` | Descarga el ZIP de la ejecucion |
+| `daas rm <id>` | Borra la Trial Network |
+
+Las ordenes que consultan escriben **JSON a stdout**, asi que se canalizan a
+`jq` o a un fichero; los avisos van a stderr. Codigos de salida pensados para
+encadenar con `&&`: `0` correcto, `1` error de API o de red, `2` error de uso,
+y `3` completado **parcialmente** (HTTP 207: la TN esta desplegada pero el
+tunel WireGuard hay que montarlo a mano, asi que la cadena se corta en vez de
+seguir a ciegas).
+
+```bash
+daas run examples/descriptors/01_minimo_base.yaml
+```
+
 ## Pruebas y calidad
 
 La suite esta organizada por **niveles**, y el nivel lo marca el directorio: no
@@ -141,6 +172,8 @@ Nota: los tiempos de ELCM se definen como constantes internas en `app/services/o
 | `templates/ELCM/templates/` + `templates/ELCM/overlays/` | TestCases de dataset renderizables con `ytt`: `prometheus_to_csv_dataset` (salida `csv`) y `prometheus_to_grafana_dashboard` (salida `dashboard`) |
 | `templates/ELCM/template_experiment_descriptor.json` | Plantilla base del Experiment Descriptor; se rellena por experimento (UEs + TestCases) y se genera en `artifacts/<id>/archivos_generados/` |
 | `app/main.py` | Raíz de composición: monta los routers y expone `app` |
+| `app/client.py` | Cliente HTTP de la API, **compartido** por el CLI y la UI de Streamlit. No importa FastAPI ni Streamlit |
+| `app/cli.py` | CLI `daas`: subcomandos `run`/`elcm`/`status`/`detail`/`summary`/`download`/`rm` sobre `app/client.py` |
 | `app/api/` | Capa HTTP: `routers/` (health, auth, admin, executions, experiments), `deps.py`, `phases.py` (desenlace de fase → código HTTP), `validation.py`, `errors.py` |
 | `app/services/orchestrator.py` | Coordinador fino: arranca fases y expone el ciclo de vida a la API |
 | `app/services/state.py` · `phases/` | Estado y persistencia de las ejecuciones; una fase por módulo (`tnlcm`, `elcm`, `teardown`) más `results.py` con la recolección del dataset |
