@@ -1,9 +1,18 @@
 """UI de Streamlit para operar el DaaS Orchestrator desde el navegador.
 
-Sustituye a Postman para el día a día: rellena formularios, lanza ejecuciones,
-consulta estado, dispara experimentos ELCM y borra la Trial Network. Habla con
-la API existente (FastAPI) a través de `api_client.ApiClient`; no accede a la
-lógica interna del servicio.
+Hace dos cosas. La primera es sustituir a Postman en el día a día: lanza
+ejecuciones, consulta estado y resumen, dispara experimentos ELCM y borra la
+Trial Network, hablando con la API por HTTP a través de `api_client.ApiClient`;
+no accede a la lógica interna del servicio.
+
+La segunda es la que aporta valor propio: **produce el Dataset Descriptor**. El
+formulario no arma una petición, arma el fichero YAML que el anteproyecto
+promete, y el usuario puede descargarlo, versionarlo en git y reenviarlo después
+sin la UI delante. Por eso las pestañas de ejecución y de experimento giran
+alrededor de un editor de YAML alimentado por tres fuentes intercambiables
+(formulario, fichero subido y ejemplo de `examples/descriptors/`), y por eso la
+UI ya no construye cuerpos JSON: la API los sigue aceptando, pero mantener tres
+caminos aquí no aportaba nada. Ver `docs/UI_YAML_MIGRATION.md`.
 
 Arranque:
     streamlit run ui/streamlit_app.py
@@ -11,22 +20,30 @@ Arranque:
 
 from __future__ import annotations
 
-import json
+import threading
+import time
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import streamlit as st
+import yaml
 
-from api_client import DATASET_OUTPUTS, ApiClient, ApiError
+import descriptor
+from api_client import (
+    DATASET_MODE_VARIABLES,
+    DATASET_OUTPUTS,
+    ApiClient,
+    ApiError,
+    Descriptor,
+    PhaseResult,
+    variables_for_outputs,
+    yaml_error_position,
+)
 
 DEFAULT_BASE_URL = "http://localhost:8000"
 
 
 # ===== Utilidades compartidas =====
-
-
-def _lines_to_list(text: str) -> list[str]:
-    """Convierte un textarea (una entrada por línea) en lista sin vacíos."""
-    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 def _get_client() -> ApiClient | None:
@@ -44,6 +61,195 @@ def _show_api_error(exc: ApiError) -> None:
     st.error(exc.message)
     if isinstance(exc.detail, (dict, list)):
         st.json(exc.detail)
+
+
+# ===== Trabajos en curso: esperar sin congelar la página =====
+
+# Los tres endpoints del ciclo de vida BLOQUEAN: no responden hasta que la fase
+# termina (la VPN resuelta, el dataset recolectado, la TN purgada). Eso es lo que
+# se quiere — el desenlace viene en el código HTTP y no hay que ir a sondearlo—
+# pero una llamada síncrona dentro de una pasada de script congelaría la sesión
+# entera de Streamlit, y con ella las pestañas de Estado y Resumen, que es justo
+# lo que interesa mirar durante una espera de 40-70 minutos.
+#
+# La salida es lanzar la petición en un hilo aparte. El hilo NO llama a `st.*`
+# (no tiene contexto de script y no debe tocarlo): escribe en un diccionario
+# normal que se crea aquí y se guarda en `session_state`, y un fragment lo lee y
+# repinta. Así la petición sigue siendo una sola llamada bloqueante y la página
+# sigue viva.
+JOB_KEY = "running_job"
+
+# Cada cuánto repinta el panel del trabajo en curso. Dos segundos dan sensación
+# de vivo sin castigar nada: el sondeo es local, no sale a la red.
+JOB_REFRESH_SECONDS = 2
+
+# Desenlaces del código HTTP, comunes a las tres fases (`app/api/phases.py`).
+_OUTCOMES = {
+    200: ("success", ":material/check_circle:", "Completado."),
+    207: (
+        "warning",
+        ":material/warning:",
+        "Terminó incompleto: revisa `vpn_status` o el campo `error`.",
+    ),
+}
+
+
+def _new_job(kind: str, label: str) -> dict[str, Any]:
+    """Estado compartido entre el hilo y la página. Dict normal a propósito."""
+    return {
+        "kind": kind,
+        "label": label,
+        "started_at": time.monotonic(),
+        "done": False,
+        "finished_at": None,
+        "result": None,
+        "error": None,
+        "status_code": None,
+    }
+
+
+def _run_job(job: dict[str, Any], call: Callable[[], PhaseResult]) -> None:
+    """Cuerpo del hilo: ejecuta la llamada y deja el desenlace en `job`.
+
+    El hilo NO toca `st.*` ni `st.session_state`: sin contexto de script, una
+    escritura en `session_state` no falla, se va a un objeto global que la sesión
+    real nunca lee. Aquí solo se escribe en `job`, que es un dict normal que la
+    página tiene por referencia.
+
+    `done` se marca EL ÚLTIMO, en un `finally`: es la bandera que lee la página,
+    así que ponerla antes dejaría ver un resultado a medio escribir, y no
+    ponerla dejaría el candado echado para siempre.
+    """
+    try:
+        result = call()
+        job["result"] = result.payload
+        job["status_code"] = result.status_code
+    except ApiError as exc:
+        job["error"] = exc
+        job["status_code"] = exc.status_code
+    except BaseException as exc:  # noqa: BLE001 - el hilo no puede dejar escapar nada
+        job["error"] = ApiError(f"Fallo inesperado en el cliente: {exc!r}")
+    finally:
+        job["finished_at"] = time.monotonic()
+        job["done"] = True
+
+
+def _start_job(kind: str, label: str, call: Callable[[], Any]) -> None:
+    """Lanza la operación en segundo plano y deja la página utilizable."""
+    job = _new_job(kind, label)
+    st.session_state[JOB_KEY] = job
+    thread = threading.Thread(target=_run_job, args=(job, call), daemon=True)
+    thread.start()
+
+
+def _current_job() -> dict[str, Any] | None:
+    """El trabajo en curso o recién terminado, si lo hay."""
+    return st.session_state.get(JOB_KEY)
+
+
+def _job_in_flight() -> bool:
+    """True mientras haya una operación esperando respuesta.
+
+    Es el candado: mientras dure, no se puede lanzar otra ejecución, ni otro
+    experimento, ni un borrado, para que no choquen entre ellos ni con las
+    herramientas de abajo.
+    """
+    job = _current_job()
+    return job is not None and not job["done"]
+
+
+def _lock_help(action: str) -> str | None:
+    """Explica por qué el botón está deshabilitado, si lo está."""
+    job = _current_job()
+    if job is None or job["done"]:
+        return None
+    return (
+        f"Hay una operación en curso ({job['label']}). {action} podría chocar con "
+        "ella, así que se espera a que termine. Mientras tanto puedes usar Estado "
+        "y Resumen."
+    )
+
+
+def _render_job_outcome(job: dict[str, Any]) -> None:
+    """Pinta el desenlace de un trabajo terminado."""
+    error: ApiError | None = job["error"]
+
+    if error is not None:
+        # 504 no es un fallo: el servidor agotó SU tope y sigue trabajando.
+        if error.status_code == 504:
+            st.warning(
+                f"{job['label']}: el servidor agotó su tope de espera, pero **la "
+                "operación sigue en curso**. Míralo en la pestaña Resumen.",
+                icon=":material/hourglass_top:",
+            )
+        else:
+            st.error(f"{job['label']}: {error.message}", icon=":material/error:")
+            if isinstance(error.detail, (dict, list)):
+                st.json(error.detail)
+        return
+
+    kind, icon, text = _OUTCOMES.get(job["status_code"], _OUTCOMES[200])
+    getattr(st, kind)(f"{job['label']}: {text}", icon=icon)
+    if isinstance(job["result"], dict):
+        st.json(job["result"])
+
+
+@st.fragment(run_every=JOB_REFRESH_SECONDS)
+def _job_watcher() -> None:
+    """Vigila el trabajo en curso y repinta solo él mientras dura.
+
+    Vive en `main()`, encima de las pestañas y en una posición FIJA, por dos
+    razones. La primera es que así se ve desde cualquier pestaña: durante una
+    espera larga lo normal es estar mirando Resumen, no la pestaña desde la que
+    se lanzó. La segunda es que la identidad de un fragment se calcula con la
+    ruta del contenedor donde se pinta, así que si delante hubiera un número
+    variable de elementos cambiaría de identidad entre pasadas y el temporizador
+    del navegador quedaría apuntando a uno que ya no existe.
+    """
+    job = _current_job()
+    if job is None or job["done"]:
+        return
+
+    elapsed = time.monotonic() - job["started_at"]
+    minutes, seconds = divmod(int(elapsed), 60)
+
+    with st.container(border=True):
+        st.markdown(f"⏳ **{job['label']}** — esperando respuesta del servidor")
+        st.caption(
+            f"Lleva {minutes} min {seconds:02d} s. La petición no responde hasta que la "
+            "fase termina; mientras tanto puedes usar Estado y Resumen con normalidad."
+        )
+
+    # Al terminar hay que repintar la app ENTERA, no solo el fragment: los
+    # botones que el candado deshabilita están fuera de aquí y un rerun de
+    # fragment no los tocaría.
+    if job["done"]:
+        st.rerun(scope="app")
+
+
+def _render_job_result() -> None:
+    """Desenlace del último trabajo terminado, mientras no se descarte."""
+    job = _current_job()
+    if job is None or not job["done"]:
+        return
+
+    elapsed = (job.get("finished_at") or time.monotonic()) - job["started_at"]
+    minutes, seconds = divmod(int(elapsed), 60)
+
+    with st.container(border=True):
+        _render_job_outcome(job)
+        st.caption(f"Tardó {minutes} min {seconds:02d} s.")
+        if st.button("Descartar", key="job_dismiss", icon=":material/close:"):
+            st.session_state.pop(JOB_KEY, None)
+            st.rerun()
+
+
+def _job_execution_id() -> str | None:
+    """`execution_id` que devolvió el último trabajo, si lo trajo."""
+    job = _current_job()
+    if job is None or not isinstance(job["result"], dict):
+        return None
+    return job["result"].get("execution_id")
 
 
 # ===== Panel lateral: conexión, salud y auth TNLCM =====
@@ -142,28 +348,184 @@ def render_sidebar() -> None:
 
 # ===== Pestaña: Nueva ejecución =====
 
+# Valor de arranque del formulario. `TC_ping.yml` es el TestCase mínimo de la
+# biblioteca (templates/ELCM/TestCase/), que es contra lo que resuelven por
+# nombre de fichero `testcase_paths` y `ues_paths`.
+DEFAULT_TESTCASE = "TC_ping.yml"
 
-def _build_execution_body(
-    *,
-    name: str,
-    lib_type: str,
-    lib_value: str,
-    influx_user: str,
-    influx_password: str,
-    grafana_password: str,
-    outputs: list[str],
-    auto_start: bool,
-    ephemeral: bool,
-    exp_name: str,
-    testcases: str,
-    ues: str,
-    component_json: str,
-) -> dict[str, Any] | None:
-    """Construye el body de POST /executions; devuelve None si hay error de forma.
+# Clave del editor, compartida por las tres fuentes (formulario, fichero subido y
+# ejemplo). Al ser también la key del `text_area`, escribir en ella antes de
+# pintarlo es lo que hace que el descriptor generado aparezca ya en el editor.
+# Además hace de prefijo de todos los widgets de su pestaña: sin `st.form` el
+# identificador ya no lleva el `form_id` que separaba las dos, y las etiquetas
+# repetidas (`experiment.name`, `dataset.output`…) chocarían entre pestañas.
+DESCRIPTOR_KEY = "descriptor_yaml"
+ELCM_DESCRIPTOR_KEY = "elcm_descriptor_yaml"
 
-    Solo se incluyen campos con valor real: los vacíos se omiten para no chocar
-    con el rechazo de strings vacíos del backend.
+# Campos que se pintan enmascarados. Es cosmético: el valor acaba en claro en el
+# YAML generado, que es justamente el entregable que el usuario se descarga.
+_SECRET_SUFFIXES = ("password", "token", "secret")
+
+# Comodidades del formulario, no datos del catálogo: `admin` es el usuario que
+# usan todos los ejemplos de InfluxDB.
+_FIELD_DEFAULTS: dict[tuple[str, str], str] = {("base", "influxdb_user"): "admin"}
+
+
+def _dataset_variables_form(prefix: str, outputs: Sequence[str]) -> dict[str, Any]:
+    """Variables globales de `dataset`, solo las de los modos activos.
+
+    Se pintan en función de `output` porque el servidor rechaza con un 422 una
+    variable cuyo modo dueño no esté pedido: no ofrecerla es mejor que ofrecerla
+    y avisar después. Con `output: [logs]` no queda ninguna.
     """
+    names = variables_for_outputs(outputs)
+    if not names:
+        st.caption("Los formatos elegidos no admiten variables globales.")
+        return {}
+
+    st.caption(
+        "Opcionales: si se dejan en blanco, el orquestador las deriva del "
+        "despliegue y, en último término, del valor por defecto del overlay."
+    )
+
+    values: dict[str, Any] = {}
+    for name in names:
+        help_text = "Modos: " + ", ".join(sorted(DATASET_MODE_VARIABLES[name]))
+        if name == "influx_port":
+            values[name] = st.number_input(
+                name,
+                value=None,
+                min_value=1,
+                max_value=65535,
+                placeholder="8086",
+                help=help_text,
+                key=f"{prefix}_var_{name}",
+            )
+        else:
+            values[name] = st.text_input(name, help=help_text, key=f"{prefix}_var_{name}")
+    return values
+
+
+def _is_secret(name: str) -> bool:
+    """Un campo se enmascara si su nombre acaba en algo que suena a credencial."""
+    return name.endswith(_SECRET_SUFFIXES)
+
+
+def _field_input(prefix: str, field: descriptor.ComponentField) -> str:
+    """Un input por campo editable del componente.
+
+    La sección entra en la key porque hay nombres repetidos dentro del mismo
+    componente (`int_p4_sw` tiene `name` en `network` y en `vm`), y dos widgets
+    con la misma key son un error aunque estén en expanders distintos.
+    """
+    return st.text_input(
+        f"{field.label} *" if field.required else field.label,
+        value=_FIELD_DEFAULTS.get((field.component, field.name), ""),
+        type="password" if _is_secret(field.name) else "default",
+        help=f"Sección `{field.section}` del overlay." if field.ambiguous else None,
+        key=f"{prefix}_field_{field.component}_{field.section}_{field.name}",
+    )
+
+
+def _component_editor(prefix: str, selected: Sequence[str]) -> dict[descriptor.ComponentField, str]:
+    """Campos de cada componente elegido: obligatorios siempre, opcionales a la carta.
+
+    Los opcionales pasan por un selector previo en vez de pintarse todos:
+    `ueransim_split` tiene 39 campos y llenar la página de cajas vacías no ayuda.
+    Los obligatorios no pueden esconderse ahí — nombrar el componente sin ellos
+    es un 400, no «usa los defaults».
+    """
+    values: dict[descriptor.ComponentField, str] = {}
+
+    for position, component in enumerate(selected):
+        fields = descriptor.component_fields(component)
+        required = [field for field in fields if field.required]
+        optional = [field for field in fields if not field.required]
+
+        with st.expander(f"{component} — {len(fields)} campos editables", expanded=position == 0):
+            if required:
+                st.caption("Obligatorios (marcados con \\*): sin ellos el descriptor no vale.")
+                for field in required:
+                    values[field] = _field_input(prefix, field)
+            else:
+                st.caption(
+                    "Ningún campo obligatorio: puedes dejarlo tal cual y se despliega "
+                    "con los valores por defecto de su overlay."
+                )
+
+            chosen = st.multiselect(
+                "Campos a personalizar",
+                options=optional,
+                format_func=lambda field: field.label,
+                help="Lo que no toques se queda con el valor por defecto del overlay.",
+                key=f"{prefix}_pick_{component}",
+            )
+            for field in chosen:
+                values[field] = _field_input(prefix, field)
+
+    return values
+
+
+def _descriptor_from_form() -> str | None:
+    """Formulario que genera el descriptor; devuelve su YAML o None si no se pulsó.
+
+    Ya no vive en un `st.form`: dentro de uno ningún widget dispara rerun hasta
+    enviar, y entonces ni las variables de `dataset` podrían reaccionar a
+    `output` ni los campos al componente elegido. El botón sigue siendo
+    explícito, así que tocar el formulario no pisa lo editado a mano en el YAML.
+    """
+    prefix = DESCRIPTOR_KEY
+
+    name = st.text_input("Nombre de la TN", value="tn-demo", key=f"{prefix}_name")
+    col1, col2 = st.columns(2)
+    with col1:
+        lib_type = st.text_input("library_reference_type", value="branch", key=f"{prefix}_lib_type")
+    with col2:
+        lib_value = st.text_input(
+            "library_reference_value", value="develop", key=f"{prefix}_lib_value"
+        )
+
+    st.markdown("**Componentes a desplegar**")
+    selected = st.pills(
+        "Componentes",
+        options=descriptor.list_components(),
+        selection_mode="multi",
+        default=["base"],
+        label_visibility="collapsed",
+        key=f"{prefix}_components",
+        help=(
+            "`base` despliega el núcleo común (InfluxDB + Grafana) que el resto de "
+            "componentes da por supuesto."
+        ),
+    )
+    values = _component_editor(prefix, selected or [])
+
+    st.markdown("**Dataset**")
+    outputs = st.multiselect(
+        "dataset.output",
+        options=list(DATASET_OUTPUTS),
+        default=["logs"],
+        key=f"{prefix}_outputs",
+    )
+    with st.expander("Variables globales de dataset"):
+        variables = _dataset_variables_form(prefix, outputs)
+
+    col3, col4 = st.columns(2)
+    with col3:
+        auto_start = st.checkbox("auto_start_elcm", value=True, key=f"{prefix}_auto_start")
+    with col4:
+        ephemeral = st.checkbox("ephemeral_tn", value=False, key=f"{prefix}_ephemeral")
+
+    st.markdown("**Experimento inicial** (obligatorio si auto_start_elcm)")
+    exp_name = st.text_input("experiment.name", value="exp-demo", key=f"{prefix}_exp_name")
+    testcases = st.text_area(
+        "testcase_paths (uno por línea)", value=DEFAULT_TESTCASE, key=f"{prefix}_testcases"
+    )
+    ues = st.text_area("ues_paths (uno por línea)", value="", key=f"{prefix}_ues")
+
+    if not st.button("Generar descriptor", icon=":material/description:", key=f"{prefix}_generate"):
+        return None
+
     if not name.strip():
         st.error("El nombre de la TN es obligatorio.")
         return None
@@ -171,142 +533,212 @@ def _build_execution_body(
         st.error("Selecciona al menos un formato en dataset.output.")
         return None
 
-    infrastructure: dict[str, Any] = {"name": name.strip()}
+    missing = descriptor.missing_required(selected or [], values)
+    if missing:
+        for component, fields in missing.items():
+            st.error(f"El componente '{component}' requiere: {', '.join(fields)}.")
+        return None
 
-    parameters: dict[str, Any] = {}
-    if lib_type.strip():
-        parameters["library_reference_type"] = lib_type.strip()
-    if lib_value.strip():
-        parameters["library_reference_value"] = lib_value.strip()
-    if parameters:
-        infrastructure["parameters"] = parameters
-
-    if component_json.strip():
-        try:
-            infrastructure["component"] = json.loads(component_json)
-        except json.JSONDecodeError as exc:
-            st.error(f"JSON de component inválido: {exc}")
-            return None
-    else:
-        # El componente 'base' es todo-o-nada: el backend exige sus tres campos
-        # obligatorios (influxdb_user/password y grafana_password). Si el usuario
-        # rellena alguno, validamos aquí en cliente para no chocar con el 400.
-        base_fields = {
-            "influxdb_user": influx_user.strip(),
-            "influxdb_password": influx_password.strip(),
-            "grafana_password": grafana_password.strip(),
-        }
-        if any(base_fields.values()):
-            missing = [field for field, value in base_fields.items() if not value]
-            if missing:
-                st.error(
-                    "El componente 'base' requiere sus tres campos obligatorios. "
-                    f"Faltan: {', '.join(missing)}."
-                )
-                return None
-            infrastructure["component"] = {"base": base_fields}
-
-    body: dict[str, Any] = {
-        "infrastructure": infrastructure,
-        "dataset": {"output": outputs},
-        "auto_start_elcm": auto_start,
-        "ephemeral_tn": ephemeral,
+    parameters = {
+        key: value.strip()
+        for key, value in (
+            ("library_reference_type", lib_type),
+            ("library_reference_value", lib_value),
+        )
+        if value.strip()
     }
 
+    experiment = None
     if exp_name.strip():
-        body["experiment"] = {
-            "name": exp_name.strip(),
-            "testcase_paths": _lines_to_list(testcases),
-            "ues_paths": _lines_to_list(ues),
-        }
-
-    if auto_start and "experiment" not in body:
+        experiment = descriptor.build_experiment(exp_name, testcases, ues)
+    elif auto_start:
         st.error("Con auto_start_elcm=True debes indicar experiment.name.")
         return None
 
-    return body
+    return descriptor.to_yaml(
+        descriptor.build_descriptor(
+            name=name,
+            component=descriptor.build_component(selected or [], values),
+            parameters=parameters,
+            experiment=experiment,
+            dataset=descriptor.build_dataset(outputs, variables),
+            auto_start_elcm=auto_start,
+            ephemeral_tn=ephemeral,
+        )
+    )
+
+
+def _descriptor_from_upload(key: str) -> str | None:
+    """Sube un `.yaml`/`.yml` y devuelve su texto, o None si no hay fichero."""
+    uploaded = st.file_uploader("Descriptor en YAML", type=["yaml", "yml"], key=f"{key}_upload")
+    if uploaded is None:
+        return None
+    try:
+        return uploaded.getvalue().decode("utf-8")
+    except UnicodeDecodeError:
+        st.error("El fichero no está codificado en UTF-8.")
+        return None
+
+
+def _descriptor_from_example(key: str, only: str | None = None) -> str | None:
+    """Carga uno de los descriptores comentados de `examples/descriptors/`."""
+    names = descriptor.list_examples()
+    if only is not None:
+        names = [name for name in names if name == only]
+    if not names:
+        st.caption("No hay ejemplos disponibles (la UI no está junto al repositorio).")
+        return None
+
+    choice = st.selectbox("Ejemplo", options=names, key=f"{key}_example")
+    if not st.button("Cargar ejemplo", key=f"{key}_load", icon=":material/file_open:"):
+        return None
+    return descriptor.read_example(choice)
+
+
+def _fill_editor(key: str, text: str | None) -> None:
+    """Vuelca un descriptor en el editor.
+
+    Escribir en `session_state` solo es legal ANTES de que el `text_area` de esa
+    misma key se pinte en este mismo rerun; de ahí el orden de `_render_editor`.
+    """
+    if text is not None:
+        st.session_state[key] = text
+
+
+def _render_editor(
+    key: str, *, filename: str, label: str = "Descriptor (YAML)", height: int = 420
+) -> str:
+    """Editor del descriptor, con descarga y comprobación de sintaxis en cliente."""
+    st.text_area(
+        label,
+        key=key,
+        height=height,
+        help="Es el fichero que se envía, y el que puedes descargar y versionar.",
+    )
+    text = st.session_state.get(key, "")
+
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        st.download_button(
+            "Descargar",
+            data=text,
+            file_name=filename,
+            mime="application/yaml",
+            icon=":material/download:",
+            disabled=not text.strip(),
+            width="stretch",
+        )
+    with col2:
+        if text.strip():
+            try:
+                descriptor.parse_yaml(text)
+            except (yaml.YAMLError, ValueError) as exc:
+                # `problem` es la frase corta del error; `str(exc)` repite además
+                # la posición y el fragmento, que aquí ya se pintan aparte.
+                problem = getattr(exc, "problem", None) or str(exc)
+                mark = getattr(exc, "problem_mark", None)
+                where = f" (línea {mark.line + 1}, columna {mark.column + 1})" if mark else ""
+                st.error(f"YAML inválido{where}: {problem}", icon=":material/error:")
+            else:
+                st.success("Sintaxis YAML correcta.", icon=":material/check:")
+    return text
+
+
+def _show_yaml_error_position(exc: ApiError, text: str) -> None:
+    """Señala en el propio descriptor la línea que el servidor marca como rota.
+
+    Es la ventaja de UX que trae el camino YAML: el 400 lleva línea y columna, y
+    el JSON nunca las dio.
+    """
+    position = yaml_error_position(exc.detail)
+    if position is None:
+        return
+    line, column = position
+    lines = text.splitlines()
+    start = max(0, line - 3)
+    excerpt = "\n".join(
+        f"{number:>4} {'>' if number == line else ' '} {content}"
+        for number, content in enumerate(lines[start : line + 2], start=start + 1)
+    )
+    st.code(excerpt, language=None)
+    st.caption(f"El servidor sitúa el error en la línea {line}, columna {column}.")
+
+
+def _descriptor_sources(key: str, *, only_example: str | None = None) -> None:
+    """Selector de origen del descriptor; deja el resultado en el editor."""
+    source = st.segmented_control(
+        "De dónde sale el descriptor",
+        options=["Formulario", "Fichero", "Ejemplo"],
+        default="Formulario",
+        key=f"{key}_source",
+    )
+    if source == "Fichero":
+        _fill_editor(key, _descriptor_from_upload(key))
+    elif source == "Ejemplo":
+        _fill_editor(key, _descriptor_from_example(key, only=only_example))
+    elif source == "Formulario":
+        if key == DESCRIPTOR_KEY:
+            _fill_editor(key, _descriptor_from_form())
+        else:
+            _fill_editor(key, _elcm_request_from_form())
 
 
 def tab_new_execution() -> None:
-    """Formulario que arma y envía POST /executions."""
+    """Genera, edita y envía el Dataset Descriptor de una nueva ejecución."""
     st.subheader("Nueva ejecución")
-    with st.form("new_execution"):
-        name = st.text_input("Nombre de la TN", value="tn-demo")
-        col1, col2 = st.columns(2)
-        with col1:
-            lib_type = st.text_input("library_reference_type", value="branch")
-        with col2:
-            lib_value = st.text_input("library_reference_value", value="")
+    st.caption(
+        "El descriptor es el entregable: sale del formulario, se puede descargar, "
+        "versionar en git y reenviar después sin la UI, desde consola o CI."
+    )
 
-        st.markdown("**Componente base (monitorización)**")
-        st.caption(
-            "Campos obligatorios del componente 'base': si rellenas alguno, hacen "
-            "falta los tres (influxdb_user, influxdb_password, grafana_password)."
-        )
-        influx_user = st.text_input("influxdb_user (obligatorio)", value="admin")
-        influx_password = st.text_input(
-            "influxdb_password (obligatorio)", value="", type="password"
-        )
-        grafana_password = st.text_input(
-            "grafana_password (obligatorio)", value="", type="password"
-        )
+    st.session_state.setdefault(DESCRIPTOR_KEY, "")
+    _descriptor_sources(DESCRIPTOR_KEY)
 
-        outputs = st.multiselect("dataset.output", options=list(DATASET_OUTPUTS), default=["logs"])
-        col3, col4 = st.columns(2)
-        with col3:
-            auto_start = st.checkbox("auto_start_elcm", value=True)
-        with col4:
-            ephemeral = st.checkbox("ephemeral_tn", value=False)
+    st.divider()
+    text = _render_editor(DESCRIPTOR_KEY, filename="descriptor.yaml")
 
-        st.markdown("**Experimento inicial** (obligatorio si auto_start_elcm)")
-        exp_name = st.text_input("experiment.name", value="exp-demo")
-        testcases = st.text_area("testcase_paths (uno por línea)", value="TestCase_ping.yml")
-        ues = st.text_area("ues_paths (uno por línea)", value="")
-
-        with st.expander("Avanzado: component como JSON (sobrescribe lo de arriba)"):
-            component_json = st.text_area("component (JSON)", value="", height=160)
-
-        submitted = st.form_submit_button("Lanzar ejecución")
-
-    if not submitted:
+    launched = st.button(
+        "Lanzar ejecución",
+        icon=":material/rocket_launch:",
+        type="primary",
+        key=f"{DESCRIPTOR_KEY}_launch",
+        disabled=_job_in_flight(),
+        help=_lock_help("Lanzar otra ejecución"),
+    )
+    if not launched:
+        return
+    # `disabled=` no lo impone el servidor de Streamlit, solo el navegador: el
+    # candado de verdad se comprueba aqui.
+    if _job_in_flight():
         return
 
     client = _get_client()
     if client is None:
         return
-
-    body = _build_execution_body(
-        name=name,
-        lib_type=lib_type,
-        lib_value=lib_value,
-        influx_user=influx_user,
-        influx_password=influx_password,
-        grafana_password=grafana_password,
-        outputs=outputs,
-        auto_start=auto_start,
-        ephemeral=ephemeral,
-        exp_name=exp_name,
-        testcases=testcases,
-        ues=ues,
-        component_json=component_json,
-    )
-    if body is None:
+    if not text.strip():
+        st.warning("El descriptor está vacío: genéralo, súbelo o carga un ejemplo.")
         return
 
-    with st.expander("Body enviado"):
-        st.json(body)
-
+    # La sintaxis se comprueba antes de lanzar el hilo: un YAML roto se responde
+    # con un 400 inmediato y no merece bloquear la UI ni ocupar el candado.
     try:
-        result = client.create_execution(body)
-    except ApiError as exc:
-        _show_api_error(exc)
+        descriptor.parse_yaml(text)
+    except (yaml.YAMLError, ValueError) as exc:
+        st.error(f"El descriptor no es YAML válido: {exc}", icon=":material/error:")
         return
 
-    execution_id = result.get("execution_id") if isinstance(result, dict) else None
-    if execution_id:
-        st.session_state["last_execution_id"] = execution_id
-    st.success(f"Aceptada (202). execution_id: {execution_id}")
-    st.json(result)
+    # El nombre de la TN se guarda ya: el ZIP y el resumen se consultan por él, y
+    # con una espera de 40 minutos por delante conviene tenerlo a mano desde ya.
+    parsed = descriptor.parse_yaml(text)
+    name = (parsed.get("infrastructure") or {}).get("name")
+    if isinstance(name, str) and name.strip():
+        st.session_state["last_execution_id"] = name.strip()
+
+    payload = Descriptor(filename="descriptor.yaml", content=text.encode("utf-8"))
+    _start_job(
+        "execution", "Despliegue de la Trial Network", lambda: client.create_execution(payload)
+    )
+    st.rerun()
 
 
 # ===== Pestaña: Estado =====
@@ -337,13 +769,68 @@ def tab_status() -> None:
         _show_api_error(exc)
         return
 
-    cols = st.columns(2)
+    cols = st.columns(3)
     cols[0].metric("Estado", str(status.get("status", "?")))
     cols[1].metric("tn_id", str(status.get("tn_id") or "—"))
+    # `tn_state` es lo que TNLCM dice AHORA de la TN (created/activated/destroyed),
+    # no lo que guardó el orquestador: por eso vale la pena enfrentarlo al estado
+    # propio, que es donde se ven las desincronizaciones. Queda a null si la
+    # ejecución todavía no tiene TN o si no se pudo consultar.
+    cols[2].metric("tn_state (TNLCM)", str(detail.get("tn_state") or "—"))
+
     if status.get("message"):
         st.info(status["message"])
+    if detail.get("error"):
+        st.error(detail["error"], icon=":material/error:")
+
     st.markdown("**Detalle completo**")
     st.json(detail)
+
+    _render_bundle_download(execution_id.strip())
+
+
+def _render_bundle_download(execution_id: str) -> None:
+    """Descarga el ZIP con todo lo que ha dejado la ejecución.
+
+    La descarga se pide solo al pulsar, no al pintar la pestaña: el servidor
+    comprime la carpeta entera y no tiene sentido hacerlo en cada refresco.
+    """
+    st.markdown("**Descargar la ejecución**")
+    secrets = st.checkbox(
+        "Incluir ficheros con claves de acceso",
+        key="bundle_secrets",
+        help=(
+            "Por defecto el ZIP deja fuera la configuración de WireGuard y los "
+            "informes crudos de TNLCM: llevan la clave privada del túnel y el "
+            "token de InfluxDB. Márcalo solo si los necesitas, y trata el "
+            "fichero en consecuencia."
+        ),
+    )
+    if not st.button("Preparar ZIP", key="bundle_prepare", icon=":material/folder_zip:"):
+        return
+
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        payload = client.download_execution(execution_id, secrets=secrets)
+    except ApiError as exc:
+        _show_api_error(exc)
+        return
+
+    st.download_button(
+        f"Descargar {execution_id}.zip ({len(payload) / 1024:.0f} KiB)",
+        data=payload,
+        file_name=f"{execution_id}.zip",
+        mime="application/zip",
+        icon=":material/download:",
+        key="bundle_download",
+    )
+    if secrets:
+        st.warning(
+            "Este ZIP contiene claves privadas y tokens en claro.",
+            icon=":material/key:",
+        )
 
 
 # ===== Pestaña: Resumen =====
@@ -355,7 +842,7 @@ SUMMARY_REFRESH_SECONDS = 5
 # El backend devuelve el resumen en ingles a proposito (la telemetria es
 # internacional). Aqui solo se traduce el estado de cada paso, que es un enum
 # corto y cerrado; las etiquetas de los pasos se pintan tal cual para no
-# duplicar el catalogo de `app/utils/execution_summary.py`.
+# duplicar el catalogo de `app/observability/execution_summary.py`.
 _STEP_STATUS = {
     "ok": "Completado",
     "error": "Error",
@@ -523,47 +1010,109 @@ def tab_summary() -> None:
 # ===== Pestaña: Experimento ELCM =====
 
 
+def _elcm_request_from_form() -> str | None:
+    """Formulario del cuerpo de /elcm; devuelve su YAML o None si no se envió.
+
+    El cuerpo NO es un Dataset Descriptor: lleva solo `experiment` y `dataset`,
+    porque la infraestructura ya existe y no se vuelve a describir.
+    """
+    prefix = ELCM_DESCRIPTOR_KEY
+
+    exp_name = st.text_input("experiment.name", value="exp-demo", key=f"{prefix}_exp_name")
+    testcases = st.text_area(
+        "testcase_paths (uno por línea)", value=DEFAULT_TESTCASE, key=f"{prefix}_testcases"
+    )
+    ues = st.text_area("ues_paths (uno por línea)", value="", key=f"{prefix}_ues")
+    outputs = st.multiselect(
+        "dataset.output",
+        options=list(DATASET_OUTPUTS),
+        default=["logs"],
+        key=f"{prefix}_outputs",
+    )
+    with st.expander("Variables globales de dataset"):
+        variables = _dataset_variables_form(prefix, outputs)
+
+    if not st.button("Generar cuerpo", icon=":material/description:", key=f"{prefix}_generate"):
+        return None
+
+    if not exp_name.strip():
+        st.error("experiment.name es obligatorio.")
+        return None
+    if not outputs:
+        st.error("Selecciona al menos un formato en dataset.output.")
+        return None
+
+    return descriptor.to_yaml(
+        descriptor.build_elcm_request(
+            experiment=descriptor.build_experiment(exp_name, testcases, ues),
+            dataset=descriptor.build_dataset(outputs, variables),
+        )
+    )
+
+
 def tab_elcm() -> None:
     """Lanza un experimento ELCM sobre una TN viva."""
     st.subheader("Lanzar experimento ELCM")
-    with st.form("elcm_form"):
-        execution_id = st.text_input(
-            "execution_id", value=st.session_state.get("last_execution_id", "")
-        )
-        exp_name = st.text_input("experiment.name", value="exp-demo")
-        testcases = st.text_area("testcase_paths (uno por línea)", value="TestCase_ping.yml")
-        ues = st.text_area("ues_paths (uno por línea)", value="")
-        outputs = st.multiselect("dataset.output", options=list(DATASET_OUTPUTS), default=["logs"])
-        submitted = st.form_submit_button("Lanzar experimento")
+    st.caption(
+        "Se puede llamar tantas veces como experimentos se quieran encadenar sobre "
+        "la misma TN. Cada nombre debe ser único dentro de la TN: ELCM los registra "
+        "por nombre y un duplicado se rechaza con 409."
+    )
 
-    if not submitted:
+    execution_id = st.text_input(
+        "execution_id",
+        value=st.session_state.get("last_execution_id", ""),
+        key="elcm_execution_id",
+    )
+
+    st.session_state.setdefault(ELCM_DESCRIPTOR_KEY, "")
+    _descriptor_sources(ELCM_DESCRIPTOR_KEY, only_example=descriptor.ELCM_EXAMPLE)
+
+    st.divider()
+    text = _render_editor(
+        ELCM_DESCRIPTOR_KEY,
+        filename="experimento.yaml",
+        label="Cuerpo del experimento (YAML)",
+        height=300,
+    )
+
+    launched = st.button(
+        "Lanzar experimento",
+        icon=":material/play_arrow:",
+        type="primary",
+        key=f"{ELCM_DESCRIPTOR_KEY}_launch",
+        disabled=_job_in_flight(),
+        help=_lock_help("Lanzar otro experimento"),
+    )
+    if not launched:
+        return
+    if _job_in_flight():
         return
 
     client = _get_client()
     if client is None:
         return
-    if not execution_id.strip() or not exp_name.strip():
-        st.error("execution_id y experiment.name son obligatorios.")
+    if not execution_id.strip():
+        st.error("execution_id es obligatorio.")
         return
-    if not outputs:
-        st.error("Selecciona al menos un formato en dataset.output.")
+    if not text.strip():
+        st.warning("El cuerpo está vacío: genéralo, súbelo o carga el ejemplo.")
         return
 
-    body = {
-        "experiment": {
-            "name": exp_name.strip(),
-            "testcase_paths": _lines_to_list(testcases),
-            "ues_paths": _lines_to_list(ues),
-        },
-        "dataset": {"output": outputs},
-    }
     try:
-        result = client.start_elcm(execution_id.strip(), body)
-    except ApiError as exc:
-        _show_api_error(exc)
+        descriptor.parse_yaml(text)
+    except (yaml.YAMLError, ValueError) as exc:
+        st.error(f"El cuerpo no es YAML válido: {exc}", icon=":material/error:")
         return
-    st.success("Experimento aceptado (202).")
-    st.json(result)
+
+    payload = Descriptor(filename="experimento.yaml", content=text.encode("utf-8"))
+    target = execution_id.strip()
+    _start_job(
+        "elcm",
+        f"Experimento sobre {target}",
+        lambda: client.start_elcm(target, payload),
+    )
+    st.rerun()
 
 
 # ===== Pestaña: Borrar TN =====
@@ -577,8 +1126,16 @@ def tab_teardown() -> None:
         value=st.session_state.get("last_execution_id", ""),
         key="teardown_execution_id",
     )
-    confirm = st.checkbox("Confirmo el borrado de la TN")
-    if not st.button("Borrar TN", disabled=not confirm):
+    confirm = st.checkbox("Confirmo el borrado de la TN", key="teardown_confirm")
+    launched = st.button(
+        "Borrar TN",
+        disabled=not confirm or _job_in_flight(),
+        key="teardown_launch",
+        help=_lock_help("Borrar la TN"),
+    )
+    if not launched:
+        return
+    if _job_in_flight():
         return
 
     client = _get_client()
@@ -588,13 +1145,9 @@ def tab_teardown() -> None:
         st.warning("Introduce un execution_id.")
         return
 
-    try:
-        result = client.delete_tn(execution_id.strip())
-    except ApiError as exc:
-        _show_api_error(exc)
-        return
-    st.success("Borrado lanzado (202).")
-    st.json(result)
+    target = execution_id.strip()
+    _start_job("teardown", f"Borrado de la TN de {target}", lambda: client.delete_tn(target))
+    st.rerun()
 
 
 # ===== Entrada principal =====
@@ -605,6 +1158,17 @@ def main() -> None:
     st.set_page_config(page_title="DaaS Orchestrator UI", page_icon="🛰️", layout="wide")
     st.title("DaaS Orchestrator")
     st.caption("UI para operar el orquestador sin Postman")
+
+    # Los contenedores se reservan ANTES de rellenarlos y en este orden a
+    # proposito: la identidad de un fragment depende de la ruta del contenedor
+    # donde se pinta, asi que el vigilante tiene que ir en un sitio fijo y el
+    # bloque de resultado —cuyo numero de elementos varia— por detras.
+    watch_box = st.container()
+    result_box = st.container()
+    with watch_box:
+        _job_watcher()
+    with result_box:
+        _render_job_result()
 
     render_sidebar()
 
