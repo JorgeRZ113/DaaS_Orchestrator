@@ -52,6 +52,9 @@ mutation = [
 
 [project.scripts]
 daas-orchestrator = "app.main:main"
+# Cliente de consola (F6.3). Habla con la API por HTTP reutilizando
+# `app/client.py`, el mismo modulo que usa la UI: no arranca el servicio.
+daas = "app.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
