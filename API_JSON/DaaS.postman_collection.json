@@ -550,6 +550,64 @@
             "description": "📄 El mismo resumen, pero como texto Markdown en vez de JSON\n\nEs exactamente el fichero summary.md que se guarda en artifacts/<execution_id>/ en cada hito de la ejecución.\n\nPensado para leerlo de un vistazo o pegarlo en un informe:\n\n  # Execution summary — tn-demo3_0\n\n  - **Status:** ✅ Completed\n  - **Total duration:** 6 min 27 s\n  - **Network:** tn-demo3_0\n\n  | Step                             |   Duration | Status |\n  |----------------------------------|-----------:|:------:|\n  | Creating the network in TNLCM    |     7.5 s  |   ✅   |\n  | Starting up the virtual machines | 3 min 57 s |   ✅   |\n  | Experiment \"exp-demo\"            |    32.9 s  |   ✅   |\n\n⚠️ Postman lo muestra como texto plano, sin renderizar."
           },
           "response": []
+        },
+        {
+          "name": "GET /executions/{execution_id}/download",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/download",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "download"
+              ]
+            },
+            "description": "📦 Descarga TODO lo que ha dejado la ejecución, en un único ZIP\n\nLleva el dataset_descriptor.yaml que la produjo (verbatim), el resumen (summary.md/.json), los datasets recolectados en result/<experimento>/, los artefactos intermedios (archivos_generados/) y un README.md generado con los metadatos de la ejecución (estado, duración, experimentos, qué es cada carpeta).\n\nPostman detecta el Content-Type application/zip y ofrece guardar el fichero (botón \"Save Response\" > \"Save to a file\"); no lo intentes previsualizar.\n\n🔒 Por defecto NO incluye los ficheros con claves de acceso: la config de WireGuard (<tn_id>.conf, lleva la PrivateKey del túnel) y los informes crudos de TNLCM (tnlcm_report_raw.md / tnlcm_report_summary.json, llevan el token de InfluxDB). Para incluirlos, ver la petición siguiente (?secrets=true).\n\nRespuestas: 200 ZIP; 400 execution_id inválido; 404 la ejecución no tiene carpeta de artefactos."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /executions/{execution_id}/download?secrets=true",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/executions/{{executionId}}/download?secrets=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "executions",
+                "{{executionId}}",
+                "download"
+              ],
+              "query": [
+                {
+                  "key": "secrets",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "🔑 El mismo ZIP, pero pidiendo explícitamente los ficheros con claves de acceso\n\nAñade al ZIP el <tn_id>.conf de WireGuard (PrivateKey/PresharedKey del túnel) y los informes crudos de TNLCM (tnlcm_report_raw.md, tnlcm_report_summary.json — token de InfluxDB y credenciales). Úsalo solo si de verdad necesitas reconstruir el túnel o inspeccionar el report crudo; el ZIP deja de poder compartirse sin revisar antes qué lleva dentro."
+          },
+          "response": []
         }
       ]
     },
