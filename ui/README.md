@@ -48,6 +48,7 @@ pip install -e ".[ui]"
    - **Resumen** → `GET /executions/{id}/summary`
    - **Estado** → `GET /executions/{id}` y `/detail`
    - **Experimento ELCM** → `POST /executions/{id}/elcm`
+   - **Descargar** → `GET /executions/{id}/download`
    - **Borrar TN** → `DELETE /executions/{id}/tn`
 
 ## Pestaña «Resumen»
@@ -158,9 +159,21 @@ podrían lanzar a la vez. Quien lo impide de verdad es el servidor, que responde
 
 ## Descargar la ejecución
 
-Desde *Estado*, **Preparar ZIP** empaqueta todo lo que ha dejado la ejecución:
+La descarga es una **pestaña propia**, no un apéndice de *Estado*: el caso
+habitual es querer los artefactos de una TN anterior, y para eso basta con
+escribir su `execution_id` —no hay que consultar nada primero—. El servidor los
+sirve leyendo `artifacts/<execution_id>/`, así que siguen ahí aunque la TN esté
+borrada (el teardown no toca esa carpeta) y aunque el orquestador se haya
+reiniciado por medio.
+
+**Preparar ZIP** comprime todo lo que ha dejado la ejecución:
 el descriptor que la produjo, el resumen, los datasets recolectados, los
 artefactos intermedios y un `README.md` generado que explica qué es cada cosa.
+
+Ese `README.md` es lo único que necesita el registro de la ejecución, no solo la
+carpeta: el estado se recupera de `executions.json` al arrancar, así que un
+reinicio no lo pierde, pero una carpeta huérfana en `artifacts/` —de la que ya no
+queda registro— se empaqueta igual, sin él.
 
 Por defecto **no** incluye los ficheros con claves de acceso —la configuración de
 WireGuard y los informes crudos de TNLCM, que llevan la clave privada del túnel y
