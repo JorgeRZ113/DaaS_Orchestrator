@@ -301,6 +301,149 @@ def test_a_504_says_the_work_continues_instead_of_failing(app: AppTest, blocking
     assert any("sigue en curso" in message.value.lower() for message in app.warning)
 
 
+# ===== Descarga del ZIP (pestana Descargar) =====
+#
+# La descarga es una pestana aparte porque el caso normal es querer los
+# artefactos de una TN ANTERIOR, y para eso no hace falta consultar su estado:
+# el servidor los sirve leyendo `artifacts/<id>/`. Ademas el ZIP se pide en DOS
+# clics —«Preparar» y luego «Descargar»— y entre uno y otro Streamlit reejecuta
+# el script entero, que es donde esto estuvo roto: con la consulta y el payload
+# en variables transitorias, el primer clic vaciaba la pestana y se tragaba el
+# clic, asi que el fichero no llegaba a existir nunca. Lo unico que lo
+# demuestra es recorrer el camino entero.
+
+ZIP_LABEL = "Descargar tn-1.zip"
+
+
+@pytest.fixture
+def recorded_execution(monkeypatch):
+    """Una ejecucion consultable y su ZIP, sin servidor detras.
+
+    Devuelve lo que se le pidio al cliente: los valores de `secrets` con los que
+    se llamo a la descarga —asi se comprueba que la casilla llega de verdad— y
+    las consultas de estado, que en esta pestana tienen que ser cero.
+    """
+    calls: dict[str, list] = {"status": [], "download": []}
+
+    def _download(self, execution_id, *, secrets=False):
+        calls["download"].append(secrets)
+        return b"PK\x03\x04" + b"z" * 2048
+
+    def _status(self, execution_id):
+        calls["status"].append(execution_id)
+        return {"status": "COMPLETED", "tn_id": "tn-1"}
+
+    monkeypatch.setattr(api_client.ApiClient, "get_execution", _status)
+    monkeypatch.setattr(
+        api_client.ApiClient,
+        "get_execution_detail",
+        lambda self, eid: {"tn_state": "activated"},
+    )
+    monkeypatch.setattr(api_client.ApiClient, "download_execution", _download)
+    return calls
+
+
+def _open_download(at: AppTest, execution_id: str = "tn-1") -> AppTest:
+    """Deja la pestana Descargar con un execution_id escrito."""
+    _connected(at)
+    at.text_input(key="bundle_execution_id").set_value(execution_id).run()
+    return at
+
+
+def _query_status(at: AppTest, execution_id: str = "tn-1") -> AppTest:
+    """Deja la pestana Estado con una ejecucion ya consultada."""
+    _connected(at)
+    at.text_input(key="status_execution_id").set_value(execution_id).run()
+    at.button(key="status_query").click().run()
+    return at
+
+
+def _zip_buttons(at: AppTest) -> list:
+    return [button for button in at.download_button if button.label.startswith(ZIP_LABEL)]
+
+
+def test_the_zip_needs_no_status_query_at_all(app: AppTest, recorded_execution) -> None:
+    """El motivo de que la descarga sea una pestana propia.
+
+    Para los artefactos de una TN vieja basta el identificador: si esto obligara
+    a consultar el estado antes, una ejecucion que el orquestador ya no tiene en
+    memoria quedaria fuera de alcance.
+    """
+    _open_download(app)
+    app.button(key="bundle_prepare").click().run()
+
+    assert _zip_buttons(app), "con el id escrito tiene que bastar"
+    assert recorded_execution["status"] == [], "no se consulta el estado para descargar"
+
+
+def test_the_prepare_button_waits_for_an_execution_id(app: AppTest, recorded_execution) -> None:
+    """Sin identificador no hay nada que comprimir."""
+    _open_download(app, "")
+
+    assert app.button(key="bundle_prepare").disabled
+    assert recorded_execution["download"] == []
+
+
+def test_preparing_the_zip_leaves_a_download_button(app: AppTest, recorded_execution) -> None:
+    """La regresion de verdad: el clic en «Preparar ZIP» se perdia por el camino."""
+    _open_download(app)
+    app.button(key="bundle_prepare").click().run()
+
+    assert recorded_execution["download"] == [False], "sin marcar la casilla, sin secretos"
+    assert _zip_buttons(app), "el boton de descarga tiene que quedar a la vista"
+
+
+def test_the_zip_stays_available_after_downloading_it(app: AppTest, recorded_execution) -> None:
+    """Descargar dispara otro rerun; el payload tiene que sobrevivirlo."""
+    _open_download(app)
+    app.button(key="bundle_prepare").click().run()
+    _zip_buttons(app)[0].click().run()
+
+    assert _zip_buttons(app)
+    assert recorded_execution["download"] == [False], "y no se vuelve a comprimir en el servidor"
+
+
+def test_a_zip_prepared_with_other_parameters_is_not_offered(
+    app: AppTest, recorded_execution
+) -> None:
+    """El fichero ya comprimido no lleva los secretos que la casilla promete."""
+    _open_download(app)
+    app.button(key="bundle_prepare").click().run()
+    app.checkbox(key="bundle_secrets").check().run()
+
+    assert not _zip_buttons(app), "el ZIP viejo ya no corresponde a lo que se ve"
+    assert any("Vuelve a prepararlo" in message.value for message in app.info)
+
+    app.button(key="bundle_prepare").click().run()
+    assert recorded_execution["download"] == [False, True]
+    assert _zip_buttons(app)
+    assert any("claves privadas" in message.value for message in app.warning)
+
+
+def test_a_zip_prepared_for_another_execution_is_not_offered(
+    app: AppTest, recorded_execution
+) -> None:
+    """Encadenar descargas de varias TN no puede servir el ZIP de la anterior."""
+    _open_download(app)
+    app.button(key="bundle_prepare").click().run()
+    app.text_input(key="bundle_execution_id").set_value("tn-vieja").run()
+
+    assert not _zip_buttons(app)
+    assert any("Vuelve a prepararlo" in message.value for message in app.info)
+
+
+def test_the_status_tab_survives_a_rerun_from_another_tab(app: AppTest, recorded_execution) -> None:
+    """`st.tabs` ejecuta TODAS las pestanas en cada pasada.
+
+    Con el `st.button` transitorio que habia, tocar cualquier widget de otra
+    pestana borraba la consulta de Estado por el camino.
+    """
+    _query_status(app)
+    app.checkbox(key="bundle_secrets").check().run()
+
+    assert app.json, "el detalle consultado no puede desaparecer"
+
+
 def test_an_unexpected_client_crash_still_releases_the_lock(app: AppTest, blocking_call) -> None:
     """Sin esto, un fallo inesperado dejaria la UI bloqueada para siempre."""
     gate, outcome = blocking_call
