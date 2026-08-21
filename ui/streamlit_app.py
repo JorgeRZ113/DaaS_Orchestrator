@@ -750,7 +750,13 @@ def tab_status() -> None:
         value=st.session_state.get("last_execution_id", ""),
         key="status_execution_id",
     )
-    if not st.button("Consultar"):
+    # La consulta se recuerda en vez de vivir un solo rerun. Debajo hay una
+    # casilla y dos botones —los del ZIP—, y con un `st.button` transitorio el
+    # primer clic en cualquiera de ellos vuelve a dar False aquí: la pestaña se
+    # vaciaba entera y el clic se perdía por el camino. Mismo patrón que Resumen.
+    if st.button("Consultar", key="status_query"):
+        st.session_state["status_requested"] = True
+    if not st.session_state.get("status_requested"):
         return
 
     client = _get_client()
@@ -784,6 +790,36 @@ def tab_status() -> None:
     st.markdown("**Detalle completo**")
     st.json(detail)
 
+
+# ===== Pestaña: Descargar =====
+
+BUNDLE_KEY = "prepared_bundle"
+
+
+def tab_download() -> None:
+    """Recupera el ZIP de una ejecución cualquiera, sin pasar por su estado.
+
+    Vive fuera de Estado a propósito: para bajarse los artefactos de una TN
+    anterior no hace falta consultar nada, basta con su identificador. El
+    servidor los sirve leyendo `artifacts/<execution_id>/`, así que siguen
+    disponibles aunque la TN ya esté borrada —el teardown no toca esa carpeta—
+    y aunque el orquestador se haya reiniciado desde entonces.
+    """
+    st.subheader("Descargar los artefactos de una ejecución")
+    execution_id = st.text_input(
+        "execution_id",
+        value=st.session_state.get("last_execution_id", ""),
+        key="bundle_execution_id",
+        help=(
+            "El nombre de la TN (`infrastructure.name`) con el que se lanzó. "
+            "Vale el de cualquier ejecución pasada, no solo la de esta sesión."
+        ),
+    )
+    st.caption(
+        "El ZIP lleva el descriptor que la produjo, el resumen, los datasets "
+        "recolectados y los artefactos intermedios. Si el orquestador todavía "
+        "conoce la ejecución, añade un README con sus metadatos."
+    )
     _render_bundle_download(execution_id.strip())
 
 
@@ -792,8 +828,12 @@ def _render_bundle_download(execution_id: str) -> None:
 
     La descarga se pide solo al pulsar, no al pintar la pestaña: el servidor
     comprime la carpeta entera y no tiene sentido hacerlo en cada refresco.
+
+    El ZIP preparado se guarda en `session_state` porque pulsar «Descargar»
+    dispara otro rerun, y un payload en una variable local desaparecería justo
+    cuando el usuario va a usarlo. Se guarda junto a los parámetros con los que
+    se pidió: si cambian, el fichero deja de ser el que describe la pantalla.
     """
-    st.markdown("**Descargar la ejecución**")
     secrets = st.checkbox(
         "Incluir ficheros con claves de acceso",
         key="bundle_secrets",
@@ -804,18 +844,45 @@ def _render_bundle_download(execution_id: str) -> None:
             "fichero en consecuencia."
         ),
     )
-    if not st.button("Preparar ZIP", key="bundle_prepare", icon=":material/folder_zip:"):
+    prepare = st.button(
+        "Preparar ZIP",
+        key="bundle_prepare",
+        icon=":material/folder_zip:",
+        disabled=not execution_id,
+        help=None if execution_id else "Escribe antes el execution_id.",
+    )
+    if prepare:
+        # `disabled=` no lo impone el servidor de Streamlit, solo el navegador.
+        if not execution_id:
+            return
+        client = _get_client()
+        if client is None:
+            return
+        try:
+            payload = client.download_execution(execution_id, secrets=secrets)
+        except ApiError as exc:
+            _show_api_error(exc)
+            return
+        st.session_state[BUNDLE_KEY] = {
+            "execution_id": execution_id,
+            "secrets": secrets,
+            "payload": payload,
+        }
+
+    bundle = st.session_state.get(BUNDLE_KEY)
+    if bundle is None:
+        return
+    # Un ZIP preparado para otra ejecución, o con la casilla en la otra
+    # posición, ya no es el que la pantalla describe: antes que entregar un
+    # fichero que no corresponde, se pide prepararlo de nuevo.
+    if bundle["execution_id"] != execution_id or bundle["secrets"] != secrets:
+        st.info(
+            "El ZIP preparado era para otros parámetros. Vuelve a prepararlo.",
+            icon=":material/info:",
+        )
         return
 
-    client = _get_client()
-    if client is None:
-        return
-    try:
-        payload = client.download_execution(execution_id, secrets=secrets)
-    except ApiError as exc:
-        _show_api_error(exc)
-        return
-
+    payload = bundle["payload"]
     st.download_button(
         f"Descargar {execution_id}.zip ({len(payload) / 1024:.0f} KiB)",
         data=payload,
@@ -1170,7 +1237,11 @@ def main() -> None:
 
     render_sidebar()
 
-    tabs = st.tabs(["Nueva ejecución", "Resumen", "Estado", "Experimento ELCM", "Borrar TN"])
+    # El orden sigue el ciclo real: desplegar, mirar cómo va, comprobar, hacer
+    # el experimento, llevarse los datos y, solo entonces, borrar la TN.
+    tabs = st.tabs(
+        ["Nueva ejecución", "Resumen", "Estado", "Experimento ELCM", "Descargar", "Borrar TN"]
+    )
     with tabs[0]:
         tab_new_execution()
     with tabs[1]:
@@ -1180,6 +1251,8 @@ def main() -> None:
     with tabs[3]:
         tab_elcm()
     with tabs[4]:
+        tab_download()
+    with tabs[5]:
         tab_teardown()
 
 
