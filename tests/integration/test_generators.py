@@ -162,7 +162,7 @@ async def test_generate_tnlcm_descriptor_resolves_compound_ueransim_template():
 async def test_experiment_descriptor_references_testcases_by_internal_name(tmp_path):
     # Los TestCases se toman verbatim (no se re-renderizan) y el descriptor los
     # referencia por su Name interno, no por el nombre de fichero.
-    tc_one = tmp_path / "TC_ping.yml"
+    tc_one = tmp_path / "TC_1_Preflight.yml"
     tc_one.write_text("Version: 2\nName: Test_ping\nStandard: True\n", encoding="utf-8")
     tc_two = tmp_path / "otro_fichero.yml"
     tc_two.write_text("Version: 2\nName: TC_Custom\nStandard: True\n", encoding="utf-8")

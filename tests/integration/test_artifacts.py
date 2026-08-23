@@ -26,7 +26,7 @@ def test_build_artifacts_generates_logs_and_metadata(tmp_path) -> None:
                 tn_id="tn-demo",
                 experiment_id="exp-1",
                 results={
-                    "testcases": ["TC_ping.yml", "TestCase_iperf.yml"],
+                    "testcases": ["TC_1_Preflight.yml", "TestCase_iperf.yml"],
                     "logs": [{"line": "ok"}],
                 },
             )

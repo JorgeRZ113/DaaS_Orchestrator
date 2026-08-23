@@ -75,12 +75,12 @@ UE_Preflight:
 
 
 def test_valid_experiment_passes() -> None:
-    _validate(["TC_ping.yml"], ues_paths=["UE_Variables.yml"])
+    _validate(["TC_1_Preflight.yml"], ues_paths=["UE_5_Flujo_Variables.yml"])
 
 
 def test_empty_ue_reference_is_ignored() -> None:
     # Mismo criterio que la fase ELCM, que salta las referencias vacias.
-    _validate(["TC_ping.yml"], ues_paths=[""])
+    _validate(["TC_1_Preflight.yml"], ues_paths=[""])
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ def test_missing_testcase_is_reported() -> None:
 
 
 def test_missing_ue_is_reported() -> None:
-    problems = _problems(["TC_ping.yml"], ues_paths=["UE_inexistente.yml"])
+    problems = _problems(["TC_1_Preflight.yml"], ues_paths=["UE_inexistente.yml"])
 
     assert any(
         "UE_inexistente.yml" in problem and "file not found" in problem for problem in problems
@@ -156,7 +156,7 @@ def test_unparseable_testcase_is_reported(tmp_path) -> None:
 def test_ue_with_testcase_syntax_is_reported(tmp_path) -> None:
     path = _write(tmp_path / "UE_AsTestCase.yml", VALID_TESTCASE)
 
-    problems = _problems(["TC_ping.yml"], ues_paths=[path])
+    problems = _problems(["TC_1_Preflight.yml"], ues_paths=[path])
 
     assert any("TestCase V2 syntax" in problem for problem in problems)
 
@@ -164,7 +164,7 @@ def test_ue_with_testcase_syntax_is_reported(tmp_path) -> None:
 def test_ue_action_without_order_is_reported(tmp_path) -> None:
     path = _write(tmp_path / "UE_NoOrder.yml", 'UE_X:\n  - Task: "Run.Publish"\n')
 
-    problems = _problems(["TC_ping.yml"], ues_paths=[path])
+    problems = _problems(["TC_1_Preflight.yml"], ues_paths=[path])
 
     assert any("no 'Order'" in problem for problem in problems)
 
@@ -175,19 +175,19 @@ def test_ue_action_without_order_is_reported(tmp_path) -> None:
 
 
 def test_dashboard_without_capture_testcase_is_reported() -> None:
-    problems = _problems(["TC_ping.yml"], output=["dashboard"])
+    problems = _problems(["TC_1_Preflight.yml"], output=["dashboard"])
 
     assert any("capture TestCase" in problem for problem in problems)
 
 
 def test_dashboard_with_capture_testcase_passes() -> None:
-    _validate(["TestCase_prometheus_capture.yml"], output=["dashboard"])
+    _validate(["TC_3_Prometheus_Capture_Open5GS.yml"], output=["dashboard"])
 
 
 def test_unimplemented_output_is_reported(monkeypatch) -> None:
     monkeypatch.setattr(elcm_phase, "IMPLEMENTED_DATASET_OUTPUTS", {"logs"})
 
-    problems = _problems(["TC_ping.yml"], output=["csv"])
+    problems = _problems(["TC_1_Preflight.yml"], output=["csv"])
 
     assert any("not implemented yet" in problem for problem in problems)
 
@@ -261,7 +261,7 @@ def test_executions_endpoint_rejects_invalid_experiment_before_deploying(
         "infrastructure": {"name": "tn-preflight"},
         "experiment": {
             "name": "exp-typo",
-            "testcase_paths": ["TC_ping.yml"],
+            "testcase_paths": ["TC_1_Preflight.yml"],
             "ues_paths": ["UE_inexistente.yml"],
         },
     }

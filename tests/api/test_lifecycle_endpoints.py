@@ -23,7 +23,7 @@ def _headers() -> dict[str, str]:
 ELCM_BODY = {
     "experiment": {
         "name": "exp-demo",
-        "testcase_paths": ["TC_ping.yml"],
+        "testcase_paths": ["TC_1_Preflight.yml"],
         "ues_paths": [],
     }
 }
@@ -100,7 +100,7 @@ def test_elcm_accepts_experiment_on_ready_tn(isolated_executions) -> None:
 def test_elcm_stores_per_experiment_dataset(isolated_executions) -> None:
     _add_record("tn-a", ExecutionState.tn_ready, tn_id="tn-a")
     body = {
-        "experiment": {"name": "exp-ds", "testcase_paths": ["TC_ping.yml"], "ues_paths": []},
+        "experiment": {"name": "exp-ds", "testcase_paths": ["TC_1_Preflight.yml"], "ues_paths": []},
         "dataset": {"output": ["csv", "logs"]},
     }
 
@@ -145,7 +145,11 @@ def test_elcm_allows_second_experiment_with_new_name(isolated_executions) -> Non
         experiments=[ExperimentRun(name="exp-demo", status="FINISHED")],
     )
     body = {
-        "experiment": {"name": "exp-demo-2", "testcase_paths": ["TC_ping.yml"], "ues_paths": []}
+        "experiment": {
+            "name": "exp-demo-2",
+            "testcase_paths": ["TC_1_Preflight.yml"],
+            "ues_paths": [],
+        }
     }
 
     response = client.post("/executions/tn-a/elcm?wait=false", json=body, headers=_headers())

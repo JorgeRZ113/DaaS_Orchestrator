@@ -89,7 +89,7 @@ def _descriptor_yaml(**overrides):
         name="tn-demo",
         component=_base_component(),
         parameters={"library_reference_type": "branch", "library_reference_value": "develop"},
-        experiment=descriptor.build_experiment("exp-demo", "TC_ping.yml", ""),
+        experiment=descriptor.build_experiment("exp-demo", "TC_1_Preflight.yml", ""),
         dataset=descriptor.build_dataset(["logs"], {}),
         auto_start_elcm=True,
         ephemeral_tn=False,
@@ -102,7 +102,7 @@ def test_generated_descriptor_validates_against_the_server_model() -> None:
     model = DatasetDescriptor.model_validate(parse_yaml_descriptor(_descriptor_yaml()))
 
     assert model.infrastructure.name == "tn-demo"
-    assert model.experiment.testcase_paths == ["TC_ping.yml"]
+    assert model.experiment.testcase_paths == ["TC_1_Preflight.yml"]
     assert model.dataset.output == ["logs"]
 
 
@@ -225,7 +225,9 @@ def test_generated_elcm_request_validates_against_the_server_model() -> None:
     yaml_text = descriptor.to_yaml(
         descriptor.build_elcm_request(
             experiment=descriptor.build_experiment(
-                "exp-2", "TC_Demo_Flow.yml\n TC_ping.yml ", "UE_Demo_Variables.yml"
+                "exp-2",
+                "TC_5_Flujo_Variables.yml\n TC_1_Preflight.yml ",
+                "UE_5_Flujo_Variables.yml",
             ),
             dataset=descriptor.build_dataset(["logs"], {}),
         )
@@ -234,8 +236,8 @@ def test_generated_elcm_request_validates_against_the_server_model() -> None:
     model = ElcmExperimentRequest.model_validate(parse_yaml_descriptor(yaml_text))
 
     # Los espacios sobrantes del textarea se recortan y las lineas vacias caen.
-    assert model.experiment.testcase_paths == ["TC_Demo_Flow.yml", "TC_ping.yml"]
-    assert model.experiment.ues_paths == ["UE_Demo_Variables.yml"]
+    assert model.experiment.testcase_paths == ["TC_5_Flujo_Variables.yml", "TC_1_Preflight.yml"]
+    assert model.experiment.ues_paths == ["UE_5_Flujo_Variables.yml"]
 
 
 def test_ui_offers_every_output_format_the_model_accepts() -> None:

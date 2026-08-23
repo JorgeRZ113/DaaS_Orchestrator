@@ -130,27 +130,27 @@ async def test_collect_results_200_not_found_fails_without_retry(fake_http):
 async def test_upload_test_cases_sends_testcase_file_type_by_default(
     fake_http, tmp_path, monkeypatch, caplog
 ):
-    testcase_path = tmp_path / "TC_ping.yml"
+    testcase_path = tmp_path / "TC_1_Preflight.yml"
     testcase_path.write_text("name: ping", encoding="utf-8")
     monkeypatch.setattr(elcm, "elcm_testcase_dir", lambda: tmp_path)
     fake_http.respond(200, text="uploaded")
     caplog.set_level("INFO")
 
-    await elcm.upload_test_cases(["TC_ping.yml"], elcm_base_url=ELCM_BASE_URL)
+    await elcm.upload_test_cases(["TC_1_Preflight.yml"], elcm_base_url=ELCM_BASE_URL)
 
     assert fake_http.paths == [UPLOAD_PATH]
-    assert "ELCM testcase uploaded successfully: TC_ping.yml" in caplog.text
+    assert "ELCM testcase uploaded successfully: TC_1_Preflight.yml" in caplog.text
 
     fields = fake_http.multipart()
     assert fields["file_type"][1] == "testcase"
-    assert fields["test_case"][0] == "TC_ping.yml"
+    assert fields["test_case"][0] == "TC_1_Preflight.yml"
 
 
 @pytest.mark.asyncio
 async def test_upload_test_cases_sends_ues_file_type(fake_http, tmp_path):
     # Los UEs tienen que subirse con file_type="ues": con "testcase" acabarian en
     # la carpeta equivocada de ELCM y Facility no los registraria nunca.
-    ue_path = tmp_path / "UE_Variables.yml"
+    ue_path = tmp_path / "UE_5_Flujo_Variables.yml"
     ue_path.write_text("UE_Variables:\n  - Order: 0\n    Task: Run.Publish\n", encoding="utf-8")
     fake_http.respond(200, text="uploaded")
 
@@ -159,7 +159,7 @@ async def test_upload_test_cases_sends_ues_file_type(fake_http, tmp_path):
     assert fake_http.paths == [UPLOAD_PATH]
     fields = fake_http.multipart()
     assert fields["file_type"][1] == "ues"
-    assert fields["test_case"][0] == "UE_Variables.yml"
+    assert fields["test_case"][0] == "UE_5_Flujo_Variables.yml"
 
 
 @pytest.mark.asyncio
@@ -176,13 +176,13 @@ async def test_upload_test_cases_sends_ues_file_type(fake_http, tmp_path):
 async def test_upload_test_cases_fails_without_retry_and_reports_backend_error(
     fake_http, tmp_path, monkeypatch, status_code, backend_message
 ):
-    testcase_path = tmp_path / "TC_ping.yml"
+    testcase_path = tmp_path / "TC_1_Preflight.yml"
     testcase_path.write_text("name: ping", encoding="utf-8")
     monkeypatch.setattr(elcm, "elcm_testcase_dir", lambda: tmp_path)
     fake_http.respond(status_code, json={"message": backend_message})
 
     with pytest.raises(elcm.TnUploadTestCaseError) as exc_info:
-        await elcm.upload_test_cases(["TC_ping.yml"], elcm_base_url=ELCM_BASE_URL)
+        await elcm.upload_test_cases(["TC_1_Preflight.yml"], elcm_base_url=ELCM_BASE_URL)
 
     message = str(exc_info.value)
     assert backend_message in message

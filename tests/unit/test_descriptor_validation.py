@@ -10,19 +10,19 @@ from app.domain.execution import ExecutionRecord, ExperimentRun
 def test_dataset_descriptor_uses_logs_as_default_output() -> None:
     descriptor = DatasetDescriptor(
         infrastructure={"name": "tn-demo", "descriptor_path": "tn_descriptor_elcm.yaml"},
-        experiment={"name": "exp-demo", "testcase_paths": ["TC_ping.yml"]},
+        experiment={"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"]},
     )
 
     assert descriptor.dataset.output == ["logs"]
     assert descriptor.dataset.wants("logs")
-    assert descriptor.experiment.testcase_paths == ["TC_ping.yml"]
+    assert descriptor.experiment.testcase_paths == ["TC_1_Preflight.yml"]
 
 
 def test_dataset_descriptor_rejects_unsupported_output() -> None:
     try:
         DatasetDescriptor(
             infrastructure={"name": "tn-demo", "descriptor_path": "tn_descriptor_elcm.yaml"},
-            experiment={"name": "exp-demo", "testcase_paths": ["TC_ping.yml"]},
+            experiment={"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"]},
             dataset={"output": "zip"},
         )
         raise AssertionError("DatasetDescriptor should reject unsupported dataset.output")
@@ -146,7 +146,7 @@ def test_component_without_values_is_accepted_as_empty_mapping() -> None:
     """En JSON se escribe `{}`; el modelo debe tratarlo como «usa los defaults»."""
     descriptor = DatasetDescriptor(
         infrastructure={"name": "tn-demo", "component": {"base": {}, "ueransim_both": {}}},
-        experiment={"name": "exp-demo", "testcase_paths": ["TC_ping.yml"]},
+        experiment={"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"]},
     )
 
     assert descriptor.infrastructure.component["ueransim_both"] == {}
@@ -160,11 +160,11 @@ def test_component_left_empty_in_yaml_means_the_same_as_an_empty_mapping() -> No
     """
     from_yaml = DatasetDescriptor(
         infrastructure={"name": "tn-demo", "component": {"base": {}, "ueransim_both": None}},
-        experiment={"name": "exp-demo", "testcase_paths": ["TC_ping.yml"]},
+        experiment={"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"]},
     )
     from_json = DatasetDescriptor(
         infrastructure={"name": "tn-demo", "component": {"base": {}, "ueransim_both": {}}},
-        experiment={"name": "exp-demo", "testcase_paths": ["TC_ping.yml"]},
+        experiment={"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"]},
     )
 
     assert from_yaml.model_dump() == from_json.model_dump()
@@ -177,7 +177,7 @@ def test_component_with_values_is_left_untouched() -> None:
             "name": "tn-demo",
             "component": {"base": {"influxdb_user": "admin"}, "vnet": None},
         },
-        experiment={"name": "exp-demo", "testcase_paths": ["TC_ping.yml"]},
+        experiment={"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"]},
     )
 
     assert descriptor.infrastructure.component == {
@@ -189,7 +189,7 @@ def test_component_with_values_is_left_untouched() -> None:
 def test_component_is_still_optional() -> None:
     descriptor = DatasetDescriptor(
         infrastructure={"name": "tn-demo"},
-        experiment={"name": "exp-demo", "testcase_paths": ["TC_ping.yml"]},
+        experiment={"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"]},
     )
 
     assert descriptor.infrastructure.component is None

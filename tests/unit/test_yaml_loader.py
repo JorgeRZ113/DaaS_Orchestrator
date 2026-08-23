@@ -81,7 +81,7 @@ def test_yaml_and_json_produce_the_same_structure() -> None:
     experiment:
       name: demo
       testcase_paths:
-        - TC_ping.yml
+        - TC_1_Preflight.yml
       ues_paths: []
     dataset:
       output: [logs]
@@ -105,7 +105,11 @@ def test_yaml_and_json_produce_the_same_structure() -> None:
                     "library_reference_value": "develop",
                 },
             },
-            "experiment": {"name": "demo", "testcase_paths": ["TC_ping.yml"], "ues_paths": []},
+            "experiment": {
+                "name": "demo",
+                "testcase_paths": ["TC_1_Preflight.yml"],
+                "ues_paths": [],
+            },
             "dataset": {"output": ["logs"]},
             "auto_start_elcm": True,
             "ephemeral_tn": False,

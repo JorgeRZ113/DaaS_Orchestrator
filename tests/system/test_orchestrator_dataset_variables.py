@@ -39,7 +39,7 @@ CAPTURE = {
 
 
 def _capture_file(tmp_path: Path) -> str:
-    path = tmp_path / "TestCase_prometheus_capture.yml"
+    path = tmp_path / "TC_3_Prometheus_Capture_Open5GS.yml"
     path.write_text(yaml.safe_dump(CAPTURE), encoding="utf-8")
     return str(path)
 

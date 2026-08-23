@@ -52,7 +52,7 @@ def _patch_tn_state(monkeypatch, state):
 async def _start(name: str = "exp-fix"):
     return await orchestrator.start_elcm_phase(
         "tn-a",
-        ExperimentConfig(name=name, testcase_paths=["TC_ping.yml"]),
+        ExperimentConfig(name=name, testcase_paths=["TC_1_Preflight.yml"]),
         DatasetRequest(output=["logs"]),
     )
 

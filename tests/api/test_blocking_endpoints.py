@@ -34,7 +34,7 @@ def _headers() -> dict[str, str]:
 ELCM_BODY = {
     "experiment": {
         "name": "exp-block",
-        "testcase_paths": ["TC_ping.yml"],
+        "testcase_paths": ["TC_1_Preflight.yml"],
         "ues_paths": [],
     }
 }
@@ -283,7 +283,7 @@ async def test_cancelled_status_is_terminal(monkeypatch) -> None:
     monkeypatch.setattr(elcm_phase, "ELCM_POLL_INTERVAL_SECONDS", 0.01)
 
     await elcm_phase.run_elcm_phase(
-        "tn-cancel", ExperimentConfig(name="exp-c", testcase_paths=["TC_ping.yml"])
+        "tn-cancel", ExperimentConfig(name="exp-c", testcase_paths=["TC_1_Preflight.yml"])
     )
 
     assert record.status == ExecutionState.tn_ready
@@ -300,7 +300,7 @@ async def test_unreadable_err_status_is_terminal(monkeypatch) -> None:
     monkeypatch.setattr(elcm_phase, "ELCM_POLL_INTERVAL_SECONDS", 0.01)
 
     await elcm_phase.run_elcm_phase(
-        "tn-err", ExperimentConfig(name="exp-e", testcase_paths=["TC_ping.yml"])
+        "tn-err", ExperimentConfig(name="exp-e", testcase_paths=["TC_1_Preflight.yml"])
     )
 
     assert record.status == ExecutionState.tn_ready
@@ -320,7 +320,7 @@ async def test_dataset_timeout_leaves_a_partial_result(monkeypatch) -> None:
     monkeypatch.setattr(elcm_phase, "DATASET_MAX_SECONDS", 0.05)
 
     await elcm_phase.run_elcm_phase(
-        "tn-partial", ExperimentConfig(name="exp-p", testcase_paths=["TC_ping.yml"])
+        "tn-partial", ExperimentConfig(name="exp-p", testcase_paths=["TC_1_Preflight.yml"])
     )
 
     # El experimento SI termino: la TN sigue viva y el error describe lo que falto.
@@ -354,7 +354,7 @@ async def test_dataset_artifacts_are_flushed_incrementally(monkeypatch) -> None:
     monkeypatch.setattr(results, "collect_raw", _capture_raw)
 
     await elcm_phase.run_elcm_phase(
-        "tn-flush", ExperimentConfig(name="exp-f", testcase_paths=["TC_ping.yml"])
+        "tn-flush", ExperimentConfig(name="exp-f", testcase_paths=["TC_1_Preflight.yml"])
     )
 
     assert len(seen_during_raw) == 1

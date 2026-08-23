@@ -27,7 +27,7 @@ infrastructure:
 experiment:
   name: demo
   testcase_paths:
-    - TC_ping.yml
+    - TC_1_Preflight.yml
 dataset:
   output: [logs]
 """
@@ -108,7 +108,7 @@ def test_descriptor_path_is_excluded_from_generated_forms() -> None:
     descriptor = DatasetDescriptor.model_validate(
         {
             "infrastructure": {"name": "tn_excl", "descriptor_path": "algo.yaml"},
-            "experiment": {"name": "demo", "testcase_paths": ["TC_ping.yml"]},
+            "experiment": {"name": "demo", "testcase_paths": ["TC_1_Preflight.yml"]},
         }
     )
 
@@ -178,7 +178,7 @@ def test_experiment_request_is_persisted_per_experiment() -> None:
 
 def test_experiment_request_keeps_the_original_yaml() -> None:
     descriptor = _descriptor()
-    raw = "experiment:\n  name: demo   # el de siempre\n  testcase_paths: [TC_ping.yml]\n"
+    raw = "experiment:\n  name: demo   # el de siempre\n  testcase_paths: [TC_1_Preflight.yml]\n"
 
     path = artifacts.persist_experiment_request(
         "tn_exp_raw",

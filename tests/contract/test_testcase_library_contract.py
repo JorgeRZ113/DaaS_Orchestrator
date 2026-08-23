@@ -22,22 +22,115 @@ from app.rendering.paths import elcm_testcase_dir
 # de todos los UEs y TestCases se mezclan en una unica lista ordenada por Order.
 # Mantener bandas disjuntas es lo que permite combinar varios TestCases sin que
 # se entrelacen de forma arbitraria.
+#
+# Cada TestCase es autocontenido -captura Y entrega en el mismo fichero- asi que
+# ocupa un BLOQUE DE 100 propio, y el numero del nombre coincide con su bloque.
+# El orden de los bloques ya deja el preflight antes de las capturas.
 ORDER_BANDS: dict[str, tuple[int, int]] = {
-    "UE_Variables.yml": (0, 9),
+    # Los ficheros UE publican variables globales y van todos en Order 0.
+    "UE_1_Preflight.yml": (0, 9),
+    "UE_2_Prometheus_Capture_Generico.yml": (0, 9),
+    "UE_3_Prometheus_Capture_Open5GS.yml": (0, 9),
+    "UE_4_Dataset_Csv.yml": (0, 9),
+    "UE_5_Flujo_Variables.yml": (0, 9),
+    "UE_6_Latencia_SLA.yml": (0, 9),
     "UE_Variables_TEMPLATE.yml": (0, 9),
-    "TestCase_prometheus_capture.yml": (0, 99),
-    "TestCase_prometheus_capture2.yml": (0, 99),
-    "TC_ping.yml": (0, 99),
-    "TC_V2_BASE_TEMPLATE.yml": (0, 99),
-    "TC_Demo_Variables.yml": (100, 119),
-    "TC_Demo_Flow.yml": (120, 139),
-    "TC_Demo_Python.yml": (140, 159),
-    "TC_Util_Inventory.yml": (300, 319),
-    "TC_Util_Connectivity.yml": (320, 339),
-    "TC_Util_RestApi.yml": (340, 359),
-    "TC_Check_PublishTasks.yml": (500, 519),
-    "TC_Util_ExportCsv.yml": (820, 839),
+    "TC_1_Preflight.yml": (100, 199),
+    "TC_2_Prometheus_Capture_Generico.yml": (200, 299),
+    "TC_3_Prometheus_Capture_Open5GS.yml": (300, 399),
+    "TC_4_Dataset_Csv.yml": (400, 499),
+    "TC_5_Flujo_Variables.yml": (500, 599),
+    "TC_6_Latencia_SLA.yml": (600, 699),
+    # Esqueleto para escribir TestCases nuevos, no ejecutable en composicion.
+    "TC_V2_BASE_TEMPLATE.yml": (700, 799),
 }
+
+
+# Claves que el motor deja siempre en el diccionario de valores publicados: se
+# pueden leer con @[...] aunque ningun UE las publique. Salen del propio log de
+# ELCM ("Available keys: [...]").
+ENGINE_PUBLISHED_KEYS: frozenset[str] = frozenset(
+    {"Descriptor", "UserId", "ExecutionId", "Configuration", "DeployedSliceId", "PreviousTaskLog"}
+)
+
+# Referencias a variables inexistentes puestas A PROPOSITO para ensenar que hace
+# el motor cuando la clave no existe. Cualquier otra ausencia es un error.
+DELIBERATELY_UNDEFINED: dict[str, set[str]] = {
+    "TC_5_Flujo_Variables.yml": {"VariableQueNoExiste"},
+}
+
+# Tasks cuyo parametro 'Key' LEE un valor publicado. En Run.Evaluate, en cambio,
+# 'Key' es el nombre bajo el que PUBLICA el resultado.
+_TASKS_THAT_READ_KEY = {"Run.UpgradeVerdict", "Flow.While"}
+
+_EXPANSION = re.compile(r"@\[([^\]]+)\]")
+
+
+def _walk_strings(node) -> list[str]:
+    # Recorre solo los valores del YAML ya parseado, de modo que los comentarios
+    # (que documentan variables de otros TestCases) no cuentan como uso real.
+    if isinstance(node, str):
+        return [node]
+    if isinstance(node, dict):
+        return [s for value in node.values() for s in _walk_strings(value)]
+    if isinstance(node, list):
+        return [s for item in node for s in _walk_strings(item)]
+    return []
+
+
+def _walk_actions(node):
+    if isinstance(node, dict):
+        if node.get("Task"):
+            yield node
+        for value in node.values():
+            yield from _walk_actions(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_actions(item)
+
+
+def _consumed_names(data: dict) -> set[str]:
+    names = set()
+    for text in _walk_strings(data):
+        for capture in _EXPANSION.findall(text):
+            name = capture.split(":", 1)[0]
+            # "@[Grupo.Clave]" fija el grupo de forma explicita; el nombre real
+            # depende del grupo, asi que no se puede comprobar aqui.
+            if "." not in name:
+                names.add(name)
+    for action in _walk_actions(data):
+        config = action.get("Config") or {}
+        if action["Task"] in _TASKS_THAT_READ_KEY and config.get("Key"):
+            names.add(config["Key"])
+        for condition in config.get("Conditions") or []:
+            if isinstance(condition, dict) and condition.get("Key"):
+                names.add(condition["Key"])
+    return names
+
+
+def _produced_names(data: dict) -> set[str]:
+    names = set()
+    for action in _walk_actions(data):
+        task = action["Task"]
+        config = action.get("Config") or {}
+        if task == "Run.Publish":
+            names.update(config.keys())
+        elif task == "Run.Evaluate" and config.get("Key"):
+            names.add(config["Key"])
+        elif task.startswith("Run.PublishFrom"):
+            for entry in config.get("Keys") or []:
+                if isinstance(entry, list) and len(entry) == 2:
+                    names.add(entry[1])
+    return names
+
+
+def _all_ue_published_keys() -> set[str]:
+    keys = set()
+    for path in _library_files():
+        data = _load(path)
+        if _is_ue(data):
+            keys.update(_produced_names(data))
+    return keys
 
 
 def _library_files() -> list[Path]:
@@ -123,6 +216,55 @@ def test_no_expansion_default_contains_a_colon(path: Path):
     text = path.read_text(encoding="utf-8")
     offenders = [cap for cap in re.findall(r"@\[(.*?)]", text) if cap.count(":") > 1]
     assert not offenders, f"{path.name}: defaults con ':' que rompen el Expander: {offenders}"
+
+
+@pytest.mark.parametrize("path", _library_files(), ids=lambda p: p.name)
+def test_testcase_inputs_are_published_by_some_ue(path: Path):
+    # Un TestCase consume dos clases de variables: las que produce el mismo
+    # durante la ejecucion (salidas) y las que espera encontrar ya publicadas
+    # (entradas). Las entradas tienen que estar en algun UE de la biblioteca: si
+    # no, se expanden a <<UNDEFINED>>, que es una cadena valida y no falla, sino
+    # que se cuela hasta la task como si fuera un valor bueno.
+    data = _load(path)
+    if _is_ue(data):
+        pytest.skip("es un fichero UE, no un TestCase")
+
+    inputs = _consumed_names(data) - _produced_names(data)
+    known = (
+        _all_ue_published_keys()
+        | ENGINE_PUBLISHED_KEYS
+        | DELIBERATELY_UNDEFINED.get(path.name, set())
+    )
+
+    missing = sorted(inputs - known)
+    assert not missing, (
+        f"{path.name}: consume {missing} y no lo publica ningun UE de la biblioteca. "
+        f"Anadirlo a su UE_*.yml y a UE_Variables_TEMPLATE.yml, o corregir el nombre."
+    )
+
+
+@pytest.mark.parametrize("path", _library_files(), ids=lambda p: p.name)
+def test_library_does_not_use_experiment_parameters(path: Path):
+    # ELCM tiene DOS mecanismos de variables: el bloque 'Parameters' del TestCase
+    # (que se lee con @[Params.X] y se vuelca entero en @{JSONParameters}) y los
+    # valores publicados por los ficheros UE. Esta biblioteca usa solo el segundo,
+    # para que todas las variables de un experimento esten en un unico sitio.
+    #
+    # Ojo: 'Parameters' DENTRO de un Config es otra cosa -la linea de comandos de
+    # Run.CliExecute- y si esta permitido. Por eso se mira la raiz del documento.
+    data = _load(path)
+    assert "Parameters" not in data, (
+        f"{path.name}: declara el bloque 'Parameters'. Las variables van en su "
+        f"fichero UE_*.yml, no en 'Parameters'."
+    )
+
+    offenders = [
+        text for text in _walk_strings(data) if "@[Params." in text or "@{JSONParameters}" in text
+    ]
+    assert not offenders, (
+        f"{path.name}: usa la expansion del bloque 'Parameters' ({offenders}). "
+        f"Publicar el valor en el UE y leerlo con @[Nombre]."
+    )
 
 
 @pytest.mark.parametrize("path", _library_files(), ids=lambda p: p.name)

@@ -42,7 +42,7 @@ DESCRIPTOR_PAYLOAD = {
             "library_reference_value": "develop",
         },
     },
-    "experiment": {"name": "exp-demo", "testcase_paths": ["TC_ping.yml"], "ues_paths": []},
+    "experiment": {"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"], "ues_paths": []},
     "dataset": {"output": ["logs"]},
     "auto_start_elcm": True,
 }
@@ -62,7 +62,7 @@ infrastructure:
 experiment:
   name: exp-demo
   testcase_paths:
-    - TC_ping.yml
+    - TC_1_Preflight.yml
   ues_paths: []
 dataset:
   output: [logs]
@@ -270,7 +270,7 @@ ELCM_YAML = """\
 experiment:
   name: exp-yaml
   testcase_paths:
-    - TC_ping.yml
+    - TC_1_Preflight.yml
   ues_paths: []
 dataset:
   output: [logs]
@@ -304,7 +304,7 @@ def test_elcm_endpoint_still_accepts_json() -> None:
                 {
                     "experiment": {
                         "name": "exp-json",
-                        "testcase_paths": ["TC_ping.yml"],
+                        "testcase_paths": ["TC_1_Preflight.yml"],
                         "ues_paths": [],
                     },
                     "dataset": {"output": ["logs"]},

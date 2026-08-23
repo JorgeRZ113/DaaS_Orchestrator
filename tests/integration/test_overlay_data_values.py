@@ -26,7 +26,7 @@ def test_dataset_descriptor_merges_all_component_sections() -> None:
                 "network": {"network": {"n2_first_ip": "10.20.20.1"}},
             },
         },
-        experiment={"name": "exp-demo", "testcase_paths": ["TC_ping.yml"]},
+        experiment={"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"]},
     )
 
     # Request values specific for the base template (only editable fields accepted)
@@ -68,7 +68,7 @@ def test_dataset_descriptor_auto_groups_flat_component_fields() -> None:
                 }
             },
         },
-        experiment={"name": "exp-demo", "testcase_paths": ["TC_ping.yml"]},
+        experiment={"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"]},
     )
 
     # Request values for base template
@@ -98,7 +98,7 @@ def test_dataset_descriptor_extracts_flat_mongodb_fields_only_if_editable() -> N
                 }
             },
         },
-        experiment={"name": "exp-demo", "testcase_paths": ["TC_ping.yml"]},
+        experiment={"name": "exp-demo", "testcase_paths": ["TC_1_Preflight.yml"]},
     )
 
     values = descriptor.tnlcm_data_values(template_ref="TNLCM/mongodb_sample_tnlcm_descriptor.yaml")

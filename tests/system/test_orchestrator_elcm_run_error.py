@@ -43,7 +43,7 @@ async def test_run_elcm_phase_run_error_is_propagated_without_retry(monkeypatch,
         infrastructure=InfrastructureConfig(
             name=execution_id, descriptor_path="examples/tn_descriptor_elcm.yaml"
         ),
-        experiment=ExperimentConfig(name="exp-elcm", testcase_paths=["TC_ping.yml"]),
+        experiment=ExperimentConfig(name="exp-elcm", testcase_paths=["TC_1_Preflight.yml"]),
     )
 
     state.executions[execution_id] = ExecutionRecord(
@@ -76,7 +76,7 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
     async def _fake_upload_test_cases(testcase_paths, elcm_base_url=None, execution_id=None):
         call_count["upload_test_cases"] += 1
         raise elcm.TnUploadTestCaseError(
-            "ELCM upload_test_case failed for TC_ping.yml (HTTP 400). Backend error: user_id ausente/invalido. Corrija lo indicado por el mensaje de error antes de volver a lanzar la parte de ELCM."
+            "ELCM upload_test_case failed for TC_1_Preflight.yml (HTTP 400). Backend error: user_id ausente/invalido. Corrija lo indicado por el mensaje de error antes de volver a lanzar la parte de ELCM."
         )
 
     async def _fake_run_experiment(
@@ -100,7 +100,7 @@ async def test_run_elcm_phase_upload_error_stops_before_run_experiment(monkeypat
         infrastructure=InfrastructureConfig(
             name=execution_id, descriptor_path="examples/tn_descriptor_elcm.yaml"
         ),
-        experiment=ExperimentConfig(name="exp-elcm", testcase_paths=["TC_ping.yml"]),
+        experiment=ExperimentConfig(name="exp-elcm", testcase_paths=["TC_1_Preflight.yml"]),
     )
 
     state.executions[execution_id] = ExecutionRecord(
@@ -172,7 +172,7 @@ async def test_run_elcm_phase_logs_not_found_bypasses_tn_status_check(monkeypatc
         infrastructure=InfrastructureConfig(
             name=execution_id, descriptor_path="examples/tn_descriptor_elcm.yaml"
         ),
-        experiment=ExperimentConfig(name="exp-elcm", testcase_paths=["TC_ping.yml"]),
+        experiment=ExperimentConfig(name="exp-elcm", testcase_paths=["TC_1_Preflight.yml"]),
     )
 
     state.executions[execution_id] = ExecutionRecord(

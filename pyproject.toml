@@ -65,7 +65,7 @@ markers = [
     "integration: varios modulos, disco y binario ytt",
     "adapters: contrato HTTP con TNLCM, ELCM e InfluxDB",
     "api: endpoints via TestClient",
-    "contract: biblioteca templates/ELCM/TestCase/ contra las reglas de ELCM",
+    "contract: biblioteca de TestCases y Experiment Descriptor contra las reglas de ELCM",
     "system: ciclo de vida completo con dobles solo en los bordes",
 ]
 addopts = "--strict-markers"
