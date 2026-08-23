@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
@@ -217,6 +217,90 @@ async def delete_execution_tn(
     return await await_phase(
         execution_id, "_tn_purged", orchestrator.TEARDOWN_MAX_WAIT_SECONDS, response
     )
+
+
+CONNECTION_RESPONSES: dict[int | str, dict[str, Any]] = {
+    200: {"description": "La operacion se completo"},
+    207: {"description": "Se completo, pero el tunel quedo sin confirmar (ver vpn_status)"},
+    404: {"description": "La ejecucion no existe o no tiene TN"},
+    409: {"description": "El estado de la ejecucion no admite la operacion"},
+}
+
+
+@router.post(
+    "/executions/{execution_id}/pause",
+    response_model=ExecutionResponse,
+    status_code=200,
+    responses=CONNECTION_RESPONSES,
+)
+async def post_execution_pause(execution_id: str, response: Response):
+    """Aparta la Trial Network sin borrarla: baja su tunel WireGuard.
+
+    La TN sigue viva y 'activated' en TNLCM, con sus recursos ocupados; lo unico
+    que se libera es el tunel, para poder conectar otra TN. Se vuelve con
+    POST /executions/{execution_id}/resume, sin redesplegar y sin tocar el
+    descriptor original ni el historial de experimentos.
+
+    No admite body. Respuestas: 200 pausada y tunel abajo; 207 pausada pero el
+    tunel no se pudo bajar (`vpn_status=DOWN_ERROR`), comprobarlo a mano antes de
+    conectar otra TN; 404 la ejecucion no existe o no tiene TN; 409 hay un
+    experimento en curso, ya estaba pausada o el estado no lo admite.
+    """
+    try:
+        record = await orchestrator.pause_tn(execution_id)
+    except ExecutionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ExecutionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    if record.vpn_status == "DOWN_ERROR":
+        response.status_code = 207
+    return to_execution_response(record)
+
+
+@router.post(
+    "/executions/{execution_id}/resume",
+    response_model=ExecutionResponse,
+    status_code=200,
+    responses=CONNECTION_RESPONSES,
+)
+async def post_execution_resume(execution_id: str, response: Response):
+    """Vuelve a conectar con una TN pausada y la deja lista para experimentos.
+
+    Reabre el tunel con la config que ya guardo la fase TNLCM, tras confirmar
+    contra TNLCM que la TN sigue viva. No lleva descriptor a proposito: no
+    regenera nada, asi que el `dataset_descriptor.yaml` original y los
+    experimentos ya ejecutados se conservan intactos.
+
+    Solo puede haber un tunel arriba a la vez: si otra ejecucion sigue conectada
+    se responde 409 diciendo cual pausar primero.
+
+    No admite body. Respuestas: 200 conectada; 207 la TN se recupero pero el
+    tunel hay que montarlo a mano (`vpn_status=MANUAL_REQUIRED`); 404 la
+    ejecucion no existe o no tiene TN; 409 hay otra TN conectada, la TN ya no
+    existe en TNLCM o el estado no lo admite.
+    """
+    try:
+        record = await orchestrator.resume_tn(execution_id)
+    except ExecutionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ExecutionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    if record.vpn_status == "MANUAL_REQUIRED":
+        response.status_code = 207
+    return to_execution_response(record)
+
+
+@router.get("/executions", response_model=list[ExecutionResponse])
+async def get_executions():
+    """Lista las ejecuciones conocidas, con su estado y su tunel.
+
+    Es lo que permite saber que Trial Networks hay desplegadas y cual tiene el
+    tunel arriba antes de pausar o reconectar: `vpn_status=UP` marca a la que
+    esta conectada ahora mismo.
+    """
+    return [to_execution_response(record) for record in orchestrator.list_executions()]
 
 
 @router.get("/executions/{execution_id}", response_model=ExecutionResponse)
