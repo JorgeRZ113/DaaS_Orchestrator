@@ -1,0 +1,199 @@
+# =============================================================================
+# 3. CAPTURA DEL CORE 5G (Open5GS) -> DATASET + DASHBOARD DE GRAFANA
+# =============================================================================
+# La version especifica del TestCase 2: mismo patron de ventana de medida, pero
+# consultando los KPIs que de verdad le interesan a un experimentador de 5G, y
+# con la seccion Dashboard rellena para que ELCM genere los paneles de Grafana al
+# terminar la ejecucion.
+#
+# Bloque de Order: 300-399.   UE: UE_3_Prometheus_Capture_Open5GS.yml
+# Duracion: @[MonitorTime:120] s de ventana.
+#
+# QUE MIDE
+#   Plano de control  registros iniciales y su tasa de exito (AMF), UEs y gNBs
+#                     conectados, sesiones PDU y bearers (SMF), sesiones PFCP N4
+#   Plano de usuario  paquetes GTP entrantes y salientes del UPF por N3
+#   Sistema           CPU, memoria y throughput de la VM via node_exporter
+#
+# PRERREQUISITO REAL, Y NO ES MENOR: hoy estas consultas devuelven VACIO en una TN
+# recien desplegada, porque Prometheus se despliega sin targets (DP-3) y las
+# metricas de Open5GS estan atadas a loopback dentro de su VM (DP-1). Los dos son
+# defectos de la 6G-Library, no del motor ni de este TestCase. Procedimiento
+# manual para habilitarlas en DEFECTOS_PLATAFORMA_6GLIBRARY.md, anexo A.
+# Mientras sigan abiertos, usa el TestCase 2, que no depende de ellos.
+#
+# EL DASHBOARD SE GENERA SOLO: al acabar, ELCM crea un dashboard con uid
+# "Run<ExecutionId>" y rango temporal ajustado al experimento. Los paneles leen de
+# InfluxDB filtrando por el tag ExecutionId, NO de Prometheus. Requiere la seccion
+# Grafana habilitada en el config de ELCM.
+#
+# las agregaciones acaban con nombres como "sum_rate_node_network_receive_bytes_total_30s_" y no sirven.
+#
+# 'Measurement' NO se parametriza: es clave literal de los bloques KPIs: y
+# Dashboard:, y ademas el orquestador lee este fichero SIN expandir para generar
+# el dashboard, con lo que un @[...] llegaria tal cual.
+#
+# EL NOMBRE DE ESTE FICHERO NO ES LIBRE: tiene que contener "_capture". El
+# orquestador identifica asi el TestCase de captura
+# para poder generar el dashboard.
+# =============================================================================
+Version: 2
+Name: "TC_3_Prometheus_Capture_Open5GS"
+Sequence:
+  - Order: 300
+    Task: "Flow.Parallel"
+    Children:
+      - Task: "Run.PrometheusToInflux"
+        Config:
+          ExecutionId: "@{ExecutionId}"
+          Url: "@[MonitoringIp]"
+          Port: "@[PrometheusPort:9090]"
+          QueriesRange:
+            # ---- Open5GS AMF (plano de control) ----
+            - "ran_ue"
+            - "gnb"
+            - "amf_session"
+            - "fivegs_amffunction_rm_reginitreq"
+            - "fivegs_amffunction_rm_reginitsucc"
+            # ---- Open5GS SMF (sesiones) ----
+            - "ues_active"
+            - "bearers_active"
+            - "pfcp_sessions_active"
+            # ---- Open5GS UPF (plano de usuario, interfaz N3) ----
+            - "fivegs_ep_n3_gtp_indatapktn3upf"
+            - "fivegs_ep_n3_gtp_outdatapktn3upf"
+            - "fivegs_upffunction_upf_sessionnbr"
+            # ---- node_exporter (VM Open5GS/UERANSIM), agregado a 1 serie ----
+            - '100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[30s])) * 100)'
+            - 'avg(node_memory_MemAvailable_bytes)'
+            - 'sum(rate(node_network_receive_bytes_total[30s]))'
+            - 'sum(rate(node_network_transmit_bytes_total[30s]))'
+          Measurement: "OPEN5GS_KPIS"
+          Step: "@[PrometheusStep:5s]"
+          Stop: "stop_capture_open5gs"
+          Account: False
+          Encryption: False
+      - Task: "Flow.Sequence"
+        Children:
+          - Task: "Run.Delay"
+            Config:
+              Time: "@[MonitorTime:120]"
+          - Task: "Run.AddMilestone"
+            Config:
+              Milestone: "stop_capture_open5gs"
+
+  - Order: 310
+    Task: "Run.InfluxToCsv"
+    Config:
+      IdCsv: "@{ExecutionId}_open5gs"
+      Org: "@[InfluxOrg:]"
+      CustomQuery: 'from(bucket: "@[InfluxBucket:testing]") |> range(start: @[InfluxRangeStart:0]) |> filter(fn: (r) => r["_measurement"] == "OPEN5GS_KPIS") |> filter(fn: (r) => r["ExecutionId"] == "@{ExecutionId}") |> pivot(rowKey:["_time"], columnKey:["_field"], valueColumn:"_value") |> group()'
+
+  - Order: 311
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "[Captura Open5GS] CSV en @{TempFolder}/csv_query_@{ExecutionId}_open5gs.csv | measurement OPEN5GS_KPIS | dashboard Grafana uid Run@{ExecutionId}"
+
+Standard: True
+Distributed: False
+KPIs:
+  OPEN5GS_KPIS:
+    - Name: "ran_ue"
+      Type: "Gauge"
+      Description: "UEs conectados a la RAN vistos por el AMF (UERANSIM observado desde el core)"
+    - Name: "gnb"
+      Type: "Gauge"
+      Description: "gNBs conectados al AMF via N2/NGAP"
+    - Name: "amf_session"
+      Type: "Gauge"
+      Description: "Sesiones activas en el AMF"
+    - Name: "fivegs_amffunction_rm_reginitreq"
+      Type: "Counter"
+      Description: "Registros iniciales solicitados"
+    - Name: "fivegs_amffunction_rm_reginitsucc"
+      Type: "Counter"
+      Description: "Registros iniciales completados con exito (junto a reginitreq da la tasa de exito de registro)"
+    - Name: "ues_active"
+      Type: "Gauge"
+      Description: "UEs con sesion PDU activa en el SMF"
+    - Name: "bearers_active"
+      Type: "Gauge"
+      Description: "Bearers activos en el SMF"
+    - Name: "pfcp_sessions_active"
+      Type: "Gauge"
+      Description: "Sesiones PFCP activas entre SMF y UPF (N4)"
+    - Name: "fivegs_ep_n3_gtp_indatapktn3upf"
+      Type: "Counter"
+      Description: "Paquetes GTP entrantes en el UPF por N3 (subida del plano de usuario)"
+    - Name: "fivegs_ep_n3_gtp_outdatapktn3upf"
+      Type: "Counter"
+      Description: "Paquetes GTP salientes del UPF por N3 (bajada del plano de usuario)"
+    - Name: "fivegs_upffunction_upf_sessionnbr"
+      Type: "Gauge"
+      Description: "Numero de sesiones activas en el UPF"
+    - Name: "node_cpu_percent"
+      Type: "Gauge"
+      Description: "CPU media de la VM en % via node_exporter. Campo en Influx: la consulta saneada"
+    - Name: "node_network_throughput"
+      Type: "Gauge"
+      Description: "Bytes/s rx y tx agregados via node_exporter. Campos en Influx: las consultas sum(rate(...)) saneadas"
+
+# Rejilla de Grafana: 24 columnas de ancho. Size: [alto, ancho], Position: [x, y].
+Dashboard:
+  - Name: "UEs con sesion PDU activa (SMF)"
+    Measurement: "OPEN5GS_KPIS"
+    Field: "ues_active"
+    Type: Graph
+    Interval: 5s
+    Unit: short
+    Size: [8, 12]
+    Position: [0, 0]
+    Lines: True
+    Percentage: False
+  - Name: "UEs conectados a la RAN (AMF)"
+    Measurement: "OPEN5GS_KPIS"
+    Field: "ran_ue"
+    Type: Graph
+    Interval: 5s
+    Unit: short
+    Size: [8, 12]
+    Position: [12, 0]
+    Lines: True
+    Percentage: False
+  - Name: "Paquetes N3 entrada UPF (uplink)"
+    Measurement: "OPEN5GS_KPIS"
+    Field: "fivegs_ep_n3_gtp_indatapktn3upf"
+    Type: Graph
+    Interval: 5s
+    Unit: pps
+    Size: [8, 12]
+    Position: [0, 8]
+    Lines: True
+    Percentage: False
+  - Name: "Paquetes N3 salida UPF (downlink)"
+    Measurement: "OPEN5GS_KPIS"
+    Field: "fivegs_ep_n3_gtp_outdatapktn3upf"
+    Type: Graph
+    Interval: 5s
+    Unit: pps
+    Size: [8, 12]
+    Position: [12, 8]
+    Lines: True
+    Percentage: False
+  - Name: "Sesiones activas UPF"
+    Measurement: "OPEN5GS_KPIS"
+    Field: "fivegs_upffunction_upf_sessionnbr"
+    Type: Singlestat
+    Gauge: True
+    Color: ["#299c46", "rgba(237, 129, 40, 0.89)", "#d44a3a"]
+    Thresholds: [0, 5, 8, 10]
+    Size: [6, 6]
+    Position: [0, 16]
+  - Name: "gNBs conectados (AMF)"
+    Measurement: "OPEN5GS_KPIS"
+    Field: "gnb"
+    Type: Singlestat
+    Gauge: False
+    Size: [6, 6]
+    Position: [6, 16]

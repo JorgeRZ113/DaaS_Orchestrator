@@ -57,6 +57,5 @@ Sequence: []
 
 Standard: true
 Distributed: false
-Parameters: #@ data.values.dataset.parameters
 KPIs: #@ data.values.dataset.kpis
 Dashboard: #@ panels()

@@ -1,0 +1,21 @@
+UE_Variables:
+  - Order: 0
+    Task: "Run.Publish"
+    Config:
+      # Las IPs salen del informe de la TN y tienen que ser alcanzables desde el
+      # host de ELCM, que vive en la red interna de la TN.
+      PingTarget: "192.168.199.4"           # componente cuyo alcance se comprueba
+      PingCount: "4"                        # paquetes ICMP
+      PingDeadline: "30"                    # tope total del ping, en segundos
+
+      SutIp: "192.168.199.2"
+      SutPort: "8086"
+      SutEndpoint: "/health"
+      RestApiMethod: "GET"                  # GET | POST | PATCH | DELETE
+      # Otros objetivos comprobados que responden 2xx sin autenticacion:
+      #   Grafana        <monitoring>:3000  /api/health
+      #   Prometheus     <monitoring>:9090  /-/healthy
+      #   ELCM (backend) 127.0.0.1:5000     /elcm/api/v1/facility/testcases
+      #     ^ el de cero dependencias: corre en la maquina del experimento.
+      # NO apuntar a los exporters de Open5GS: sus metricas estan en loopback
+      # dentro de su VM (defecto DP-1) y desde fuera no responden nunca.

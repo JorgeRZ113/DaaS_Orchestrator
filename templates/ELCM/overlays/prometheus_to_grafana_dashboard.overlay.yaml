@@ -12,5 +12,4 @@ dataset:
   measurement: ""       #! lo inyecta el generador con el Measurement de la captura
   interval: "5s"
   metrics: []           #! lo inyecta el generador con las metricas simples de la captura
-  parameters: {}
   kpis: {}

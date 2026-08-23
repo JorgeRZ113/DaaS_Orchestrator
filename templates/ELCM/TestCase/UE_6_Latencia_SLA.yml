@@ -1,0 +1,13 @@
+UE_Variables:
+  - Order: 0
+    Task: "Run.Publish"
+    Config:
+      # La IP sale del informe de la TN y tiene que ser alcanzable desde el host
+      # de ELCM, que vive en la red interna de la TN.
+      PingTarget: "192.168.199.4"           # extremo cuya latencia se caracteriza
+      PingCount: "4"                        # paquetes ICMP por repeticion
+      PingDeadline: "30"                    # tope total de cada ping, en segundos
+
+      SlaLatencyMs: "20"                    # umbral de latencia del veredicto, en ms
+
+      ZipDelivery: "off"                    # "on" cuando Run.CompressFiles este arreglado

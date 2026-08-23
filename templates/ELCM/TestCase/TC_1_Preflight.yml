@@ -1,0 +1,132 @@
+# =============================================================================
+# 1. PREFLIGHT: ¿esta la infraestructura viva antes de medir?
+# =============================================================================
+# Este TestCase comprueba primero: el alcance
+# de red (ICMP) y salud de la API (HTTP), y deja publicadas las dos medidas para
+# que cualquier TestCase posterior las consuma.
+#
+# Bloque de Order: 100-199.   UE: UE_1_Preflight.yml
+# Duracion: unos segundos.    Prerrequisitos: ninguno (solo comprueba).
+#
+# VALORES QUE PUBLICA: PacketLossPct, RttAvgMs, RestApiStatus
+#
+# TAREAS QUE ENSEÑA
+#   Run.CliExecute                 ejecutar un comando y quedarse con su salida
+#   Run.PublishFromPreviousTaskLog convertir esa salida en una variable
+#   Run.PublishFromFile            leer un segundo dato del fichero
+#   Run.UpgradeVerdict             convertir una medida en Pass/Fail
+#   Flow.Select                    saltarse un bloque cuando no tiene sentido
+#   Flow.Sequence                  aislar una tarea que puede lanzar excepcion
+#   Run.RestApi                    consultar la API de un componente
+# =============================================================================
+Version: 2
+Name: "TC_1_Preflight"
+Sequence:
+  - Order: 100
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "[Preflight] destino ICMP @[PingTarget] (@[PingCount:4] paquetes) | API http://@[SutIp]:@[SutPort:80]@[SutEndpoint:/]"
+
+  # '-W' es el timeout por paquete y '-w' el tope total.
+  - Order: 101
+    Task: "Run.CliExecute"
+    Config:
+      CWD: "@{TempFolder}"
+      Parameters: "sh -c 'F=ping_@{ExecutionId}.txt; ping -c @[PingCount:4] -W 2 -w @[PingDeadline:30] @[PingTarget] > $F 2>&1 || true; cat $F'"
+
+  # Ancla en "[CLI]": antes de ejecutar, el motor vuelca al log la configuracion
+  # ya expandida de la tarea, y ahi va el comando entero. Sin el ancla el patron
+  # puede casar con ese volcado en vez de con la salida real.
+  - Order: 102
+    Task: "Run.PublishFromPreviousTaskLog"
+    Config:
+      Pattern: '.*\[CLI\].*?(\d+)% packet loss.*'
+      Keys:
+        - [1, "PacketLossPct"]
+      VerdictOnMatch: "NotSet"
+      VerdictOnNoMatch: "Fail"
+
+  # El segundo dato se saca del FICHERO, no del log: PreviousTaskLog solo ve la
+  # tarea de primer nivel inmediatamente anterior, asi que encadenar dos seguidas
+  # no funciona (la segunda leeria el log de la primera).
+  - Order: 103
+    Task: "Run.PublishFromFile"
+    Config:
+      Path: "@{TempFolder}/ping_@{ExecutionId}.txt"
+      Pattern: '.*rtt min/avg/max/mdev = [\d.]+/([\d.]+)/.*'
+      Keys:
+        - [1, "RttAvgMs"]
+      VerdictOnMatch: "NotSet"
+      VerdictOnNoMatch: "NotSet"
+
+  - Order: 104
+    Task: "Run.UpgradeVerdict"
+    Config:
+      Key: "PacketLossPct"
+      Pattern: '100$'
+      VerdictOnMatch: "Fail"
+      VerdictOnNoMatch: "Pass"
+      VerdictOnMissing: "Inconclusive"
+
+  # PUERTA: sin red no tiene sentido preguntar por HTTP, solo acumularia un fallo
+  # que ya conocemos. 'Negate: true' invierte la condicion, asi que la rama 0 se
+  # ejecuta cuando la perdida NO es del 100%.
+  # Run.RestApi va dentro de un Flow.Sequence porque si el host no responde lanza
+  # la excepcion de la capa HTTP (pase lo que pase con 'Responses'), y una
+  # excepcion en primer nivel aborta la fase Run entera. Dentro de un Flow se
+  # degrada a veredicto y la ejecucion continua.
+  - Order: 110
+    Task: "Flow.Select"
+    Config:
+      Conditions:
+        - Key: "PacketLossPct"
+          Pattern: '100$'
+          Negate: true
+    Children:
+      - Task: "Flow.Sequence"
+        Children:
+          - Task: "Run.RestApi"
+            Config:
+              Host: "@[SutIp]"
+              Port: "@[SutPort:80]"
+              Endpoint: "@[SutEndpoint:/]"
+              Method: "@[RestApiMethod:GET]"
+              Https: False
+              Insecure: False
+              Timeout: 10
+      - Task: "Run.Message"
+        Config:
+          Severity: "WARNING"
+          Message: "[Preflight] sin alcance ICMP, se omite la comprobacion HTTP"
+
+  # Linea tipica del hijo:
+  # "Case0||Seq1||Status '200'; Response: '{...}'"
+  - Order: 111
+    Task: "Run.PublishFromPreviousTaskLog"
+    Config:
+      Pattern: '.*Status\D*(\d+).*'
+      Keys:
+        - [1, "RestApiStatus"]
+      VerdictOnMatch: "NotSet"
+      VerdictOnNoMatch: "NotSet"
+
+  - Order: 112
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "[Preflight] perdida=@[PacketLossPct:100]% | rtt medio=@[RttAvgMs:n-d] ms | HTTP=@[RestApiStatus:no_consultado]"
+
+  - Order: 113
+    Task: "Run.UpgradeVerdict"
+    Config:
+      Key: "RestApiStatus"
+      Pattern: '2\d\d$'
+      VerdictOnMatch: "Pass"
+      VerdictOnNoMatch: "Fail"
+      VerdictOnMissing: "NotSet"
+
+Standard: True
+Distributed: False
+Dashboard: {}
+KPIs: {}

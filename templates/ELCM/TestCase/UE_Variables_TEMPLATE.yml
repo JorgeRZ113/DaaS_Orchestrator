@@ -6,18 +6,34 @@
 # para definir las variables globales que consumen todos los TestCases del
 # experimento con la sintaxis @[Variable].
 #
+# Este fichero es la UNION EXACTA de las variables de entrada de los 6 TestCases:
+# sirve para lanzar cualquier combinacion de ellos con un solo UE. Cada TC_n_*
+# trae ademas su propio UE_n_* con solo lo que necesita.
+#
 # Como se usa:
-#   1. Copiar este fichero y renombrarlo (p. ej. UE_Variables_mi_experimento.yml).
-#   2. Renombrar la clave raiz (linea "UE_Variables:") si se van a usar varios
-#      ficheros a la vez: ELCM registra los UEs por esa clave y el segundo
-#      fichero con el mismo nombre REDEFINE al primero.
+#   1. Copiar este fichero y renombrarlo (p. ej. UE_mi_experimento.yml).
+#   2. Renombrar tambien su clave raiz si se van a usar varios ficheros UE a la
+#      vez: ELCM los registra por esa clave, y un segundo fichero con el mismo
+#      nombre REDEFINE al primero.
 #   3. Rellenar solo los valores. No hace falta tocar los nombres.
 #   4. Referenciarlo en el body de POST /executions:
 #        "experiment": {
 #          "name": "exp-demo",
-#          "testcase_paths": ["TC_Demo_Variables.yml"],
+#          "testcase_paths": ["TC_1_Preflight.yml", "TC_6_Latencia_SLA.yml"],
 #          "ues_paths": ["UE_Variables_TEMPLATE.yml"]
 #        }
+#
+# CONVENCION DE NOMBRES (el nombre dice de donde sale el valor):
+#   - ENTRADAS: las publica este fichero y las consume el TestCase. Si el valor
+#     describe la infraestructura, el nombre es de familia (MonitoringIp,
+#     InfluxBucket, SutIp...). Si solo sirve a un TestCase, lleva su tema por
+#     delante (Dataset*, RestApi*, Ping*, Prometheus*, Influx*).
+#   - SALIDAS: las publica el TestCase en ejecucion y NO van en este fichero.
+#     Se nombran por lo que miden, no por el TestCase que las produce, porque la
+#     gracia es que otro TestCase las consuma: PacketLossPct, RttAvgMs,
+#     RestApiStatus, DatasetRowsWritten...
+#   `tests/contract/test_testcase_library_contract.py` comprueba en CI que toda
+#   entrada que un TestCase consume esta publicada por algun UE de la biblioteca.
 #
 # Reglas del motor ELCM que hay que respetar (verificadas en el codigo):
 #   - NO anadir 'Name:' ni 'Version:'. El endpoint de subida rechaza 'Name' sin
@@ -25,20 +41,34 @@
 #   - 'Order' es OBLIGATORIO en cada accion de primer nivel.
 #   - 'Order' es GLOBAL a todo el experimento: las acciones de UEs y TestCases se
 #     mezclan en una unica lista ordenada por Order. Por eso las variables van en
-#     Order 0, para que se publiquen antes que nada. Ver el mapa de bandas en el
+#     Order 0, para que se publiquen antes que nada. Ver el mapa de bloques en el
 #     README.
 #   - Lo publicado aqui es visible desde CUALQUIER TestCase del experimento: hay
 #     un unico espacio de nombres por ejecucion, sin aislamiento por fichero.
+#   - TODO lo que se expande con @[...] llega a la tarea como TEXTO. Sirve para
+#     cadenas y para numeros que la tarea convierta (Run.Delay hace int()), pero
+#     NO para booleanos: "False" es una cadena no vacia, o sea un valor
+#     verdadero. Por eso 'Https', 'Insecure', 'Account' y 'Encryption' se dejan
+#     escritos a mano en los TestCases, igual que 'Times' de Flow.Repeat, que
+#     necesita un entero de verdad.
 #
 # Como se consume desde un TestCase:
 #   "@[SutIp]"              -> valor publicado, o <<UNDEFINED>> si no existe
 #   "@[Publish.SutIp]"      -> identico, con el grupo explicito
-#   "@[PingCount:5]"        -> con valor por defecto si la clave no existe
+#   "@[PingCount:4]"        -> con valor por defecto si la clave no existe
 #
-# CUIDADO con los defaults: el motor hace capture.split(':') sin limite, asi que
-# un default que contenga ':' (una URL, una ruta Windows, una hora) lanza
-# ValueError y TUMBA la fase Run entera. Para IPs y URLs usar "@[SutIp]" sin
-# default. Los VALORES publicados si pueden llevar ':' sin problema.
+# CUIDADO con los defaults: el motor parte por ':' sin limite, asi que un valor
+# por defecto que contenga dos puntos -una URL, una ruta de Windows, una hora-
+# lanza ValueError, y esa expansion vive FUERA del try/except del ejecutor: TUMBA
+# la fase Run entera. Para IPs y URLs, usar "@[SutIp]" sin default. Los VALORES
+# publicados si pueden llevar ':' sin problema.
+#
+# EL BLOQUE 'Parameters' NO SE USA EN ESTA BIBLIOTECA. ELCM permite declarar
+# parametros por TestCase y leerlos con @[Params.X], pero aqui TODAS las
+# variables pasan por los ficheros UE: un unico mecanismo, visible en un solo
+# sitio y comun a todos los TestCases del experimento. El contrato de CI lo
+# comprueba. En el Experiment Descriptor la clave si tiene que existir, porque
+# ELCM la exige, pero se queda vacia.
 #
 # Los valores marcados CHANGEME son obligatorios: si no se rellenan, el fallo
 # aparece de forma legible en el log en vez de expandirse a cadena vacia.
@@ -47,28 +77,50 @@ UE_Variables:
   - Order: 0
     Task: "Run.Publish"
     Config:
-      # ---- Infraestructura de monitorizacion (VM "monitoring" de la TN) ----
-      MonitoringIp: "CHANGEME"          # IP de la VM con Prometheus/InfluxDB/Grafana
+      # ---- Monitorizacion (VM "monitoring" de la TN) --- TC 1, 2, 3, 5 ----
+      # Las IPs salen del informe de la TN y tienen que ser alcanzables desde el
+      # host de ELCM, que vive en la red interna de la TN.
+      MonitoringIp: "192.168.199.2"          # VM con Prometheus/InfluxDB/Grafana
       PrometheusPort: "9090"
-      InfluxPort: "8086"
-      InfluxBucket: "testing"
-      GrafanaPort: "3000"
+      PrometheusStep: "5s"                   # resolucion de la consulta de rango
+      MonitorTime: "120"                     # ventana de captura, en segundos
 
-      # ---- Sistema bajo prueba (SUT) ----
-      SutIp: "CHANGEME"                 # IP del componente que se quiere medir
-      SutPort: "80"                     # puerto HTTP del SUT (para Run.RestApi)
-      SutEndpoint: "/"                  # endpoint a consultar en el SUT
+      # ---- InfluxDB --- TC 2, 3, 4 ----
+      # Ni Run.InfluxToCsv ni Run.CsvToInflux necesitan Host ni Port: caen al
+      # InfluxDB que ELCM ya tiene configurado. Solo hacen falta estos tres.
+      InfluxBucket: "testing"                # tiene que coincidir con el bucket de ELCM
+      InfluxRangeStart: "0"                  # inicio del rango de la query Flux (0 = todo)
+      InfluxOrg: ""                          # vacio = la org configurada en ELCM; rellenar si da 404
 
-      # ---- Acceso SSH al SUT (para Run.CliSsh) ----
-      # ELCM solo soporta clave privada, no contrasena. La ruta del certificado
-      # es una ruta EN EL HOST DONDE CORRE ELCM, no en tu maquina.
-      SshUser: "ubuntu"
-      SshPort: "22"
-      SshCertificate: "CHANGEME"
+      # ---- Servicio HTTP a comprobar (SUT) --- TC 1 ----
+      # Por defecto el /health de InfluxDB, que es un servicio garantizado en
+      # cualquier TN y responde 200 sin autenticacion. Alternativas verificadas:
+      #   Grafana <monitoring>:3000 /api/health
+      #   Prometheus <monitoring>:9090 /-/healthy
+      #   ELCM 127.0.0.1:5000 /elcm/api/v1/facility/testcases  <- cero dependencias
+      # NO apuntar a los exporters de Open5GS: estan en loopback dentro de su VM.
+      SutIp: "192.168.199.2"
+      SutPort: "8086"
+      SutEndpoint: "/health"
+      RestApiMethod: "GET"                   # GET | POST | PATCH | DELETE
 
-      # ---- Parametros de la medida ----
-      MonitorTime: "120"                # ventana de captura en segundos
-      DatasetMeasurement: "OPEN5GS_KPIS" # measurement de InfluxDB donde cae la captura
-      PingTarget: "CHANGEME"            # destino de las pruebas de conectividad
-      PingCount: "10"                   # numero de paquetes ICMP
-      SlaLatencyMs: "20"                # umbral de latencia para el veredicto
+      # ---- Medidas de red --- TC 1, 6 ----
+      PingTarget: "192.168.199.4"            # extremo cuyo alcance y latencia se miden
+      PingCount: "4"                         # paquetes ICMP
+      PingDeadline: "30"                     # tope total de cada ping, en segundos
+      SlaLatencyMs: "20"                     # umbral de latencia del veredicto, en ms
+
+      # ---- Dataset autocontenido --- TC 4 ----
+      DatasetSamples: "10"                   # muestras a generar
+      DatasetInterval: "1"                   # segundos entre muestras
+
+      # ---- Construcciones condicionales del TestCase didactico --- TC 5 ----
+      LoopGuard: "continuar"                 # condicion del Flow.While (corta MaxIterations)
+      SelectProbe: "on"                      # "on" -> rama de la condicion; otro -> rama por defecto
+
+      # ---- Entrega de artefactos --- TC 2, 6 ----
+      # Run.CompressFiles esta roto en todas las versiones publicadas de ELCM y su
+      # excepcion aborta el experimento entero, asi que la entrega en ZIP va
+      # desactivada. Poner "on" cuando el motor este corregido.
+      # Ver docs/INCIDENCIA_ELCM_VERSION_DESPLEGADA.md
+      ZipDelivery: "off"
