@@ -209,7 +209,7 @@ def blocking_call(monkeypatch):
             raise outcome["result"]
         return outcome["result"]
 
-    for name in ("create_execution", "start_elcm", "delete_tn"):
+    for name in ("create_execution", "start_elcm", "delete_tn", "pause_tn", "resume_tn"):
         monkeypatch.setattr(api_client.ApiClient, name, _call)
     return gate, outcome
 
@@ -469,5 +469,124 @@ def test_the_handler_refuses_a_second_launch_even_if_the_button_is_forced(
         # que hay que cubrir: el guardia del manejador.
         app.button(key=f"{NEW}_launch").click().run()
         assert app.session_state["running_job"] is first, "se lanzo un segundo trabajo"
+    finally:
+        gate.set()
+
+
+# ===== Pestana: Conexion =====
+#
+# Pausar y reconectar son las dos operaciones que permiten tener varias TN
+# desplegadas y elegir con cual se trabaja. Lo que se comprueba aqui es el
+# cableado de la pestana: que ensena quien tiene el tunel, que manda el
+# `execution_id` elegido y que hereda el candado del resto de operaciones.
+
+EXECUTION_LIST = [
+    {"execution_id": "tn-a", "status": "PAUSED", "tn_id": "tn-a", "vpn_status": "DOWN"},
+    {"execution_id": "tn-b", "status": "TN_READY", "tn_id": "tn-b", "vpn_status": "UP"},
+]
+
+
+@pytest.fixture
+def recorded_connection(monkeypatch):
+    """Listado fijo y llamadas de pausa/reconexion anotadas."""
+    calls: dict[str, list[str]] = {"pause": [], "resume": []}
+
+    monkeypatch.setattr(api_client.ApiClient, "list_executions", lambda self: EXECUTION_LIST)
+
+    def _pause(self, execution_id):
+        calls["pause"].append(execution_id)
+        return api_client.PhaseResult(200, {"execution_id": execution_id, "status": "PAUSED"})
+
+    def _resume(self, execution_id):
+        calls["resume"].append(execution_id)
+        return api_client.PhaseResult(200, {"execution_id": execution_id, "status": "TN_READY"})
+
+    monkeypatch.setattr(api_client.ApiClient, "pause_tn", _pause)
+    monkeypatch.setattr(api_client.ApiClient, "resume_tn", _resume)
+    return calls
+
+
+def _open_connection(at: AppTest) -> AppTest:
+    """Deja la pestana Conexion con el listado ya pedido."""
+    _connected(at)
+    at.button(key="connection_query").click().run()
+    return at
+
+
+def _await_job(at: AppTest) -> AppTest:
+    """Espera a que el hilo del trabajo termine y repinta."""
+    job = at.session_state["running_job"]
+    for _ in range(100):
+        if job["done"]:
+            break
+        time.sleep(0.05)
+    return at.run()
+
+
+def test_the_connection_tab_says_which_tn_holds_the_tunnel(
+    app: AppTest, recorded_connection
+) -> None:
+    """Es la pregunta que se hace antes de pausar nada."""
+    _open_connection(app)
+
+    assert any("tn-b" in message.value for message in app.success)
+    assert app.selectbox(key="connection_target")
+
+
+def test_the_listing_is_not_requested_until_it_is_asked_for(
+    app: AppTest, recorded_connection, monkeypatch
+) -> None:
+    """Abrir la pestana con el servidor caido no puede costar una espera."""
+    asked: list[bool] = []
+
+    def _list(self):
+        asked.append(True)
+        return EXECUTION_LIST
+
+    monkeypatch.setattr(api_client.ApiClient, "list_executions", _list)
+    _connected(app).run()
+
+    assert asked == []
+
+
+def test_pausing_sends_the_selected_execution(app: AppTest, recorded_connection) -> None:
+    _open_connection(app)
+    app.selectbox(key="connection_target").set_value("tn-b").run()
+    app.button(key="connection_pause").click().run()
+    _await_job(app)
+
+    assert recorded_connection["pause"] == ["tn-b"]
+    assert recorded_connection["resume"] == []
+
+
+def test_resuming_sends_the_selected_execution(app: AppTest, recorded_connection) -> None:
+    _open_connection(app)
+    app.selectbox(key="connection_target").set_value("tn-a").run()
+    app.button(key="connection_resume").click().run()
+    _await_job(app)
+
+    assert recorded_connection["resume"] == ["tn-a"]
+    assert recorded_connection["pause"] == []
+
+
+def test_the_tab_warns_when_another_tn_still_holds_the_tunnel(
+    app: AppTest, recorded_connection
+) -> None:
+    """La API responde 409: avisarlo antes ahorra el viaje."""
+    _open_connection(app)
+    app.selectbox(key="connection_target").set_value("tn-a").run()
+
+    assert any("tn-b" in message.value for message in app.warning)
+
+
+def test_the_connection_buttons_honour_the_lock(app: AppTest, recorded_connection, blocking_call):
+    """Reconectar mientras hay una fase en vuelo es justo lo que hace que choquen."""
+    gate, _ = blocking_call
+    _open_connection(app)
+    _launch_execution(app)
+
+    try:
+        assert app.button(key="connection_pause").disabled
+        assert app.button(key="connection_resume").disabled
     finally:
         gate.set()
