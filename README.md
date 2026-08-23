@@ -66,6 +66,9 @@ export API_KEY=...                           # la misma del .env del servidor
 | `daas status <id>` · `detail <id>` | Estado resumido / registro completo |
 | `daas summary <id> [--format md]` | Resumen legible, en JSON o Markdown |
 | `daas download <id> [--secrets] [-o f.zip]` | Descarga el ZIP de la ejecucion |
+| `daas ls` | Lista las ejecuciones y su estado de conexion |
+| `daas pause <id>` | Aparta la TN sin borrarla (baja su tunel) |
+| `daas resume <id>` | Vuelve a conectar con una TN pausada |
 | `daas rm <id>` | Borra la Trial Network |
 
 Las ordenes que consultan escriben **JSON a stdout**, asi que se canalizan a
@@ -205,7 +208,10 @@ Header requerido para endpoints de ejecucion:
 | `POST` | `/executions` | Si | Si | **[UNIFICADO]** Ejecuta TNLCM + ELCM automático (o solo TNLCM si `auto_start_elcm=false`) |
 | `POST` | `/login` | Si | No | Hacer login TNLCM con `.env` y guardar el token en memoria |
 | `POST` | `/executions/{execution_id}/elcm` | Si | Si (`experiment` + `dataset`) | Lanza un experimento sobre la TN viva (repetible, nombre único, salida de datos por experimento) |
+| `POST` | `/executions/{execution_id}/pause` | Si | No | Aparta la TN sin borrarla: baja su tunel WireGuard |
+| `POST` | `/executions/{execution_id}/resume` | Si | No | Vuelve a conectar con una TN pausada, sin redesplegar |
 | `DELETE` | `/executions/{execution_id}/tn` | Si | No | Borrado manual de la TN (deleted + purged) |
+| `GET` | `/executions` | Si | No | Listado de ejecuciones con su estado y su `vpn_status` |
 | `GET` | `/executions/{execution_id}` | Si | No | Estado resumido |
 | `GET` | `/executions/{execution_id}/detail` | Si | No | Estado detallado + artefactos + `tn_state` en vivo desde TNLCM |
 | `GET` | `/executions/{execution_id}/summary` | Si | No | Resumen legible para experimentadores (`?format=markdown` para texto) |
@@ -290,6 +296,16 @@ Especificación completa de campos, tipos y errores en [`docs/DATASET_DESCRIPTOR
 > 2. **Carpeta de resultados** — el dataset se guarda en `artifacts/<execution_id>/result/<experimento>/`, reutilizar el nombre haría que un experimento sobrescribiera los datos del anterior.
 >
 > Por eso se rechaza con `409` un nombre ya usado en esa TN. **Recomendación:** usa nombres descriptivos y únicos por experimento (p. ej. `exp-latencia-01`, `exp-throughput-02`).
+
+### `POST /executions/{execution_id}/pause` y `POST /executions/{execution_id}/resume`
+- **Pausar** aparta la Trial Network sin borrarla: baja su túnel WireGuard y la deja viva y `activated` en TNLCM. Sirve para trabajar con otra TN, porque **solo puede haber un túnel levantado a la vez**.
+- **Reconectar** reabre el túnel con la config que ya guardó la fase TNLCM y devuelve la ejecución a `TN_READY`. **No lleva descriptor a propósito**: no regenera nada, así que el `dataset_descriptor.yaml` original y el historial de experimentos se conservan intactos. Es lo que lo distingue de re-POSTear `/executions`, que recrea la ejecución desde cero.
+- No confundir pausar con borrar: `DELETE .../tn` destruye y purga la TN, y volver de ahí es un redespliegue entero, con IPs y config de WireGuard nuevas.
+- Respuestas de ambos: `200` hecho; `207` terminó pero el túnel quedó sin confirmar (`vpn_status=DOWN_ERROR` al pausar, `MANUAL_REQUIRED` al reconectar); `404` no existe o no tiene TN; `409` el estado no lo admite (al reconectar, si otra TN sigue conectada el mensaje dice cuál pausar).
+- Una TN pausada rechaza `/elcm` con un `409` que pide el `resume` explícito, y puede borrarse directamente con `DELETE .../tn`.
+
+### `GET /executions`
+- Lista las ejecuciones conocidas con su estado, su `tn_id` y su `vpn_status`. `vpn_status=UP` marca la que tiene el túnel levantado ahora mismo.
 
 ### `DELETE /executions/{execution_id}/tn`
 - Borrado manual de la Trial Network (deleted + purged) cuando tú decidas.
@@ -524,44 +540,71 @@ Reglas del motor que la plantilla ya respeta y que hay que mantener al copiarla:
 - **Un único espacio de nombres por ejecución**: lo publicado por el UE lo ve *cualquier* TestCase del experimento, sin aislamiento por fichero.
 - **En `@[Clave:default]` el default no puede contener `:`** — el Expander hace `split(':')` sin límite y un `ValueError` ahí tumba la fase Run entera. Para IPs y URLs, usar `@[SutIp]` sin default.
 
-Sintaxis de consumo: `@[SutIp]` (publicado), `@[Publish.SutIp]` (grupo explícito), `@[Params.X]` (bloque `Parameters` del descriptor), `@{ExecutionId}` / `@{TempFolder}` / `@{Application}` (valores fijos del motor).
+- **Todo lo que expande `@[...]` llega a la tarea como texto.** Sirve para cadenas y para números que la tarea convierta (`Run.Delay` hace `int()`), pero **no para booleanos**: `"False"` es una cadena no vacía, es decir, un valor verdadero. Por eso `Https`, `Insecure`, `Account` y `Encryption` van escritos a mano en los TestCases.
 
-### Mapa de bandas de `Order`
+Sintaxis de consumo: `@[SutIp]` (publicado), `@[Publish.SutIp]` (grupo explícito), `@{ExecutionId}` / `@{TempFolder}` / `@{Application}` (valores fijos del motor).
 
-El `Order` es **global a todo el experimento**: las acciones de todos los UEs y TestCases se mezclan en una única lista ordenada por `Order`, y dos TestCases que usen el mismo número se entrelazan de forma arbitraria. Para que la batería sea componible, cada fichero tiene su banda:
+**El bloque `Parameters` no se usa.** ELCM ofrece dos mecanismos de variables: el bloque `Parameters` —que se lee con `@[Params.X]` y se vuelca entero en `@{JSONParameters}`— y los valores publicados por los ficheros UE. Esta biblioteca usa **solo el segundo**: un único mecanismo, en un único sitio, común a todos los TestCases del experimento, en vez de variables repartidas entre cada fichero y el descriptor. La regla se aplica en dos sitios distintos:
 
-| Banda | Uso |
+| Dónde | Qué se hace | Por qué |
+|---|---|---|
+| TestCases (`templates/ELCM/TestCase/*.yml`) | **La clave no existe** | `Facility/Loader/testcase_loader.py` la lee con `data.pop('Parameters', {})`: es opcional, así que se elimina y no se declara |
+| Experiment Descriptor (`templates/ELCM/template_experiment_descriptor.json`) | **La clave existe y se queda vacía** | `Data/experiment_descriptor.py` valida la presencia de las 14 claves; si falta una, el descriptor es inválido y el experimento no arranca |
+
+`tests/contract/` verifica las dos: ningún TestCase declara `Parameters` ni expande `@[Params.X]`, y el descriptor la declara vacía. (`Parameters` **dentro** de un `Config` es otra cosa —la línea de comandos de `Run.CliExecute`— y sí se usa.)
+
+**Convención de nombres.** El nombre dice de dónde sale el valor:
+
+- **Entradas** — las publica el UE y las consume el TestCase. Si describen infraestructura, el nombre es de familia (`MonitoringIp`, `InfluxBucket`, `SutIp`); si solo sirven a un TestCase, van prefijadas con su nombre (`SelfDataset*`, `PrometheusSelf*`, `ExportCsv*`, `RestApi*`, `Ping*`).
+- **Salidas** — las publica el TestCase en ejecución y **no** van en ningún UE. Se nombran por lo que miden, no por quién las produce, porque la gracia es que otro TestCase las consuma: `PacketLossPct`, `RttAvgMs`, `RestApiStatus`, `InventoryHostname`.
+
+`tests/contract/test_testcase_library_contract.py` lo verifica en CI: calcula, para cada TestCase, las variables que consume menos las que produce, y exige que el resto esté publicado por algún UE de la biblioteca. Una entrada sin UE no falla en ejecución — se expande a `<<UNDEFINED>>`, que es una cadena válida y se cuela hasta la tarea como si fuera un valor bueno.
+
+### Mapa de bloques de `Order`
+
+El `Order` es **global a todo el experimento**: las acciones de todos los UEs y TestCases se mezclan en una única lista ordenada por `Order`, y dos TestCases que usen el mismo número se entrelazan de forma arbitraria.
+
+Cada TestCase de la batería es **autocontenido** —captura y entrega en el mismo fichero—, así que ocupa un **bloque de 100 propio y disjunto**. El número del nombre coincide con su bloque, y el orden de los bloques ya deja el preflight antes de las capturas:
+
+| Bloque | Fichero |
 |---|---|
-| `0–9` | UE / variables globales (`Run.Publish`) |
-| `10–99` | Captura bloqueante (`Run.PrometheusToInflux` + `Run.AddMilestone`) |
-| `100–699` | TestCases funcionales |
-| `700–799` | Reservado |
-| `800–899` | Entrega del dataset (`Run.InfluxToCsv`, `Run.CompressFiles`) |
-| `900–999` | Notificación / cierre |
+| `0–9` | Ficheros UE: variables globales (`Run.Publish`) |
+| `100–199` | `TC_1_Preflight` |
+| `200–299` | `TC_2_Prometheus_Capture_Generico` |
+| `300–399` | `TC_3_Prometheus_Capture_Open5GS` |
+| `400–499` | `TC_4_Dataset_Csv` |
+| `500–599` | `TC_5_Flujo_Variables` |
+| `600–699` | `TC_6_Latencia_SLA` |
+| `700–799` | `TC_V2_BASE_TEMPLATE` (esqueleto, no se compone con los demás) |
 
-`tests/contract/test_testcase_library_contract.py` verifica esto en CI: todo fichero nuevo de `templates/ELCM/TestCase/` debe declarar su banda en `ORDER_BANDS`.
+`tests/contract/test_testcase_library_contract.py` lo verifica en CI: todo fichero nuevo de `templates/ELCM/TestCase/` debe declarar su bloque en `ORDER_BANDS`.
 
-### Batería de TestCases
+### La batería: 6 TestCases
 
-| Fichero | Orders | Para qué sirve | Requiere infra |
+Cada uno está construido alrededor de algo que un experimentador de redes 5G/6G quiere comprobar de verdad. No son muchos a propósito: con que una tarea del motor aparezca **una vez** en el catálogo, ya está enseñada.
+
+| Fichero | Qué responde | Tareas que enseña | Requiere infra |
 |---|---|---|---|
-| `UE_Variables_TEMPLATE.yml` | 0 | Plantilla de variables globales | No |
-| `TC_V2_BASE_TEMPLATE.yml` | 10–30 | Esqueleto de TestCase V2 (`Sequence`, `Dashboard`, `KPIs`) del que partir para escribir uno nuevo | No |
-| `TC_Demo_Variables.yml` | 100–106 | Demo del mecanismo UE → TestCase: las dos sintaxis de expansión, derivar variables, y qué pasa con una variable inexistente | No |
-| `TC_Demo_Flow.yml` | 120–123 | `Flow.Sequence` / `Flow.Parallel` (`@{Branch}`) / `Flow.Repeat` (`@{Iter0}`, `@{Iter1}`) y el patrón captura + ventana de medida | No |
-| `TC_Demo_Python.yml` | 140–150 | Cadena de `Run.Evaluate` con Python real: agregados, comprensiones de lista, condicional y formateo para derivar KPIs | No |
-| `TC_Util_Inventory.yml` | 300–304 | Inventario del host de ejecución entregado como ZIP en `/results` | No |
-| `TC_Util_Connectivity.yml` | 320–326 | Ping al SUT, publica pérdida y RTT medio, y fija el veredicto con `Run.UpgradeVerdict` | Sí |
-| `TC_Util_RestApi.yml` | 340–343 | `Run.RestApi` con los parámetros reales (`Host`/`Port`/`Endpoint`) y veredicto por código HTTP | Sí |
-| `TC_Check_PublishTasks.yml` | 500–510 | Verifica `Run.PublishFromFile`, `Run.PublishFromPreviousTaskLog` y `Run.UpgradeVerdict` con datos deterministas | No |
-| `TC_Util_ExportCsv.yml` | 820–822 | Export manual de InfluxDB a CSV+ZIP con query propia (alternativa a `dataset.output: ["csv"]`) | Sí |
+| `TC_1_Preflight.yml` | ¿Está la infraestructura viva antes de gastar mi ventana de medida? Ping + salud HTTP, con veredicto y con puerta: sin red se salta la comprobación HTTP en vez de acumular fallos | `Run.CliExecute`, `Run.PublishFromPreviousTaskLog`, `Run.PublishFromFile`, `Run.UpgradeVerdict`, `Run.RestApi`, `Flow.Sequence`, `Flow.Select` | Sí |
+| `TC_2_Prometheus_Capture_Generico.yml` | Capturar métricas durante una ventana y llevármelas en CSV **en cualquier TN**: solo consulta métricas que Prometheus publica de sí mismo, que existen siempre. `count(up)`/`sum(up)` miden de paso cuántos *targets* hay y cuántos responden | `Flow.Parallel`, `Run.PrometheusToInflux`, `Run.Delay`, `Run.AddMilestone`, `Run.WaitForInflux`, `Run.InfluxToCsv`, `Run.Evaluate`, `Run.CompressFiles` | Sí (solo monitorización) |
+| `TC_3_Prometheus_Capture_Open5GS.yml` | Lo mismo contra el core 5G: plano de control (registros, sesiones AMF/SMF) y de usuario (paquetes GTP por N3), con los paneles de Grafana generados | secciones `KPIs:` y `Dashboard:` del formato V2 | Sí (Open5GS instrumentado) |
+| `TC_4_Dataset_Csv.yml` | Generar mis propios datos desde el experimento y entregarlos como dataset. Circuito completo sin depender de ningún componente: es la **prueba de humo** del motor y la plantilla para meter en el dataset la salida de cualquier herramienta externa | `Run.CsvToInflux`, `Run.InfluxToCsv` | No |
+| `TC_5_Flujo_Variables.yml` | Cómo se orquestan tareas y cómo viajan las variables. Es **el fichero de referencia** para escribir TestCases propios | `Flow.Sequence`, `Flow.Parallel`, `Flow.Repeat`, `Flow.While`, `Flow.Select`, `Run.Dummy`, `Run.Publish` | No |
+| `TC_6_Latencia_SLA.yml` | Caracterizar una ruta: N repeticiones, media y máximo, cumplimiento de un umbral de SLA, y el inventario del entorno como contexto de reproducibilidad | `Flow.Repeat`, `Run.Evaluate` sobre datos medidos, `Run.UpgradeVerdict` | Sí |
+
+Cada `TC_n_*` trae su `UE_n_*` con solo las variables que necesita; `UE_Variables_TEMPLATE.yml` es la unión exacta de todas, para quien prefiera un único fichero.
 
 Los que tocan infraestructura **asumen el componente ya configurado** (los grandes, tipo UERANSIM u Open5GS, requieren su configuración previa) y **empiezan comprobándolo**, de modo que fallan con un mensaje claro en vez de producir un dataset vacío.
 
-Dos trampas del motor que la batería documenta en sus cabeceras:
+Trampas del motor que la batería documenta en sus cabeceras:
 
+- **`Run.CompressFiles` está roto en todas las versiones publicadas de ELCM** (`'str' object has no attribute 'get'`) y su excepción **aborta el experimento entero**. Por eso la entrega en ZIP va desactivada tras un `Flow.Select` y solo se activa publicando `ZipDelivery: "on"` en el UE. Detalle y evidencia en `docs/INCIDENCIA_ELCM_VERSION_DESPLEGADA.md`.
+- **Una excepción en una tarea de primer nivel se lleva por delante todo lo que venga después**, incluida la banda de entrega. Dentro de un `Flow` la misma excepción se degrada a veredicto: por eso `Run.RestApi` va envuelto en un `Flow.Sequence`, ya que un host inalcanzable lanza desde la capa HTTP aunque no se declare `Responses`.
 - **`Run.InfluxToCsv` y `Run.CliExecute` no registran nada en `GeneratedFiles`.** Sin un `Run.CompressFiles` posterior, el fichero se genera, se ve en el log y se pierde: no llega a `GET /execution/{id}/results`.
+- **En `Run.PublishFromPreviousTaskLog`, el patrón debe anclarse en `[CLI]`.** Antes de ejecutar cada tarea, el motor vuelca al log su configuración ya expandida, y ahí va el comando entero; como la tarea publica en cada coincidencia y gana la última, sin el ancla el valor publicado puede venir del texto del comando en vez de su salida. En el log de ELCM ese volcado aparece como `Params: {...}` — es la configuración de la tarea, no el bloque `Parameters` del TestCase, que esta biblioteca no usa.
+- **`Run.InfluxToCsv` y `Run.CsvToInflux` no necesitan `Host` ni `Port`**: caen al InfluxDB del `config.yml` de ELCM, que la 6G-Library inyecta al desplegar. Fijarlos a mano es lo que ata un TestCase a una TN concreta.
 - **Las variables de flujo no se heredan en flujos anidados.** `@{Branch}` solo se sustituye en los hijos *directos* de `Flow.Parallel`, y `@{Iter0}`/`@{Iter1}` en los de `Flow.Repeat`.
+- **`Flow.Parallel` descarta lo que publiquen las ramas que terminan pronto** (defecto DE-4 del motor). No confiar en `Run.Publish` dentro de una rama paralela corta.
 
 ## Flujo de uso recomendado
 
@@ -574,6 +617,8 @@ La Trial Network se queda **viva por defecto** para aceptar varios experimentos.
 - `auto_start_elcm=true` + `ephemeral_tn=true` (un solo uso) → despliega, lanza el 1er experimento y borra la TN automáticamente.
 
 Estados: `PENDING → VALIDATING → DEPLOYING → TN_READY ⇄ RUNNING_EXPERIMENT / COLLECTING → DESTROYING → DESTROYED` (o `FAILED`). El borrado manual se dispara con `DELETE /executions/{id}/tn`.
+
+A eso se suma `TN_READY ⇄ PAUSED`, que **no** toca TNLCM: pausar solo baja el túnel para poder trabajar con otra TN, y `resume` devuelve la ejecución a `TN_READY` sin redesplegar.
 
 ### Opción 1: Automático (Recomendado)
 
