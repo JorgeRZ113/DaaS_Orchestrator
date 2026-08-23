@@ -216,6 +216,34 @@ def _cmd_download(args: argparse.Namespace, client: ApiClient) -> int:
     return EXIT_OK
 
 
+def _cmd_ls(args: argparse.Namespace, client: ApiClient) -> int:
+    """GET /executions: que TN hay y cual tiene el tunel arriba."""
+    _print_json(client.list_executions())
+    return EXIT_OK
+
+
+def _cmd_pause(args: argparse.Namespace, client: ApiClient) -> int:
+    """POST /executions/{id}/pause: aparta la TN bajando su tunel."""
+    return _report_phase(
+        client.pause_tn(args.execution_id),
+        partial_hint=(
+            "la ejecucion queda pausada pero el tunel WireGuard no se pudo bajar "
+            "(vpn_status=DOWN_ERROR); compruebalo antes de conectar otra TN."
+        ),
+    )
+
+
+def _cmd_resume(args: argparse.Namespace, client: ApiClient) -> int:
+    """POST /executions/{id}/resume: vuelve a conectar con una TN pausada."""
+    return _report_phase(
+        client.resume_tn(args.execution_id),
+        partial_hint=(
+            "la TN se recupero pero el tunel WireGuard hay que montarlo a mano "
+            "(vpn_status=MANUAL_REQUIRED); el experimento ELCM no funcionara hasta entonces."
+        ),
+    )
+
+
 def _cmd_rm(args: argparse.Namespace, client: ApiClient) -> int:
     """DELETE /executions/{id}/tn: borra la Trial Network y espera a la purga."""
     return _report_phase(
@@ -352,6 +380,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="donde escribir el ZIP (por defecto <ID>.zip)",
     )
     download.set_defaults(func=_cmd_download)
+
+    listing = subcommands.add_parser(
+        "ls",
+        parents=[common],
+        help="lista las ejecuciones conocidas y su estado de conexion",
+        description="`vpn_status=UP` marca la TN que tiene el tunel levantado ahora mismo.",
+    )
+    listing.set_defaults(func=_cmd_ls)
+
+    pause = subcommands.add_parser(
+        "pause",
+        parents=[common],
+        help="aparta una TN sin borrarla (baja su tunel WireGuard)",
+        description=(
+            "La TN sigue viva en TNLCM: solo se baja el tunel para poder conectar "
+            "otra. Se vuelve con `daas resume`, sin redesplegar."
+        ),
+    )
+    pause.add_argument("execution_id", metavar="ID", help="identificador de la ejecucion")
+    pause.set_defaults(func=_cmd_pause)
+
+    resume = subcommands.add_parser(
+        "resume",
+        parents=[common],
+        help="vuelve a conectar con una TN pausada",
+        description=(
+            "Reabre el tunel de una TN que sigue desplegada. No lleva descriptor: "
+            "el original y los experimentos ya ejecutados se conservan."
+        ),
+    )
+    resume.add_argument("execution_id", metavar="ID", help="identificador de la ejecucion")
+    resume.set_defaults(func=_cmd_resume)
 
     remove = subcommands.add_parser(
         "rm",

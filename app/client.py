@@ -58,6 +58,13 @@ CREATE_TIMEOUT_SECONDS = 2400.0 + _PHASE_MARGIN_SECONDS  # TNLCM: 40 min
 ELCM_TIMEOUT_SECONDS = 4200.0 + _PHASE_MARGIN_SECONDS  # experimento + dataset: 70 min
 TEARDOWN_TIMEOUT_SECONDS = 3000.0 + _PHASE_MARGIN_SECONDS  # borrado: 50 min
 
+# Pausar y reconectar no son fases: no hablan con TNLCM mas que para preguntar un
+# estado, y lo que puede alargarlas es WireGuard. En Windows eso son hasta 30 s
+# del helper mas 120 s esperando al dialogo UAC (HELPER_TIMEOUT_SECONDS y
+# ELEVATION_TIMEOUT_SECONDS en `app/adapters/wireguard.py`), de ahi el tope
+# propio en vez de reutilizar el de una fase.
+CONNECTION_TIMEOUT_SECONDS = 180.0
+
 
 def _phase_timeout(read_seconds: float) -> httpx.Timeout:
     """Timeout de una fase: mucho para leer, poco para conectar.
@@ -478,6 +485,42 @@ class ApiClient:
         """
         return self._post_descriptor(
             f"/executions/{execution_id}/elcm", descriptor, ELCM_TIMEOUT_SECONDS, wait=wait
+        )
+
+    def list_executions(self) -> Any:
+        """Ejecuciones conocidas, con su estado y su `vpn_status`.
+
+        Es lo que permite ver que TN hay desplegadas y cual tiene el tunel
+        arriba antes de pausar o reconectar.
+        """
+        return self._request("GET", "/executions", auth=True, timeout=POLL_TIMEOUT_SECONDS)
+
+    def pause_tn(self, execution_id: str) -> Any:
+        """Aparta la TN bajando su tunel, sin borrarla ni tocar TNLCM.
+
+        El codigo HTTP dice como fue: 200 tunel abajo, 207 la ejecucion queda
+        pausada pero el tunel no se pudo bajar (hay que comprobarlo a mano).
+        """
+        return self._request(
+            "POST",
+            f"/executions/{execution_id}/pause",
+            auth=True,
+            timeout=_phase_timeout(CONNECTION_TIMEOUT_SECONDS),
+            phase=True,
+        )
+
+    def resume_tn(self, execution_id: str) -> Any:
+        """Vuelve a conectar con una TN pausada, sin redesplegar nada.
+
+        200 conectada y lista para experimentos; 207 la TN se recupero pero el
+        tunel hay que montarlo a mano; 409 si otra TN sigue conectada.
+        """
+        return self._request(
+            "POST",
+            f"/executions/{execution_id}/resume",
+            auth=True,
+            timeout=_phase_timeout(CONNECTION_TIMEOUT_SECONDS),
+            phase=True,
         )
 
     def delete_tn(self, execution_id: str) -> Any:
