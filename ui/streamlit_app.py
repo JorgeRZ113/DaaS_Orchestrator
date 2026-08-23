@@ -346,10 +346,10 @@ def render_sidebar() -> None:
 
 # ===== Pestaña: Nueva ejecución =====
 
-# Valor de arranque del formulario. `TC_ping.yml` es el TestCase mínimo de la
+# Valor de arranque del formulario. `TC_1_Preflight.yml` es el primero de la
 # biblioteca (templates/ELCM/TestCase/), que es contra lo que resuelven por
 # nombre de fichero `testcase_paths` y `ues_paths`.
-DEFAULT_TESTCASE = "TC_ping.yml"
+DEFAULT_TESTCASE = "TC_1_Preflight.yml"
 
 # Clave del editor, compartida por las tres fuentes (formulario, fichero subido y
 # ejemplo). Al ser también la key del `text_area`, escribir en ella antes de
@@ -789,6 +789,108 @@ def tab_status() -> None:
 
     st.markdown("**Detalle completo**")
     st.json(detail)
+
+
+# ===== Pestaña: Conexión =====
+
+
+def _connection_rows(executions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Las columnas que importan para decidir a qué TN conectarse."""
+    return [
+        {
+            "execution_id": item.get("execution_id", "?"),
+            "status": item.get("status", "?"),
+            "tn_id": item.get("tn_id") or "—",
+            "vpn_status": item.get("vpn_status") or "—",
+        }
+        for item in executions
+    ]
+
+
+def tab_connection() -> None:
+    """Pausa una Trial Network o vuelve a conectarse a ella, sin borrarla."""
+    st.subheader("Conexión con la Trial Network")
+    st.caption(
+        "Pausar baja el túnel WireGuard y deja la TN viva en TNLCM: es la forma de "
+        "apartarla para trabajar con otra. Reconectar la devuelve a TN_READY sin "
+        "redesplegar y **sin tocar su descriptor ni sus experimentos**. Solo puede "
+        "haber un túnel levantado a la vez."
+    )
+
+    # Misma pauta que Estado: no se llama a la API hasta que se pide, para que
+    # abrir la pestaña con el servidor caído no cueste una espera.
+    if st.button("Ver ejecuciones", key="connection_query", icon=":material/refresh:"):
+        st.session_state["connection_requested"] = True
+    if not st.session_state.get("connection_requested"):
+        return
+
+    client = _get_client()
+    if client is None:
+        return
+
+    try:
+        executions = client.list_executions()
+    except ApiError as exc:
+        _show_api_error(exc)
+        return
+
+    if not executions:
+        st.info("Todavía no hay ninguna ejecución registrada.")
+        return
+
+    connected = next(
+        (item["execution_id"] for item in executions if item.get("vpn_status") == "UP"), None
+    )
+    if connected:
+        st.success(f"Túnel levantado ahora mismo: **{connected}**", icon=":material/vpn_lock:")
+    else:
+        st.info("Ninguna TN tiene el túnel levantado.", icon=":material/vpn_key_off:")
+
+    st.dataframe(_connection_rows(executions), hide_index=True, width="stretch")
+
+    options = [item.get("execution_id", "?") for item in executions]
+    last = st.session_state.get("last_execution_id", "")
+    target = st.selectbox(
+        "execution_id",
+        options,
+        index=options.index(last) if last in options else 0,
+        key="connection_target",
+    )
+
+    blocked_by_other = connected is not None and connected != target
+    if blocked_by_other:
+        st.warning(
+            f"«{connected}» sigue conectada. Pausa esa primero: la API rechaza "
+            "reconectar mientras haya otro túnel arriba.",
+            icon=":material/warning:",
+        )
+
+    cols = st.columns(2)
+    paused = cols[0].button(
+        "Pausar",
+        disabled=_job_in_flight(),
+        key="connection_pause",
+        icon=":material/pause_circle:",
+        help=_lock_help("Pausar la TN"),
+    )
+    resumed = cols[1].button(
+        "Conectar",
+        disabled=_job_in_flight(),
+        key="connection_resume",
+        icon=":material/play_circle:",
+        help=_lock_help("Conectar la TN"),
+    )
+
+    if not paused and not resumed:
+        return
+    if _job_in_flight():
+        return
+
+    if paused:
+        _start_job("pause", f"Pausa de la TN de {target}", lambda: client.pause_tn(target))
+    else:
+        _start_job("resume", f"Conexión con la TN de {target}", lambda: client.resume_tn(target))
+    st.rerun()
 
 
 # ===== Pestaña: Descargar =====
@@ -1237,10 +1339,19 @@ def main() -> None:
 
     render_sidebar()
 
-    # El orden sigue el ciclo real: desplegar, mirar cómo va, comprobar, hacer
-    # el experimento, llevarse los datos y, solo entonces, borrar la TN.
+    # El orden sigue el ciclo real: desplegar, mirar cómo va, comprobar, elegir a
+    # qué TN se está conectado, hacer el experimento, llevarse los datos y, solo
+    # entonces, borrar la TN.
     tabs = st.tabs(
-        ["Nueva ejecución", "Resumen", "Estado", "Experimento ELCM", "Descargar", "Borrar TN"]
+        [
+            "Nueva ejecución",
+            "Resumen",
+            "Estado",
+            "Conexión",
+            "Experimento ELCM",
+            "Descargar",
+            "Borrar TN",
+        ]
     )
     with tabs[0]:
         tab_new_execution()
@@ -1249,10 +1360,12 @@ def main() -> None:
     with tabs[2]:
         tab_status()
     with tabs[3]:
-        tab_elcm()
+        tab_connection()
     with tabs[4]:
-        tab_download()
+        tab_elcm()
     with tabs[5]:
+        tab_download()
+    with tabs[6]:
         tab_teardown()
 
 
