@@ -29,7 +29,7 @@ experiment:
   testcase_paths:
     # Este TestCase publica metricas en InfluxDB; sin el, los modos csv/raw
     # no tendrian de donde leer.
-    - TestCase_prometheus_capture.yml
+    - TC_3_Prometheus_Capture_Open5GS.yml
   ues_paths:
     - UE_Variables_TEMPLATE.yml
 

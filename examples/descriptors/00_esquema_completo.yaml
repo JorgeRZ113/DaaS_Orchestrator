@@ -96,9 +96,9 @@ experiment:
   # Se ejecutan EN ORDEN. Se resuelven por nombre de fichero contra
   # templates/ELCM/TestCase/, que es un directorio plano: no admite rutas.
   testcase_paths:
-    - TC_ping.yml
+    - TC_1_Preflight.yml
     # Los modos csv/dashboard/raw exigen un TestCase de captura (*_capture*):
-    - TestCase_prometheus_capture.yml
+    - TC_3_Prometheus_Capture_Open5GS.yml
 
   # Ficheros de variables globales (UE). Opcional; puede ir vacio.
   ues_paths:

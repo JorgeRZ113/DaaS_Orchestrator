@@ -19,7 +19,7 @@ infrastructure:
 experiment:
   name: exp-efimero
   testcase_paths:
-    - TC_ping.yml
+    - TC_1_Preflight.yml
   ues_paths: []
 
 dataset:

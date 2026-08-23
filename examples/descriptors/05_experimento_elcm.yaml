@@ -19,10 +19,10 @@ experiment:
   # Se ejecutan en orden. La biblioteca vive en templates/ELCM/TestCase/ y la
   # resolucion es por nombre de fichero.
   testcase_paths:
-    - TC_Demo_Variables.yml
-    - TC_Demo_Flow.yml
-    - TC_Demo_Python.yml
-    - TC_Check_PublishTasks.yml
+    - TC_1_Preflight.yml
+    - TC_5_Flujo_Variables.yml
+    - TC_4_Dataset_Csv.yml
+    - TC_6_Latencia_SLA.yml
 
   ues_paths:
     - UE_Variables_TEMPLATE.yml
