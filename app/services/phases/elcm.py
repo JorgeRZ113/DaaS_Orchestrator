@@ -545,6 +545,13 @@ def _not_ready_detail(record: ExecutionRecord) -> str:
     llegar aqui significa que la TN realmente no esta: el mensaje dice cual es
     el siguiente paso en vez de dejar solo el estado interno.
     """
+    if record.status is ExecutionState.paused:
+        # La TN sigue viva: no se reconecta sola a proposito, porque levantar un
+        # tunel sin pedirlo puede chocar con el de la TN con la que se trabaja.
+        return (
+            f"TN is paused (status: {record.status.value}); reconnect it first with "
+            f"POST /executions/{record.execution_id}/resume"
+        )
     if record.status in state.RECONCILABLE_STATES:
         return (
             f"TN is not ready for experiments (status: {record.status.value}) and TNLCM no "

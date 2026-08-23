@@ -288,13 +288,17 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
         state.signal_phase(execution_id, "_vpn_ready")
 
 
-async def _ensure_tunnel_up(execution_id: str) -> None:
+async def ensure_tunnel_up(execution_id: str) -> None:
     """Reabre el tunel WireGuard de una TN recuperada, si hace falta.
 
     Un teardown que llego a bajar el tunel deja la TN inalcanzable aunque siga
     viva en TNLCM. Si no se puede reabrir NO se aborta: se marca
     MANUAL_REQUIRED, igual que en el despliegue, y el experimento sigue siendo
     lanzable con el tunel puesto a mano.
+
+    Publica porque la usa tambien la fase de conexion (`phases/connection.py`)
+    para reconectar una TN pausada: un nombre con prefijo `_` que cruza la
+    frontera del modulo miente (§8.5).
     """
     record = state.executions[execution_id]
     if record.vpn_status == "UP":
@@ -387,7 +391,7 @@ async def _reconcile_live_tn(execution_id: str) -> None:
     telemetry.increment_counter(
         "tn_reconcile_total", labels={"service": "orchestrator", "status": "recovered"}
     )
-    await _ensure_tunnel_up(execution_id)
+    await ensure_tunnel_up(execution_id)
     state.update(
         execution_id,
         status=ExecutionState.tn_ready,

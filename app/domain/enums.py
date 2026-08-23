@@ -4,13 +4,17 @@ from enum import Enum
 
 
 class ExecutionState(str, Enum):
-    # --- Estados que el pipeline produce (los 9 operativos) ---
+    # --- Estados que el pipeline produce (los 10 operativos) ---
     pending = "PENDING"
     validating = "VALIDATING"
     deploying = "DEPLOYING"
     tn_ready = "TN_READY"
     running_experiment = "RUNNING_EXPERIMENT"
     collecting = "COLLECTING"
+    # La TN sigue viva y 'activated' en TNLCM: lo unico que se ha bajado es el
+    # tunel WireGuard, para poder trabajar con otra TN. Se vuelve a TN_READY con
+    # POST /executions/{id}/resume, sin redesplegar ni tocar el descriptor.
+    paused = "PAUSED"
     destroying = "DESTROYING"
     destroyed = "DESTROYED"
     failed = "FAILED"

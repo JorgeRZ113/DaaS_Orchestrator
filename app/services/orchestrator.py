@@ -18,6 +18,7 @@ from app.services.errors import (
     ExecutionConflictError,
     ExecutionNotFoundError,
 )
+from app.services.phases import connection as connection_phase
 from app.services.phases import elcm as elcm_phase
 from app.services.phases import teardown as teardown_phase
 from app.services.phases import tnlcm as tnlcm_phase
@@ -28,6 +29,21 @@ logger = logging.getLogger(__name__)
 def get_execution(execution_id: str):
     """Delegacion fina hacia `state`, para que la API dependa solo de este modulo."""
     return state.get_execution(execution_id)
+
+
+def list_executions():
+    """Delegacion fina hacia `state` (ver `get_execution`)."""
+    return state.list_executions()
+
+
+async def pause_tn(execution_id: str) -> ExecutionRecord:
+    """Delegacion fina hacia la fase de conexion (ver `get_execution`)."""
+    return await connection_phase.pause_tn(execution_id)
+
+
+async def resume_tn(execution_id: str) -> ExecutionRecord:
+    """Delegacion fina hacia la fase de conexion (ver `get_execution`)."""
+    return await connection_phase.resume_tn(execution_id)
 
 
 async def wait_for_phase(execution_id: str, signal: str, timeout: float):
@@ -197,7 +213,13 @@ def start_tn_teardown(execution_id: str) -> ExecutionRecord:
         )
     if record.status in {ExecutionState.destroying, ExecutionState.destroyed}:
         raise ExecutionConflictError(f"TN removal already {record.status.value}")
-    if record.status not in {ExecutionState.tn_ready, ExecutionState.failed}:
+    # PAUSED entra: una TN apartada sigue viva en TNLCM y consumiendo recursos
+    # del facility, asi que tiene que poder borrarse sin reconectarla antes.
+    if record.status not in {
+        ExecutionState.tn_ready,
+        ExecutionState.paused,
+        ExecutionState.failed,
+    }:
         raise ExecutionConflictError(
             f"TN cannot be removed in its current state (status: {record.status.value})"
         )

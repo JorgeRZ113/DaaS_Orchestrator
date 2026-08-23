@@ -45,7 +45,10 @@ async def _run_teardown_phase_inner(execution_id: str) -> None:
     )
 
     vpn_interface = record.vpn_interface or tn_id
-    if vpn_interface:
+    # Una TN pausada ya tiene el tunel abajo: volver a bajarlo falla y dejaria un
+    # DOWN_ERROR puramente cosmetico en el resumen del borrado.
+    already_down = record.vpn_status == "DOWN"
+    if vpn_interface and not already_down:
         vpn_down_timer = telemetry.start_timer("wireguard", "tunnel_down", execution_id)
         vpn_down_timer.start()
         try:

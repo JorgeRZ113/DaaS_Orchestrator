@@ -83,6 +83,28 @@ def get_execution(execution_id: str) -> ExecutionRecord | None:
     return executions.get(execution_id)
 
 
+def list_executions() -> list[ExecutionRecord]:
+    """Todas las ejecuciones conocidas, en orden de creacion."""
+    return list(executions.values())
+
+
+def connected_execution(exclude: str | None = None) -> str | None:
+    """Que ejecucion tiene ahora mismo el tunel WireGuard levantado, si alguna.
+
+    Sostiene el invariante de un unico tunel a la vez: reconectar una TN mientras
+    otra sigue conectada haria convivir dos tuneles cuyas rutas pueden pisarse.
+    Se mira `vpn_status` y no el sistema porque el tunel de Windows es un
+    servicio que sobrevive al proceso: el valor cargado de disco sigue siendo
+    valido tras un reinicio.
+    """
+    for execution_id, record in executions.items():
+        if execution_id == exclude:
+            continue
+        if record.vpn_status == "UP":
+            return execution_id
+    return None
+
+
 def signal_phase(execution_id: str, signal: str) -> None:
     """Marca una fase como terminada, haya ido bien o mal.
 
