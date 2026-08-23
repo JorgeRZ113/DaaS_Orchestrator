@@ -46,11 +46,14 @@ def _run(argv, **env):
         (["detail", "tn-1"], "_cmd_detail"),
         (["summary", "tn-1"], "_cmd_summary"),
         (["download", "tn-1"], "_cmd_download"),
+        (["ls"], "_cmd_ls"),
+        (["pause", "tn-1"], "_cmd_pause"),
+        (["resume", "tn-1"], "_cmd_resume"),
         (["rm", "tn-1"], "_cmd_rm"),
     ],
 )
 def test_cada_orden_despacha_a_su_handler(argv, handler):
-    """Las siete ordenes existen y llevan a la funcion que les toca.
+    """Las diez ordenes existen y llevan a la funcion que les toca.
 
     Un `set_defaults` copiado y no editado —el fallo tipico al anadir un
     subcomando— manda dos ordenes al mismo sitio y aqui se ve.
@@ -203,6 +206,37 @@ def test_forzar_utf8_tolera_un_stdout_sin_reconfigure(monkeypatch):
     monkeypatch.setattr(cli.sys, "stdout", SinReconfigure())
     monkeypatch.setattr(cli.sys, "stderr", SinReconfigure())
     cli._force_utf8_output()  # no debe levantar
+
+
+def test_ls_pide_el_listado(fake_http):
+    fake_http.respond(200, json=[{"execution_id": "tn-1", "vpn_status": "UP"}])
+
+    assert _run(["ls"]) == cli.EXIT_OK
+    assert fake_http.paths_for("GET") == ["/executions"]
+
+
+def test_pause_aparta_la_trial_network(fake_http):
+    fake_http.respond(200, json={"status": "PAUSED", "vpn_status": "DOWN"})
+
+    assert _run(["pause", "tn-1"]) == cli.EXIT_OK
+    assert fake_http.paths_for("POST") == ["/executions/tn-1/pause"]
+
+
+def test_resume_reconecta_sin_enviar_descriptor(fake_http):
+    """No lleva cuerpo a proposito: es lo que evita pisar el descriptor original."""
+    fake_http.respond(200, json={"status": "TN_READY", "vpn_status": "UP"})
+
+    assert _run(["resume", "tn-1"]) == cli.EXIT_OK
+    assert fake_http.paths_for("POST") == ["/executions/tn-1/resume"]
+    assert not fake_http.last.content
+
+
+def test_pause_parcial_sale_con_codigo_propio(fake_http, capsys):
+    """207 = pausada pero el tunel no se pudo bajar; encadenar a ciegas seria peor."""
+    fake_http.respond(207, json={"status": "PAUSED", "vpn_status": "DOWN_ERROR"})
+
+    assert _run(["pause", "tn-1"]) == cli.EXIT_PARTIAL
+    assert "DOWN_ERROR" in capsys.readouterr().err
 
 
 def test_rm_borra_la_trial_network(fake_http):
