@@ -47,6 +47,7 @@ pip install -e ".[ui]"
    - **Nueva ejecución** → `POST /executions`
    - **Resumen** → `GET /executions/{id}/summary`
    - **Estado** → `GET /executions/{id}` y `/detail`
+   - **Conexión** → `GET /executions`, `POST /executions/{id}/pause` y `/resume`
    - **Experimento ELCM** → `POST /executions/{id}/elcm`
    - **Descargar** → `GET /executions/{id}/download`
    - **Borrar TN** → `DELETE /executions/{id}/tn`
@@ -156,6 +157,25 @@ podrían lanzar a la vez. Quien lo impide de verdad es el servidor, que responde
 > Si cierras la pestaña más de dos minutos, la sesión de Streamlit caduca y la UI
 > pierde de vista el trabajo. **El servidor no**: la operación sigue y se ve en
 > la pestaña Resumen.
+
+## Pestaña «Conexión»
+
+Es la que permite tener **varias Trial Networks desplegadas a la vez** y elegir
+con cuál se trabaja, sin borrar ninguna. Enseña el listado de ejecuciones
+con su estado y su `vpn_status`, destacando la que tiene el túnel levantado,
+y ofrece dos botones sobre la ejecución elegida:
+
+- **Pausar** baja el túnel WireGuard y deja la TN viva en TNLCM (`PAUSED`).
+- **Conectar** lo reabre y devuelve la ejecución a `TN_READY`.
+
+Reconectar **no envía descriptor**: no regenera nada, así que el descriptor
+original de esa TN y su historial de experimentos se conservan. Es la diferencia
+con volver a lanzarla desde *Nueva ejecución*, que recrearía la ejecución
+desde cero.
+
+Solo puede haber un túnel levantado a la vez, así que si intentas conectar
+con otra TN mientras una sigue conectada la pestaña te avisa antes de llamar
+(y la API responde `409` diciendo cuál pausar).
 
 ## Descargar la ejecución
 
