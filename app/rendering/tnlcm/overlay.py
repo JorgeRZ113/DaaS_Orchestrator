@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 
+from app.core.config import settings
 from app.rendering.yaml_style import _wrap_strings_in_quotes
 
 logger = logging.getLogger(__name__)
@@ -97,8 +98,19 @@ def _timer(execution_id: str, phase_name: str = "overlay"):
 
 
 def _ensure_generated_dir(execution_id: str) -> Path:
-    """Crear y retornar el directorio artifacts/<execution_id>/archivos_generados/."""
-    generated_dir = Path("artifacts") / execution_id / "archivos_generados"
+    """
+    Crear y retornar <artifacts_dir>/<execution_id>/archivos_generados/.
+
+    La raiz sale de `settings.artifacts_dir`, igual que en los generadores ELCM
+    (`rendering/elcm/dataset.py`, `adapters/elcm.py`). Antes era un `Path("artifacts")`
+    literal, relativo al cwd: ignoraba la configuracion, de modo que en CI los
+    ficheros no iban a `ARTIFACTS_DIR` y la fixture `isolate_artifacts_dir` no
+    aislaba el render TNLCM (la suite escribia en el arbol de trabajo real).
+    """
+    base = Path(settings.artifacts_dir)
+    if not base.is_absolute():
+        base = Path.cwd() / base
+    generated_dir = base / execution_id / "archivos_generados"
     generated_dir.mkdir(parents=True, exist_ok=True)
     return generated_dir
 
