@@ -1,0 +1,19 @@
+Version: 2
+Name: "TC_Dataset_PrometheusToCsv"
+Sequence:
+- Order: 800
+  Task: "Run.InfluxToCsv"
+  Config:
+    IdCsv: "@{ExecutionId}"
+    Host: "10.11.12.13"
+    Port: 8086
+    CustomQuery: "from(bucket: \"testing\") |> range(start: 0) |> filter(fn: (r) => r[\"_measurement\"] == \"OPEN5GS_KPIS\") |> filter(fn: (r) => r[\"ExecutionId\"] == \"@{ExecutionId}\") |> pivot(rowKey:[\"_time\"], columnKey:[\"_field\"], valueColumn:\"_value\") |> group()"
+- Order: 801
+  Task: "Run.CompressFiles"
+  Config:
+    Output: "@{TempFolder}/dataset_@{ExecutionId}.zip"
+    Files:
+    - Source: "@{TempFolder}/csv_query_@{ExecutionId}.csv"
+Standard: true
+Distributed: false
+KPIs: {}

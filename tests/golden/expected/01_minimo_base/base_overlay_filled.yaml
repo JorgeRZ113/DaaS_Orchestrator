@@ -1,0 +1,12 @@
+#@data/values
+---
+monitoring:
+  influxdb_version: "2.7.11"
+  influxdb_user: "admin"
+  influxdb_password: "adminadmin"
+  influxdb_org: "testing"
+  influxdb_bucket: "testing"
+  influxdb_token: "default-token-testing"
+  grafana_version: "11.6.0"
+  grafana_password: "adminadmin"
+  prometheus_version: "2.54.3"

@@ -1,0 +1,161 @@
+Version: 2
+Name: "TC_Dataset_PrometheusToGrafana"
+Sequence: []
+Standard: true
+Distributed: false
+KPIs: {}
+Dashboard:
+- Name: "ran_ue"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "ran_ue"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 0
+  - 0
+  Lines: true
+  Percentage: false
+- Name: "gnb"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "gnb"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 12
+  - 0
+  Lines: true
+  Percentage: false
+- Name: "amf_session"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "amf_session"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 0
+  - 8
+  Lines: true
+  Percentage: false
+- Name: "fivegs_amffunction_rm_reginitreq"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "fivegs_amffunction_rm_reginitreq"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 12
+  - 8
+  Lines: true
+  Percentage: false
+- Name: "fivegs_amffunction_rm_reginitsucc"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "fivegs_amffunction_rm_reginitsucc"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 0
+  - 16
+  Lines: true
+  Percentage: false
+- Name: "ues_active"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "ues_active"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 12
+  - 16
+  Lines: true
+  Percentage: false
+- Name: "bearers_active"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "bearers_active"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 0
+  - 24
+  Lines: true
+  Percentage: false
+- Name: "pfcp_sessions_active"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "pfcp_sessions_active"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 12
+  - 24
+  Lines: true
+  Percentage: false
+- Name: "fivegs_ep_n3_gtp_indatapktn3upf"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "fivegs_ep_n3_gtp_indatapktn3upf"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 0
+  - 32
+  Lines: true
+  Percentage: false
+- Name: "fivegs_ep_n3_gtp_outdatapktn3upf"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "fivegs_ep_n3_gtp_outdatapktn3upf"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 12
+  - 32
+  Lines: true
+  Percentage: false
+- Name: "fivegs_upffunction_upf_sessionnbr"
+  Measurement: "OPEN5GS_KPIS"
+  Field: "fivegs_upffunction_upf_sessionnbr"
+  Type: "Graph"
+  Interval: "10s"
+  Unit: "short"
+  Size:
+  - 8
+  - 12
+  Position:
+  - 0
+  - 40
+  Lines: true
+  Percentage: false

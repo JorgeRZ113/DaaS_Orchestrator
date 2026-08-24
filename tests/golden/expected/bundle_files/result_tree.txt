@@ -1,0 +1,16 @@
+# 2 ficheros
+--- entorno_13.txt
+=== fecha ===
+2026-08-23T17:43:32+00:00
+=== host ===
+tn-deveop-22-2-elcm-exp
+=== interfaces ===
+lo               UNKNOWN        127.0.0.1/8 ::1/128
+eth0             UP             192.168.199.3/24 fe80::c0ff:fea8:c703/64
+=== rutas ===
+default via 192.168.199.1 dev eth0 onlink
+192.168.199.0/24 dev eth0 proto kernel scope link src 192.168.199.3
+--- rtt_13.txt
+1.000
+0.868
+0.805
