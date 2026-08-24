@@ -67,6 +67,7 @@ markers = [
     "api: endpoints via TestClient",
     "contract: biblioteca de TestCases y Experiment Descriptor contra las reglas de ELCM",
     "system: ciclo de vida completo con dobles solo en los bordes",
+    "golden: descriptores de referencia con la salida congelada byte a byte",
 ]
 addopts = "--strict-markers"
 

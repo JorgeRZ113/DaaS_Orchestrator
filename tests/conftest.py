@@ -24,7 +24,7 @@ from app.services import background, state
 
 # Niveles de la piramide. Cada uno es un subdirectorio de `tests/` y da nombre a
 # un marcador, de modo que `pytest -m unit` sea el ciclo corto de desarrollo.
-LEVELS = frozenset({"unit", "integration", "adapters", "api", "contract", "system"})
+LEVELS = frozenset({"unit", "integration", "adapters", "api", "contract", "system", "golden"})
 
 
 def pytest_collection_modifyitems(config, items):
