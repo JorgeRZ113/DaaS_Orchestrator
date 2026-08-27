@@ -190,6 +190,20 @@ def test_the_elcm_tab_has_its_own_independent_widgets(app: AppTest) -> None:
 LAUNCH_BUTTONS = (f"{NEW}_launch", f"{ELCM}_launch", "teardown_launch")
 
 
+RUNNING_SUMMARY = {
+    "status": "Deploying the network",
+    "outcome": "running",
+    "message": "Activating TN tn-demo: attempt 1/3 failed (HTTP 502); retrying in 1 s",
+    "steps": [{"step": "Starting up the virtual machines", "status": "running"}],
+    "generated_at": "2026-08-27T00:00:00Z",
+}
+
+
+def _summary(self, execution_id, **kwargs):
+    """Resumen en curso, con un reintento a la vista."""
+    return {"execution_id": execution_id, **RUNNING_SUMMARY}
+
+
 @pytest.fixture
 def blocking_call(monkeypatch):
     """Sustituye la llamada de red por una que el test decide cuando termina.
@@ -211,6 +225,11 @@ def blocking_call(monkeypatch):
 
     for name in ("create_execution", "start_elcm", "delete_tn", "pause_tn", "resume_tn"):
         monkeypatch.setattr(api_client.ApiClient, name, _call)
+
+    # La UI pregunta por donde va mientras espera, y al terminar deja la pestana
+    # Resumen consultando esa ejecucion. Sin doble, las dos cosas saldrian a la
+    # red de verdad y el fallo de conexion ensuciaria `app.error`.
+    monkeypatch.setattr(api_client.ApiClient, "get_execution_summary", _summary)
     return gate, outcome
 
 
@@ -221,9 +240,16 @@ def _connected(at: AppTest) -> AppTest:
     return at
 
 
-def _launch_execution(at: AppTest) -> AppTest:
-    """Genera un descriptor minimo y pulsa «Lanzar ejecucion»."""
+def _launch_execution(at: AppTest, *, auto_start: bool = False) -> AppTest:
+    """Genera un descriptor minimo y pulsa «Lanzar ejecucion».
+
+    `auto_start` va a False salvo que se pida: con el puesto, un 200 de
+    /executions NO significa «terminado» sino «la TN esta y el experimento acaba
+    de empezar», que es un desenlace distinto y tiene su propia prueba.
+    """
     at.pills(key=f"{NEW}_components").set_value(["vnet"]).run()
+    if not auto_start:
+        at.checkbox(key=f"{NEW}_auto_start").uncheck().run()
     at.button(key=f"{NEW}_generate").click().run()
     at.button(key=f"{NEW}_launch").click().run()
     return at
@@ -299,6 +325,135 @@ def test_a_504_says_the_work_continues_instead_of_failing(app: AppTest, blocking
 
     assert not app.error
     assert any("sigue en curso" in message.value.lower() for message in app.warning)
+
+
+def test_the_announcement_is_consumed_exactly_once() -> None:
+    """La invariante que ninguna prueba de `AppTest` puede ver.
+
+    Al terminar un trabajo hay que repintar la app ENTERA: el desenlace y los
+    botones que el candado deshabilita viven fuera del fragment que lo vigila.
+    Pero el fragment se reejecuta solo cada dos segundos, asi que el aviso tiene
+    que consumirse o serian dos repintados por segundo para siempre. `AppTest` no
+    dispara esos temporizadores, de ahi que se pruebe la funcion directa.
+    """
+    import streamlit_app
+
+    job = streamlit_app._new_job("execution", "Despliegue")
+
+    assert streamlit_app._take_announcement(job) is False, "sin terminar no hay nada que avisar"
+
+    job["done"] = True
+    assert streamlit_app._take_announcement(job) is True
+    assert streamlit_app._take_announcement(job) is False, "el aviso no se repite"
+    assert streamlit_app._take_announcement(None) is False
+
+
+def test_a_failed_phase_is_reported_and_stays(app: AppTest, blocking_call) -> None:
+    """La regresion de verdad: el despliegue falla y la pagina no decia nada.
+
+    El desenlace tiene que aparecer sin que el usuario pulse nada y seguir ahi
+    despues, porque la pagina se repinta sola mientras se espera.
+    """
+    gate, outcome = blocking_call
+    outcome["result"] = api_client.ApiError(
+        "Error: TNLCM new activate exhausted retries for tn_id=tn-demo (HTTP 502)",
+        status_code=502,
+        detail={"execution_id": "tn-demo", "status": "FAILED"},
+    )
+    _launch_execution(_connected(app))
+    _finish(app, gate)
+
+    assert any("exhausted retries" in message.value for message in app.error)
+    assert any("HTTP 502" in message.value for message in app.error)
+
+    app.run()
+    assert any(
+        "exhausted retries" in message.value for message in app.error
+    ), "el error no puede borrarse en el siguiente repintado"
+
+
+def test_an_unreachable_api_is_not_sold_as_work_in_progress(app: AppTest, blocking_call) -> None:
+    """Con el orquestador caido no hay ninguna fase corriendo por detras.
+
+    Los dos llegan sin codigo HTTP, pero mandar al resumen aqui seria mandar a
+    buscar una ejecucion que no existe.
+    """
+    gate, outcome = blocking_call
+    outcome["result"] = api_client.ApiError(
+        "No se pudo conectar con http://localhost:8000/executions",
+        reached_server=False,
+    )
+    _launch_execution(_connected(app))
+    _finish(app, gate)
+
+    assert any("No se pudo conectar" in message.value for message in app.error)
+    assert not any("sigue en curso" in message.value for message in app.warning)
+
+
+def test_a_deploy_with_auto_start_is_not_announced_as_finished(app: AppTest, blocking_call) -> None:
+    """`POST /executions` responde antes de que el experimento empiece.
+
+    Con `auto_start_elcm` el servidor lo arranca al quedar lista la TN y responde
+    sin esperarlo: pintar «Completado» en verde era lo que hacia que un
+    experimento fallido veinte minutos mas tarde no se lo contara a nadie.
+    """
+    gate, _ = blocking_call
+    _launch_execution(_connected(app), auto_start=True)
+    _finish(app, gate)
+
+    assert not any("Completado" in message.value for message in app.success)
+    assert any("exp-demo" in message.value for message in app.warning)
+    assert app.session_state["summary_auto_refresh"] is True, "Resumen queda mirandolo"
+
+
+def test_a_launch_rejected_before_starting_is_still_reported(app: AppTest) -> None:
+    """Lo que se rechaza en el cliente va a la misma caja que el desenlace.
+
+    Antes era un `st.error` dentro de la pestana, y duraba lo que durase la
+    pasada: cualquier repintado -y ahora los hay solos- se lo llevaba.
+    """
+    _connected(app)
+    app.text_area(key=NEW).set_value("infrastructure: [rota").run()
+    app.button(key=f"{NEW}_launch").click().run()
+
+    assert any("no es YAML válido" in message.value for message in app.error)
+    assert app.session_state["running_job"]["done"] is True, "no se llego a lanzar nada"
+
+    app.checkbox(key="bundle_secrets").check().run()
+    assert any("no es YAML válido" in message.value for message in app.error)
+
+
+def test_the_waiting_box_says_where_the_phase_is(app: AppTest, blocking_call) -> None:
+    """Durante la espera solo se contaban minutos.
+
+    Los reintentos de activate no salian de los logs del servidor; ahora llegan
+    al `message` de la ejecucion y la caja de espera los ensena mientras ocurren.
+    """
+    gate, _ = blocking_call
+    _launch_execution(_connected(app))
+
+    try:
+        assert app.session_state["running_job"]["done"] is False
+        assert any("attempt 1/3 failed" in message.value for message in app.info)
+    finally:
+        gate.set()
+
+
+def test_the_execution_id_reaches_the_other_tabs(app: AppTest, blocking_call) -> None:
+    """Un `value=` no bastaba: solo se aplica la primera vez que se pinta.
+
+    Y `st.tabs` pinta el cuerpo de todas en la primera pasada, cuando aun no hay
+    ninguna ejecucion que heredar, asi que los campos se quedaban vacios y habia
+    que reescribir el identificador en cada pestana.
+    """
+    gate, _ = blocking_call
+    _launch_execution(_connected(app))
+
+    try:
+        for key in ("summary_execution_id", "elcm_execution_id", "teardown_execution_id"):
+            assert app.text_input(key=key).value == "tn-demo", key
+    finally:
+        gate.set()
 
 
 # ===== Descarga del ZIP (pestana Descargar) =====

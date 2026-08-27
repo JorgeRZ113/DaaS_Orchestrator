@@ -44,19 +44,35 @@ from app.client import (
 # ===== Utilidades compartidas =====
 
 
-def _get_client() -> ApiClient | None:
-    """Construye el cliente a partir del panel lateral; avisa si falta config."""
+def _client_or_none() -> ApiClient | None:
+    """El cliente configurado, o None. No pinta nada.
+
+    La variante muda de `_get_client()`: el sondeo del vigilante corre en cada
+    repintado y no puede permitirse dejar un aviso por pasada.
+    """
     base_url = st.session_state.get("base_url", "").strip()
     api_key = st.session_state.get("api_key", "").strip()
     if not base_url or not api_key:
-        st.warning("Configura Base URL y API key en el panel lateral.")
         return None
     return ApiClient(base_url=base_url, api_key=api_key)
 
 
+def _get_client() -> ApiClient | None:
+    """Construye el cliente a partir del panel lateral; avisa si falta config."""
+    client = _client_or_none()
+    if client is None:
+        st.warning("Configura Base URL y API key en el panel lateral.")
+    return client
+
+
 def _show_api_error(exc: ApiError) -> None:
-    """Pinta un error de API con su mensaje y, si lo hay, el detail estructurado."""
-    st.error(exc.message)
+    """Pinta un error de API con su mensaje y, si lo hay, el detail estructurado.
+
+    El codigo HTTP va delante porque cambia lo que hay que hacer: un 404 es un
+    identificador que no existe y un 502 es un servicio de abajo que ha fallado.
+    """
+    code = f"HTTP {exc.status_code} — " if exc.status_code else ""
+    st.error(f"{code}{exc.message}")
     if isinstance(exc.detail, (dict, list)):
         st.json(exc.detail)
 
@@ -78,8 +94,13 @@ def _show_api_error(exc: ApiError) -> None:
 JOB_KEY = "running_job"
 
 # Cada cuánto repinta el panel del trabajo en curso. Dos segundos dan sensación
-# de vivo sin castigar nada: el sondeo es local, no sale a la red.
+# de vivo sin castigar nada: el cronómetro es local, no sale a la red.
 JOB_REFRESH_SECONDS = 2
+
+# Cada cuánto se le pregunta al servidor por dónde va. Va más espaciado que el
+# repintado porque esto sí es una llamada de red, y desde el hilo del script: al
+# mismo ritmo que la pestaña Resumen, que hace lo mismo.
+JOB_PROGRESS_SECONDS = 5
 
 # Desenlaces del código HTTP, comunes a las tres fases (`app/api/phases.py`).
 _OUTCOMES = {
@@ -92,18 +113,56 @@ _OUTCOMES = {
 }
 
 
-def _new_job(kind: str, label: str) -> dict[str, Any]:
+def _new_job(
+    kind: str,
+    label: str,
+    *,
+    execution_id: str | None = None,
+    follow_up: str | None = None,
+) -> dict[str, Any]:
     """Estado compartido entre el hilo y la página. Dict normal a propósito."""
     return {
         "kind": kind,
         "label": label,
+        # A qué ejecución apunta: es lo que permite preguntar por dónde va
+        # mientras dura y dejar apuntada la pestaña Resumen cuando termina.
+        "execution_id": execution_id,
+        # Nombre del experimento que el servidor arrancará por su cuenta al
+        # terminar el despliegue (`auto_start_elcm`), o None. Cambia lo que
+        # significa un 200: la TN está lista, el experimento no.
+        "follow_up": follow_up,
         "started_at": time.monotonic(),
         "done": False,
         "finished_at": None,
         "result": None,
         "error": None,
         "status_code": None,
+        # El aviso de «esto ya ha terminado» se consume UNA vez: es lo que
+        # dispara el repintado de la app, y sin la marca el temporizador del
+        # fragment lo estaría pidiendo cada dos segundos para siempre.
+        "announced": False,
+        # True si lo que falló fue el cliente y no la fase. Distingue los dos
+        # errores que llegan sin código HTTP, que no significan lo mismo.
+        "unexpected": False,
+        # Último resumen sondeado y cuándo, para no pedirlo en cada repintado.
+        "progress": None,
+        "progress_error": None,
+        "polled_at": None,
     }
+
+
+def _take_announcement(job: dict[str, Any] | None) -> bool:
+    """Consume el aviso pendiente: True solo la primera vez tras terminar.
+
+    Aparte por dos razones. Una, que es la única forma de probar la invariante:
+    `AppTest` no dispara los temporizadores de los fragments, así que la decisión
+    de repintar no se ve desde una prueba de la app. Dos, que la marca tiene que
+    ponerse ANTES de `st.rerun`, que no vuelve.
+    """
+    if job is None or not job["done"] or job["announced"]:
+        return False
+    job["announced"] = True
+    return True
 
 
 def _run_job(job: dict[str, Any], call: Callable[[], PhaseResult]) -> None:
@@ -127,17 +186,53 @@ def _run_job(job: dict[str, Any], call: Callable[[], PhaseResult]) -> None:
         job["status_code"] = exc.status_code
     except BaseException as exc:  # noqa: BLE001 - el hilo no puede dejar escapar nada
         job["error"] = ApiError(f"Fallo inesperado en el cliente: {exc!r}")
+        # Se marca porque tambien llega sin codigo HTTP, igual que una conexion
+        # cortada, y las dos cosas no significan lo mismo: aquella deja la fase
+        # corriendo en el servidor, esta es un fallo de verdad.
+        job["unexpected"] = True
     finally:
         job["finished_at"] = time.monotonic()
         job["done"] = True
 
 
-def _start_job(kind: str, label: str, call: Callable[[], Any]) -> None:
+def _start_job(
+    kind: str,
+    label: str,
+    call: Callable[[], Any],
+    *,
+    execution_id: str | None = None,
+    follow_up: str | None = None,
+) -> None:
     """Lanza la operación en segundo plano y deja la página utilizable."""
-    job = _new_job(kind, label)
+    job = _new_job(kind, label, execution_id=execution_id, follow_up=follow_up)
     st.session_state[JOB_KEY] = job
     thread = threading.Thread(target=_run_job, args=(job, call), daemon=True)
     thread.start()
+
+
+def _fail_job(kind: str, label: str, message: str) -> None:
+    """Registra un lanzamiento rechazado ANTES de salir, como trabajo terminado.
+
+    Es para lo que se comprueba en el cliente: descriptor vacío, YAML roto, falta
+    el `execution_id`. Antes se pintaban con un `st.error` dentro de la pestaña y
+    duraban lo que durase la pasada; ahora que el vigilante repinta la app por su
+    cuenta al terminar un trabajo, un mensaje así podía borrarse solo sin que el
+    usuario llegara a leerlo. Yendo a la misma caja fija que el desenlace, todo lo
+    que pasa al pulsar «Lanzar» aparece en el mismo sitio y se queda hasta que se
+    descarta.
+
+    Queda `announced` puesto: no hay nada que esperar, así que el vigilante no
+    tiene que pedir ningún repintado. El llamante hace `st.rerun()` para que la
+    caja salga ya, en vez de en el siguiente tic.
+    """
+    job = _new_job(kind, label)
+    job["error"] = ApiError(message)
+    job["unexpected"] = True
+    job["status_code"] = None
+    job["done"] = True
+    job["announced"] = True
+    job["finished_at"] = job["started_at"]
+    st.session_state[JOB_KEY] = job
 
 
 def _current_job() -> dict[str, Any] | None:
@@ -168,26 +263,111 @@ def _lock_help(action: str) -> str | None:
     )
 
 
+def _poll_progress(job: dict[str, Any]) -> None:
+    """Refresca el resumen del trabajo en curso, como mucho cada N segundos.
+
+    Es lo que convierte una espera de 40 minutos en algo legible: el resumen ya
+    sabe por qué paso va la fase y cuáles han fallado, pero hasta ahora había que
+    irse a la pestaña Resumen a preguntarlo a mano.
+
+    Un fallo del sondeo NO se pinta como error: durante los tramos en que el
+    servidor bloquea su event loop el tope de 10 s salta de vez en cuando, y eso
+    no dice nada del despliegue. Se conserva lo último que se supo y se guarda el
+    motivo por si nunca llega a haber nada que enseñar.
+    """
+    execution_id = job["execution_id"]
+    if not execution_id:
+        return
+    now = time.monotonic()
+    if job["polled_at"] is not None and now - job["polled_at"] < JOB_PROGRESS_SECONDS:
+        return
+    job["polled_at"] = now
+
+    client = _client_or_none()
+    if client is None:
+        return
+    try:
+        job["progress"] = client.get_execution_summary(execution_id)
+        job["progress_error"] = None
+    except ApiError as exc:
+        job["progress_error"] = exc.message
+
+
+def _render_progress(job: dict[str, Any]) -> None:
+    """Por dónde va la fase, según el último resumen sondeado."""
+    summary = job["progress"]
+    if not isinstance(summary, dict):
+        if job["progress_error"]:
+            st.caption(f"Sin novedades del servidor: {job['progress_error']}")
+        return
+
+    if summary.get("message"):
+        st.info(summary["message"], icon=":material/sync:")
+    # La tabla de pasos es la que enseña lo que antes no se veía: un paso en rojo
+    # mientras la fase sigue viva, y la columna «Intentos» cuando algo se ha
+    # reintentado.
+    _render_steps(summary.get("steps") or [])
+
+
+def _arm_summary(job: dict[str, Any]) -> None:
+    """Deja la pestaña Resumen apuntando a esa ejecución y refrescándose sola.
+
+    Se llama cuando el trabajo termina pero la ejecución no: un experimento que
+    el servidor arrancó por su cuenta, o un 504. Escribir en `session_state` es
+    legal aquí porque esto se pinta en `main()`, antes de que las pestañas creen
+    sus widgets.
+    """
+    if not job["execution_id"]:
+        return
+    st.session_state["last_execution_id"] = job["execution_id"]
+    st.session_state["summary_requested"] = True
+    st.session_state["summary_auto_refresh"] = True
+
+
 def _render_job_outcome(job: dict[str, Any]) -> None:
     """Pinta el desenlace de un trabajo terminado."""
     error: ApiError | None = job["error"]
 
     if error is not None:
-        # 504 no es un fallo: el servidor agotó SU tope y sigue trabajando.
-        if error.status_code == 504:
+        # Ni un 504 ni una conexión cortada significan que la fase haya fallado:
+        # el servidor sigue a lo suyo y el desenlace está en el resumen. El único
+        # error sin código HTTP que sí lo es viene marcado desde `_run_job`.
+        still_running = error.status_code == 504 or (
+            error.status_code is None and not job["unexpected"] and error.reached_server
+        )
+        if still_running:
+            reason = (
+                "el servidor agotó su tope de espera" if error.status_code == 504 else error.message
+            )
             st.warning(
-                f"{job['label']}: el servidor agotó su tope de espera, pero **la "
-                "operación sigue en curso**. Míralo en la pestaña Resumen.",
+                f"{job['label']}: {reason}, pero **la operación sigue en curso**. "
+                "Míralo en la pestaña Resumen, que ya está actualizándose sola.",
                 icon=":material/hourglass_top:",
             )
-        else:
-            st.error(f"{job['label']}: {error.message}", icon=":material/error:")
-            if isinstance(error.detail, (dict, list)):
-                st.json(error.detail)
+            _arm_summary(job)
+            return
+
+        code = f" (HTTP {error.status_code})" if error.status_code else ""
+        st.error(f"{job['label']}{code}: {error.message}", icon=":material/error:")
+        if isinstance(error.detail, (dict, list)):
+            st.json(error.detail)
         return
 
-    kind, icon, text = _OUTCOMES.get(job["status_code"], _OUTCOMES[200])
-    getattr(st, kind)(f"{job['label']}: {text}", icon=icon)
+    if job["status_code"] == 200 and job["follow_up"]:
+        # `POST /executions` responde en cuanto la VPN está resuelta, y el
+        # experimento que el servidor arranca solo (`auto_start_elcm`) empieza
+        # DESPUÉS. Decir «Completado» aquí era lo que hacía que un experimento
+        # fallido veinte minutos más tarde no se lo contara a nadie.
+        st.warning(
+            f"{job['label']}: la Trial Network está lista, pero el experimento "
+            f"«{job['follow_up']}» sigue en curso. Su resultado sale en la pestaña "
+            "Resumen, que ya está actualizándose sola.",
+            icon=":material/hourglass_top:",
+        )
+        _arm_summary(job)
+    else:
+        kind, icon, text = _OUTCOMES.get(job["status_code"], _OUTCOMES[200])
+        getattr(st, kind)(f"{job['label']}: {text}", icon=icon)
     if isinstance(job["result"], dict):
         st.json(job["result"])
 
@@ -205,8 +385,22 @@ def _job_watcher() -> None:
     del navegador quedaría apuntando a uno que ya no existe.
     """
     job = _current_job()
-    if job is None or job["done"]:
+    if job is None:
         return
+
+    if job["done"]:
+        # Hay que repintar la app ENTERA, no solo el fragment: el desenlace lo
+        # pinta `_render_job_result()`, que vive fuera de aquí, y los botones que
+        # el candado deshabilita también. Este es el arreglo: antes se salía por
+        # `done` antes de llegar a pedirlo, así que la caja del reloj desaparecía
+        # y en su lugar no aparecía nada hasta que el usuario pulsaba algo por su
+        # cuenta. El aviso se consume una sola vez o esto sería un repintado cada
+        # dos segundos para siempre.
+        if _take_announcement(job):
+            st.rerun(scope="app")
+        return
+
+    _poll_progress(job)
 
     elapsed = time.monotonic() - job["started_at"]
     minutes, seconds = divmod(int(elapsed), 60)
@@ -217,12 +411,7 @@ def _job_watcher() -> None:
             f"Lleva {minutes} min {seconds:02d} s. La petición no responde hasta que la "
             "fase termina; mientras tanto puedes usar Estado y Resumen con normalidad."
         )
-
-    # Al terminar hay que repintar la app ENTERA, no solo el fragment: los
-    # botones que el candado deshabilita están fuera de aquí y un rerun de
-    # fragment no los tocaría.
-    if job["done"]:
-        st.rerun(scope="app")
+        _render_progress(job)
 
 
 def _render_job_result() -> None:
@@ -240,14 +429,6 @@ def _render_job_result() -> None:
         if st.button("Descartar", key="job_dismiss", icon=":material/close:"):
             st.session_state.pop(JOB_KEY, None)
             st.rerun()
-
-
-def _job_execution_id() -> str | None:
-    """`execution_id` que devolvió el último trabajo, si lo trajo."""
-    job = _current_job()
-    if job is None or not isinstance(job["result"], dict):
-        return None
-    return job["result"].get("execution_id")
 
 
 # ===== Panel lateral: conexión, salud y auth TNLCM =====
@@ -710,31 +891,51 @@ def tab_new_execution() -> None:
     if _job_in_flight():
         return
 
-    client = _get_client()
+    # Los rechazos previos van a la caja fija de arriba y no a un `st.error`
+    # dentro de la pestaña: ahí duraban lo que durase la pasada, y el vigilante
+    # repinta la app por su cuenta al terminar un trabajo.
+    label = "Despliegue de la Trial Network"
+    client = _client_or_none()
     if client is None:
-        return
+        _fail_job("execution", label, "Configura Base URL y API key en el panel lateral.")
+        st.rerun()
     if not text.strip():
-        st.warning("El descriptor está vacío: genéralo, súbelo o carga un ejemplo.")
-        return
+        _fail_job(
+            "execution", label, "El descriptor está vacío: genéralo, súbelo o carga un ejemplo."
+        )
+        st.rerun()
 
     # La sintaxis se comprueba antes de lanzar el hilo: un YAML roto se responde
     # con un 400 inmediato y no merece bloquear la UI ni ocupar el candado.
     try:
-        descriptor.parse_yaml(text)
+        parsed = descriptor.parse_yaml(text)
     except (yaml.YAMLError, ValueError) as exc:
-        st.error(f"El descriptor no es YAML válido: {exc}", icon=":material/error:")
-        return
+        _fail_job("execution", label, f"El descriptor no es YAML válido: {exc}")
+        st.rerun()
 
     # El nombre de la TN se guarda ya: el ZIP y el resumen se consultan por él, y
     # con una espera de 40 minutos por delante conviene tenerlo a mano desde ya.
-    parsed = descriptor.parse_yaml(text)
     name = (parsed.get("infrastructure") or {}).get("name")
-    if isinstance(name, str) and name.strip():
-        st.session_state["last_execution_id"] = name.strip()
+    execution_id = name.strip() if isinstance(name, str) else ""
+    if execution_id:
+        st.session_state["last_execution_id"] = execution_id
+
+    # Con `auto_start_elcm` —el valor por defecto, aquí y en el modelo— el
+    # servidor arranca el experimento en cuanto la TN está lista y responde sin
+    # esperarlo. Guardar su nombre es lo que permite no cantar victoria al recibir
+    # el 200: la TN está, el experimento todavía no.
+    experiment = parsed.get("experiment")
+    follow_up = None
+    if parsed.get("auto_start_elcm", True) and isinstance(experiment, dict):
+        follow_up = str(experiment.get("name") or "").strip() or None
 
     payload = Descriptor(filename="descriptor.yaml", content=text.encode("utf-8"))
     _start_job(
-        "execution", "Despliegue de la Trial Network", lambda: client.create_execution(payload)
+        "execution",
+        label,
+        lambda: client.create_execution(payload),
+        execution_id=execution_id or None,
+        follow_up=follow_up,
     )
     st.rerun()
 
@@ -747,7 +948,6 @@ def tab_status() -> None:
     st.subheader("Estado de una ejecución")
     execution_id = st.text_input(
         "execution_id",
-        value=st.session_state.get("last_execution_id", ""),
         key="status_execution_id",
     )
     # La consulta se recuerda en vez de vivir un solo rerun. Debajo hay una
@@ -887,9 +1087,19 @@ def tab_connection() -> None:
         return
 
     if paused:
-        _start_job("pause", f"Pausa de la TN de {target}", lambda: client.pause_tn(target))
+        _start_job(
+            "pause",
+            f"Pausa de la TN de {target}",
+            lambda: client.pause_tn(target),
+            execution_id=target,
+        )
     else:
-        _start_job("resume", f"Conexión con la TN de {target}", lambda: client.resume_tn(target))
+        _start_job(
+            "resume",
+            f"Conexión con la TN de {target}",
+            lambda: client.resume_tn(target),
+            execution_id=target,
+        )
     st.rerun()
 
 
@@ -910,7 +1120,6 @@ def tab_download() -> None:
     st.subheader("Descargar los artefactos de una ejecución")
     execution_id = st.text_input(
         "execution_id",
-        value=st.session_state.get("last_execution_id", ""),
         key="bundle_execution_id",
         help=(
             "El nombre de la TN (`infrastructure.name`) con el que se lanzó. "
@@ -1133,7 +1342,6 @@ def tab_summary() -> None:
 
     execution_id = st.text_input(
         "execution_id",
-        value=st.session_state.get("last_execution_id", ""),
         key="summary_execution_id",
     )
 
@@ -1228,7 +1436,6 @@ def tab_elcm() -> None:
 
     execution_id = st.text_input(
         "execution_id",
-        value=st.session_state.get("last_execution_id", ""),
         key="elcm_execution_id",
     )
 
@@ -1256,21 +1463,25 @@ def tab_elcm() -> None:
     if _job_in_flight():
         return
 
-    client = _get_client()
+    # Mismo criterio que en «Nueva ejecución»: lo que impide lanzar se cuenta en
+    # la caja fija, que sobrevive a los repintados.
+    label = "Experimento ELCM"
+    client = _client_or_none()
     if client is None:
-        return
+        _fail_job("elcm", label, "Configura Base URL y API key en el panel lateral.")
+        st.rerun()
     if not execution_id.strip():
-        st.error("execution_id es obligatorio.")
-        return
+        _fail_job("elcm", label, "Falta el execution_id de la TN sobre la que experimentar.")
+        st.rerun()
     if not text.strip():
-        st.warning("El cuerpo está vacío: genéralo, súbelo o carga el ejemplo.")
-        return
+        _fail_job("elcm", label, "El cuerpo está vacío: genéralo, súbelo o carga el ejemplo.")
+        st.rerun()
 
     try:
         descriptor.parse_yaml(text)
     except (yaml.YAMLError, ValueError) as exc:
-        st.error(f"El cuerpo no es YAML válido: {exc}", icon=":material/error:")
-        return
+        _fail_job("elcm", label, f"El cuerpo no es YAML válido: {exc}")
+        st.rerun()
 
     payload = Descriptor(filename="experimento.yaml", content=text.encode("utf-8"))
     target = execution_id.strip()
@@ -1278,6 +1489,7 @@ def tab_elcm() -> None:
         "elcm",
         f"Experimento sobre {target}",
         lambda: client.start_elcm(target, payload),
+        execution_id=target,
     )
     st.rerun()
 
@@ -1290,7 +1502,6 @@ def tab_teardown() -> None:
     st.subheader("Borrar Trial Network")
     execution_id = st.text_input(
         "execution_id",
-        value=st.session_state.get("last_execution_id", ""),
         key="teardown_execution_id",
     )
     confirm = st.checkbox("Confirmo el borrado de la TN", key="teardown_confirm")
@@ -1313,8 +1524,50 @@ def tab_teardown() -> None:
         return
 
     target = execution_id.strip()
-    _start_job("teardown", f"Borrado de la TN de {target}", lambda: client.delete_tn(target))
+    _start_job(
+        "teardown",
+        f"Borrado de la TN de {target}",
+        lambda: client.delete_tn(target),
+        execution_id=target,
+    )
     st.rerun()
+
+
+# ===== El identificador de la última ejecución =====
+
+# Campos que ofrecen el `execution_id` de lo último que se lanzó.
+EXECUTION_ID_KEYS = (
+    "summary_execution_id",
+    "status_execution_id",
+    "elcm_execution_id",
+    "bundle_execution_id",
+    "teardown_execution_id",
+)
+
+# Qué id se propagó la última vez, para no volver a pisar el campo después.
+APPLIED_EXECUTION_ID_KEY = "last_execution_id_applied"
+
+
+def _propagate_execution_id() -> None:
+    """Lleva el id de la última ejecución a los campos que lo piden.
+
+    Hace falta un sitio para esto porque un `value=` NO sirve: solo se aplica la
+    primera vez que el widget se pinta, y `st.tabs` ejecuta el cuerpo de TODAS las
+    pestañas en la primera pasada, cuando todavía no hay ninguna ejecución que
+    heredar. A partir de ahí el `value=` no se vuelve a mirar, así que los campos
+    se quedaban vacíos para siempre y había que reescribir el identificador en
+    cada pestaña.
+
+    Se propaga solo cuando el id CAMBIA, no en cada pasada: así el campo se
+    rellena al lanzar algo nuevo pero sigue siendo editable, incluido dejarlo en
+    blanco para consultar otra ejecución.
+    """
+    current = st.session_state.get("last_execution_id", "")
+    if not current or st.session_state.get(APPLIED_EXECUTION_ID_KEY) == current:
+        return
+    st.session_state[APPLIED_EXECUTION_ID_KEY] = current
+    for key in EXECUTION_ID_KEYS:
+        st.session_state[key] = current
 
 
 # ===== Entrada principal =====
@@ -1332,10 +1585,24 @@ def main() -> None:
     # bloque de resultado —cuyo numero de elementos varia— por detras.
     watch_box = st.container()
     result_box = st.container()
+
+    # El aviso de "ya ha terminado" se consume AQUI, antes de que el vigilante lo
+    # mire. En esta pasada el desenlace lo pinta `_render_job_result()` cuatro
+    # lineas mas abajo, asi que dejar que el vigilante pidiera un repintado seria
+    # abortar el render que estamos a punto de hacer. Cuando el vigilante corre
+    # por su cuenta -cada dos segundos, sin pasar por aqui- el aviso sigue
+    # pendiente, y ahi si hace falta.
+    _take_announcement(_current_job())
+
     with watch_box:
         _job_watcher()
     with result_box:
         _render_job_result()
+
+    # Después del desenlace (que puede haber fijado la ejecución a mirar) y antes
+    # de las pestañas, que es cuando todavía se puede escribir en la clave de un
+    # widget que aún no existe.
+    _propagate_execution_id()
 
     render_sidebar()
 
