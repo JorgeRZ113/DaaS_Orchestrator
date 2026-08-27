@@ -4,7 +4,7 @@ import asyncio
 import ast
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -45,6 +45,14 @@ TNLCM_ALREADY_EXISTS_STATUS_CODES = {400, 409}
 # Token storage in memory (populated by login endpoint)
 _tnlcm_access_token: str | None = None
 _tnlcm_refresh_token: str | None = None
+
+
+# Gancho opcional con el que el llamante se entera de lo que pasa MIENTRAS pasa.
+# Existe porque los reintentos solo dejaban rastro en `telemetry.log_event`, que no
+# retiene nada en memoria: sin esto, "activate va por el intento 2 de 3" no hay
+# forma de contarlo desde ningun endpoint. El adaptador solo ve un callable opaco,
+# asi que la dependencia sigue yendo de `services` a `adapters` y no al reves.
+OnProgress = Callable[[str], None]
 
 
 class _ActivateNoSuchFileError(Exception):
@@ -98,6 +106,7 @@ async def _activate_with_backoff(
     tn_id: str,
     endpoint_label: str,
     execution_id: str | None = None,
+    on_progress: OnProgress | None = None,
 ) -> None:
     """Activa una TN reintentando los fallos transitorios de TNLCM.
 
@@ -105,6 +114,10 @@ async def _activate_with_backoff(
     propio del adaptador: cuando NO reintentar (`_veto`), que telemetria emitir en
     cada reintento (`_on_retry`) y como traducir el fallo final a las excepciones
     que entiende la ruta de recuperacion de `deploy_trial_network`.
+
+    `on_progress` recibe una linea por reintento. Es lo unico que saca ese hecho
+    del fichero de log: la fase lo cablea al `message` de la ejecucion para que se
+    pueda leer desde la API mientras el despliegue sigue en curso.
     """
     policy = retry.TNLCM_ACTIVATE
 
@@ -160,6 +173,17 @@ async def _activate_with_backoff(
             next_retry_in_seconds=attempt.delay_seconds,
             **extra_fields,
         )
+        if on_progress is not None:
+            # Best-effort: informar del progreso no puede tumbar un despliegue que
+            # por lo demas iba a reintentar con normalidad.
+            try:
+                on_progress(
+                    f"Activating TN {tn_id}: attempt {attempt.number}/"
+                    f"{attempt.max_attempts} failed ({attempt.error}); retrying in "
+                    f"{attempt.delay_seconds:g} s"
+                )
+            except Exception:
+                logger.debug("on_progress hook failed", exc_info=True)
 
     def _fail(event: str, **fields: Any) -> None:
         activate_timer.stop(status="error")
@@ -743,8 +767,13 @@ async def deploy_trial_network(
     redeploy_attempt: int = 0,
     execution_id: str | None = None,
     generated_descriptor_path: str | None = None,
+    on_progress: OnProgress | None = None,
 ) -> str:
-    """Create TN and trigger activate. Returns tn_id."""
+    """Create TN and trigger activate. Returns tn_id.
+
+    `on_progress` es opcional y recibe una linea por reintento de activate, para
+    que el llamante pueda contarlo mientras ocurre en vez de dejarlo solo en el log.
+    """
     async with httpx.AsyncClient(timeout=None) as client:
         create_data: dict[str, Any] | None = None
         tn_id: str | None = None
@@ -886,6 +915,7 @@ async def deploy_trial_network(
                         tn_id=tn_id,
                         endpoint_label="new",
                         execution_id=execution_id,
+                        on_progress=on_progress,
                     )
                 except httpx.HTTPStatusError as exc:
                     log_http_response("TNLCM", exc.response)
@@ -901,6 +931,7 @@ async def deploy_trial_network(
                             tn_id=tn_id,
                             endpoint_label="legacy",
                             execution_id=execution_id,
+                            on_progress=on_progress,
                         )
                     elif exc.response.status_code == 400:
                         # 400 al activar puede significar que la TN ya está activada:
@@ -941,6 +972,7 @@ async def deploy_trial_network(
                     redeploy_attempt=redeploy_attempt + 1,
                     execution_id=execution_id,
                     generated_descriptor_path=generated_descriptor_path,
+                    on_progress=on_progress,
                 )
 
         telemetry.log_event(

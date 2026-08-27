@@ -81,15 +81,28 @@ async def run_tnlcm_phase(execution_id: str, descriptor: DatasetDescriptor) -> N
             execution_id=execution_id,
         )
 
+        def _report_progress(text: str) -> None:
+            """Lo que pasa MIENTRAS pasa, al `message` que sirve la API.
+
+            Los reintentos de activate solo dejaban rastro en `telemetry.log_event`,
+            que no retiene nada en memoria: sin esto, quien espera en la UI no tiene
+            forma de saber que se esta reintentando hasta que el despliegue falla.
+            """
+            state.update(execution_id, message=text)
+
         try:
             tn_id = await tnlcm.deploy_trial_network(
                 descriptor.infrastructure,
                 execution_id=execution_id,
                 generated_descriptor_path=tnlcm_descriptor_path,
+                on_progress=_report_progress,
             )
         except TypeError as exc:
             if "generated_descriptor_path" not in str(exc):
                 raise
+            # El respaldo se queda con la firma minima a proposito: existe para
+            # tolerar un adaptador viejo, y uno sin `generated_descriptor_path`
+            # tampoco tendria `on_progress`.
             tn_id = await tnlcm.deploy_trial_network(
                 descriptor.infrastructure,
                 execution_id=execution_id,

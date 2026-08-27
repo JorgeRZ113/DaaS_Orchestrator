@@ -171,3 +171,55 @@ async def test_create_400_on_terminal_tn_raises_actionable_error(
     assert "failed" in message
     assert fake_http.paths_for("PUT") == []  # no se activa una TN terminal
     assert fake_http.paths_for("GET") == [STATUS_PATH]
+
+
+# ===== Que el que espera se entere de los reintentos =====
+#
+# Un reintento de activate solo dejaba rastro en `telemetry.log_event`, que NO
+# retiene nada en memoria: ningun endpoint podia contarlo, asi que quien esperaba
+# en la UI no tenia forma de saber que se estaba reintentando hasta que el
+# despliegue fallaba del todo. `on_progress` es lo unico que lo saca de ahi.
+
+
+def _activate_fails_once_then_succeeds(fake_http):
+    """La cola es global y se consume en orden: create, activate, activate."""
+    fake_http.respond_once(201, json={"tn_id": "tn-demo"})
+    fake_http.respond_once(502, json={"message": "backend caido"})
+    fake_http.respond(200, json={"status": "ok"}, when=ACTIVATE_PATH, method="PUT")
+
+
+@pytest.mark.asyncio
+async def test_activate_retries_are_reported_to_the_caller(
+    fake_http, tnlcm_token, sleepless, infra
+):
+    _activate_fails_once_then_succeeds(fake_http)
+    avisos: list[str] = []
+
+    assert await tnlcm.deploy_trial_network(infra, on_progress=avisos.append) == "tn-demo"
+
+    assert fake_http.paths_for("PUT") == [ACTIVATE_PATH, ACTIVATE_PATH]
+    assert len(avisos) == 1, "una linea por reintento, no por intento"
+    assert "attempt 1/3" in avisos[0]
+    assert "tn-demo" in avisos[0]
+
+
+@pytest.mark.asyncio
+async def test_the_progress_hook_is_optional(fake_http, tnlcm_token, sleepless, infra):
+    """Sin gancho el reintento sigue su curso: es un extra, no una dependencia."""
+    _activate_fails_once_then_succeeds(fake_http)
+
+    assert await tnlcm.deploy_trial_network(infra) == "tn-demo"
+    assert fake_http.paths_for("PUT") == [ACTIVATE_PATH, ACTIVATE_PATH]
+
+
+@pytest.mark.asyncio
+async def test_a_broken_progress_hook_does_not_break_the_deploy(
+    fake_http, tnlcm_token, sleepless, infra
+):
+    """Informar del progreso no puede tumbar un despliegue que iba a reintentar."""
+    _activate_fails_once_then_succeeds(fake_http)
+
+    def _explota(_text: str) -> None:
+        raise RuntimeError("la UI se fue")
+
+    assert await tnlcm.deploy_trial_network(infra, on_progress=_explota) == "tn-demo"
