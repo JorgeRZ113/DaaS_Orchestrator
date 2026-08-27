@@ -1,0 +1,133 @@
+# TestCase autocontenido: Prometheus -> InfluxDB -> CSV, con KPIs declarados.
+#
+# Flujo:
+#   1. Flow.Parallel: Run.PrometheusToInflux captura metricas de Open5GS y
+#      node_exporter durante la ventana de medida; la rama B (Delay+AddMilestone)
+#      define esa ventana y detiene la captura via milestone.
+#      (En produccion, la herramienta sustituye el Delay por las tasks del
+#      experimentador anidadas en la rama B, para que la captura sea concurrente.)
+#   2. Run.InfluxToCsv: vuelca la measurement completa (filtrada por ExecutionId)
+#      a "@{TempFolder}/csv_query_@{ExecutionId}.csv".
+#   3. Run.CompressFiles: registra el CSV en GeneratedFiles para que ELCM lo
+#      incluya en el ZIP servido por GET /elcm/api/v1/execution/{id}/results.
+#
+# Los KPIs declarados abajo se consultan en GET /elcm/api/v1/execution/{id}/kpis.
+#
+# Regla de nombres: el campo en InfluxDB es la query saneada (\W+ -> "_").
+# Una query con varias series pierde datos (se sobreescriben por timestamp):
+# las queries de node_exporter van agregadas (avg/sum) para devolver UNA serie.
+Version: 2
+Name: TC_Open5GS_KPIs_Csv
+Sequence:
+  - Order: 1
+    Task: Flow.Parallel
+    Children:
+      - Task: Run.PrometheusToInflux
+        Config:
+          ExecutionId: "@{ExecutionId}"
+          Url: "@[PrometheusHost:192.168.199.2]"
+          Port: "@[PrometheusPort:9090]"
+          QueriesRange:
+            # ---- Open5GS AMF (plano de control) ----
+            - "ran_ue"
+            - "gnb"
+            - "amf_session"
+            - "fivegs_amffunction_rm_reginitreq"
+            - "fivegs_amffunction_rm_reginitsucc"
+            - "fivegs_amffunction_amf_authreq"
+            - "fivegs_amffunction_amf_authreject"
+            # ---- Open5GS SMF (sesiones) ----
+            - "ues_active"
+            - "bearers_active"
+            - "pfcp_sessions_active"
+            - "fivegs_smffunction_sm_n4sessionestabreq"
+            # ---- Open5GS UPF (plano de usuario, interfaz N3) ----
+            - "fivegs_ep_n3_gtp_indatapktn3upf"
+            - "fivegs_ep_n3_gtp_outdatapktn3upf"
+            - "fivegs_upffunction_upf_sessionnbr"
+            # ---- node_exporter (VM Open5GS/UERANSIM), agregado a 1 serie ----
+            - '100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[30s])) * 100)'
+            - 'avg(node_memory_MemAvailable_bytes)'
+            - 'sum(rate(node_network_receive_bytes_total[30s]))'
+            - 'sum(rate(node_network_transmit_bytes_total[30s]))'
+          Measurement: OPEN5GS_KPIS
+          Step: "5s"
+          Stop: "stop_prometheus_kpis"
+          Account: False
+          Encryption: False
+      # Rama B: ventana de medida. Sustituir el Delay por las tasks reales
+      # del experimento cuando se componga el TestCase final.
+      - Task: Flow.Sequence
+        Children:
+          - Task: Run.Delay
+            Config:
+              Time: "@[MonitorTime:120]"
+          - Task: Run.AddMilestone
+            Config:
+              Milestone: "stop_prometheus_kpis"
+
+  - Order: 2
+    Task: Run.InfluxToCsv
+    Config:
+      IdCsv: "@{ExecutionId}"
+      # InfluxDB v1 (InfluxQL). Para v2 usar la variante Flux comentada abajo.
+      CustomQuery: 'SELECT * FROM "OPEN5GS_KPIS" WHERE "ExecutionId" = ''@{ExecutionId}'''
+      # CustomQuery: 'from(bucket: "<bucket>") |> range(start: 0) |> filter(fn: (r) => r["_measurement"] == "OPEN5GS_KPIS") |> filter(fn: (r) => r["ExecutionId"] == "@{ExecutionId}") |> group()'
+
+  - Order: 3
+    Task: Run.CompressFiles
+    Config:
+      Files:
+        - "@{TempFolder}/csv_query_@{ExecutionId}.csv"
+      Output: "@{TempFolder}/dataset_@{ExecutionId}.zip"
+
+Standard: True
+Distributed: False
+Parameters:
+  PrometheusHost:
+    Type: String
+    Description: "IP o hostname del Prometheus de la VM de monitorizacion"
+  PrometheusPort:
+    Type: String
+    Description: "Puerto del Prometheus (por defecto 9090)"
+  MonitorTime:
+    Type: Integer
+    Description: "Duracion en segundos de la ventana de captura de metricas"
+KPIs:
+  OPEN5GS_KPIS:
+    - Name: "ran_ue"
+      Type: "Gauge"
+      Description: "UEs conectados a la RAN vistos por el AMF (UERANSIM observado desde el core)"
+    - Name: "gnb"
+      Type: "Gauge"
+      Description: "gNBs conectados al AMF via N2/NGAP"
+    - Name: "amf_session"
+      Type: "Gauge"
+      Description: "Sesiones activas en el AMF"
+    - Name: "fivegs_amffunction_rm_reginitsucc"
+      Type: "Counter"
+      Description: "Registros iniciales completados con exito (junto a rm_reginitreq da la tasa de exito de registro)"
+    - Name: "ues_active"
+      Type: "Gauge"
+      Description: "UEs con sesion PDU activa en el SMF"
+    - Name: "bearers_active"
+      Type: "Gauge"
+      Description: "Bearers activos en el SMF"
+    - Name: "pfcp_sessions_active"
+      Type: "Gauge"
+      Description: "Sesiones PFCP activas entre SMF y UPF (N4)"
+    - Name: "fivegs_ep_n3_gtp_indatapktn3upf"
+      Type: "Counter"
+      Description: "Paquetes GTP entrantes en el UPF por N3 (trafico de subida del plano de usuario)"
+    - Name: "fivegs_ep_n3_gtp_outdatapktn3upf"
+      Type: "Counter"
+      Description: "Paquetes GTP salientes del UPF por N3 (trafico de bajada del plano de usuario)"
+    - Name: "fivegs_upffunction_upf_sessionnbr"
+      Type: "Gauge"
+      Description: "Numero de sesiones activas en el UPF"
+    - Name: "node_cpu_percent"
+      Type: "Gauge"
+      Description: "CPU media de la VM en % via node_exporter. Campo en Influx: query saneada '100_avg_rate_node_cpu_seconds_total_mode_idle_30s_100_'"
+    - Name: "node_network_throughput"
+      Type: "Gauge"
+      Description: "Bytes/s rx y tx agregados via node_exporter. Campos en Influx: queries sum(rate(...)) saneadas"
