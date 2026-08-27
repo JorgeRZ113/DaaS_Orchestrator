@@ -21,10 +21,7 @@ from app.rendering.paths import resolve_template_path, templates_root_dir
 _OVERLAY_SECTION_ALIASES: dict[str, dict[str, str]] = {
     "vnet_sample_tnlcm_descriptor": {"vnet": "network"},
     "vm_kvm_sample_tnlcm_descriptor": {"vm_kvm": "vm"},
-    "loadcore_agent_sample_tnlcm_descriptor_open5gs_vm": {"loadcore_agent": "loadcore"},
     "upf_p4_sw_sample_tnlcm_descriptor": {"upf_p4_sw": "upf"},
-    "ueransim_both_sample_tnlcm_descriptor_open5gs_vm": {"ueransim_both": "ueransim"},
-    "ueransim_split_sample_tnlcm_descriptor_open5gs_vm": {"ueransim_split": "ueransim"},
 }
 
 
@@ -75,8 +72,6 @@ def _infer_overlay_component_name(overlay_path: Path) -> str:
     name = overlay_path.name.removesuffix(".overlay.yaml")
     if "_sample_tnlcm_descriptor" in name:
         return name.split("_sample_tnlcm_descriptor", 1)[0]
-    if name.endswith("_new"):
-        return name.removesuffix("_new")
     return name
 
 
