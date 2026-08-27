@@ -98,6 +98,7 @@ class FakeHttp:
         self.requests: list[httpx.Request] = []
         self._rules: list[tuple[str | None, int, dict]] = []
         self._queue: list[tuple[int, dict]] = []
+        self._failure: BaseException | None = None
 
     @staticmethod
     def _body(json=None, text=None, content=None) -> dict:
@@ -132,8 +133,20 @@ class FakeHttp:
         self._queue.append((status_code, self._body(json, text, content)))
         return self
 
+    def fail_with(self, error: BaseException):
+        """Hace que el transporte reviente en vez de responder.
+
+        Es la unica forma de ejercitar los fallos de transporte -conexion
+        rechazada, timeout de conexion-, que httpx levanta como excepcion y
+        nunca entrega como respuesta.
+        """
+        self._failure = error
+        return self
+
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        if self._failure is not None:
+            raise self._failure
         if self._queue:
             status_code, body = self._queue.pop(0)
             return httpx.Response(status_code, request=request, **body)

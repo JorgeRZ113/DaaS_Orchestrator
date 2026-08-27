@@ -14,6 +14,7 @@ sin fallar ni avisar, que es la peor forma de pasar.
 
 import json
 
+import httpx
 import pytest
 
 from app import cli
@@ -400,6 +401,39 @@ def test_422_de_pydantic_se_lee_como_una_frase(fake_http, descriptor_file, capsy
     assert _run(["run", str(descriptor_file)]) == cli.EXIT_API_ERROR
     error = capsys.readouterr().err
     assert "dataset.output.0: valor no permitido" in error
+
+
+def test_502_de_fase_sin_message_cae_en_el_campo_error(fake_http, descriptor_file, capsys):
+    """Un 502 de fase no trae `{"detail": ...}` sino el ExecutionResponse entero.
+
+    `message` es el mejor texto cuando viene, pero puede quedarse vacio: sin el
+    respaldo en `error`, lo que se ensenaba era el diccionario volcado en crudo.
+    """
+    fake_http.respond(
+        502,
+        json={
+            "execution_id": "tn-1",
+            "status": "FAILED",
+            "message": "",
+            "error": "TNLCM activate exhausted retries for tn_id=tn-1 (HTTP 502)",
+        },
+    )
+
+    assert _run(["run", str(descriptor_file)]) == cli.EXIT_API_ERROR
+    assert "exhausted retries" in capsys.readouterr().err
+
+
+def test_un_orquestador_caido_no_se_vende_como_trabajo_en_curso(fake_http, descriptor_file, capsys):
+    """Sin codigo HTTP hay dos desenlaces distintos que no se pueden confundir.
+
+    Que se corte el socket de una fase de 70 min significa que sigue corriendo
+    por detras y hay que ir al resumen; que no haya nadie escuchando significa
+    que no ha empezado nada y hay que levantar el orquestador.
+    """
+    fake_http.fail_with(httpx.ConnectError("connection refused"))
+
+    assert _run(["run", str(descriptor_file)]) == cli.EXIT_API_ERROR
+    assert "No se pudo conectar" in capsys.readouterr().err
 
 
 def test_sin_api_key_no_se_intenta_la_peticion(fake_http, monkeypatch, capsys):

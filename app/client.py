@@ -66,6 +66,17 @@ TEARDOWN_TIMEOUT_SECONDS = 3000.0 + _PHASE_MARGIN_SECONDS  # borrado: 50 min
 CONNECTION_TIMEOUT_SECONDS = 180.0
 
 
+def _poll_timeout() -> httpx.Timeout:
+    """Tope de los GET que se sondean en bucle: corto, y mas corto aun para conectar.
+
+    Un sondeo corre en el hilo del script de la UI —la caja de espera pregunta por
+    donde va la fase, y la pestaña Resumen se refresca sola—, asi que lo que tarde
+    en fallar es tiempo que la pagina pasa sin repintarse. Con el servicio caido
+    interesa que se rinda en seguida en vez de agotar los diez segundos.
+    """
+    return httpx.Timeout(POLL_TIMEOUT_SECONDS, connect=3.0, write=5.0, pool=5.0)
+
+
 def _phase_timeout(read_seconds: float) -> httpx.Timeout:
     """Timeout de una fase: mucho para leer, poco para conectar.
 
@@ -128,6 +139,10 @@ class ApiError(Exception):
         message: Texto listo para mostrar al usuario.
         status_code: Código HTTP devuelto (None si ni siquiera hubo respuesta).
         detail: Cuerpo `detail` original (str o dict), útil para listar campos.
+        reached_server: False si la petición no llegó a salir. Sin código HTTP,
+            es lo único que distingue «se cortó una fase que sigue corriendo por
+            detrás» de «el servicio no está»: lo primero manda al resumen, lo
+            segundo a levantar el orquestador.
     """
 
     def __init__(
@@ -136,11 +151,13 @@ class ApiError(Exception):
         *,
         status_code: int | None = None,
         detail: Any = None,
+        reached_server: bool = True,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.detail = detail
+        self.reached_server = reached_server
 
 
 def _extract_detail(response: httpx.Response) -> Any:
@@ -198,7 +215,11 @@ def _format_error(status_code: int, detail: Any) -> str:
         if "invalid_fields" in detail:
             fields = ", ".join(detail.get("invalid_fields", []))
             return f"Campos inválidos: {fields}"
-        message = detail.get("message") or detail.get("detail")
+        # Un 502 de fase no trae `{"detail": ...}` sino el `ExecutionResponse`
+        # entero. `message` es el mejor texto —nombra el experimento y dice si la
+        # TN sigue viva— pero puede venir vacio; `error` guarda la causa cruda.
+        # Sin ese respaldo el usuario veia el dict de Python volcado tal cual.
+        message = detail.get("message") or detail.get("error") or detail.get("detail")
         if message:
             return str(message)
         return f"HTTP {status_code}: {detail}"
@@ -343,27 +364,35 @@ class ApiClient:
                     params=params,
                 )
         except httpx.TimeoutException as exc:
-            if phase:
+            # Un `ConnectTimeout` no es un `ReadTimeout`: el primero significa que
+            # la peticion no llego a salir, asi que la fase NO ha empezado.
+            reached = not isinstance(exc, httpx.ConnectTimeout)
+            if phase and reached:
                 raise ApiError(
                     "Se agotó la espera del cliente, pero la operación puede seguir "
                     "en curso: compruébalo en el resumen de la ejecución.",
                     status_code=None,
                 ) from exc
-            raise ApiError(f"Timeout al contactar {url}") from exc
+            raise ApiError(f"Timeout al contactar {url}", reached_server=reached) from exc
         except httpx.HTTPError as exc:
             # Una fase puede durar 70 min con el socket en silencio, asi que un
             # corte de conexion (proxy, NAT, suspension del portatil) es
             # esperable y NO significa que la operacion haya fallado: el
             # servidor sigue a lo suyo. Decir «no se pudo conectar» aqui seria
             # mentir sobre el desenlace.
-            if phase:
+            #
+            # Un `ConnectError` si es otra cosa: no se llego a hablar con nadie,
+            # asi que no hay ninguna fase corriendo por detras y mandar al
+            # resumen seria mandar a buscar una ejecucion que no existe.
+            reached = not isinstance(exc, httpx.ConnectError)
+            if phase and reached:
                 raise ApiError(
                     "Se perdió la conexión con el servidor, pero la operación "
                     "puede seguir en curso: compruébalo en el resumen de la ejecución.",
                     status_code=None,
                     detail=str(exc),
                 ) from exc
-            raise ApiError(f"No se pudo conectar con {url}: {exc}") from exc
+            raise ApiError(f"No se pudo conectar con {url}: {exc}", reached_server=reached) from exc
 
         payload = _parse_response(response, raw=raw)
         return PhaseResult(response.status_code, payload) if phase else payload
@@ -449,13 +478,13 @@ class ApiClient:
     def get_execution(self, execution_id: str) -> Any:
         """Estado resumido de una ejecución."""
         return self._request(
-            "GET", f"/executions/{execution_id}", auth=True, timeout=POLL_TIMEOUT_SECONDS
+            "GET", f"/executions/{execution_id}", auth=True, timeout=_poll_timeout()
         )
 
     def get_execution_detail(self, execution_id: str) -> Any:
         """Registro completo de una ejecución (artifacts, experimentos, error)."""
         return self._request(
-            "GET", f"/executions/{execution_id}/detail", auth=True, timeout=POLL_TIMEOUT_SECONDS
+            "GET", f"/executions/{execution_id}/detail", auth=True, timeout=_poll_timeout()
         )
 
     def get_execution_summary(self, execution_id: str, *, as_markdown: bool = False) -> Any:
@@ -472,7 +501,7 @@ class ApiClient:
             f"/executions/{execution_id}/summary",
             auth=True,
             params=params,
-            timeout=POLL_TIMEOUT_SECONDS,
+            timeout=_poll_timeout(),
         )
 
     def start_elcm(self, execution_id: str, descriptor: Descriptor, *, wait: bool = True) -> Any:
@@ -493,7 +522,7 @@ class ApiClient:
         Es lo que permite ver que TN hay desplegadas y cual tiene el tunel
         arriba antes de pausar o reconectar.
         """
-        return self._request("GET", "/executions", auth=True, timeout=POLL_TIMEOUT_SECONDS)
+        return self._request("GET", "/executions", auth=True, timeout=_poll_timeout())
 
     def pause_tn(self, execution_id: str) -> Any:
         """Aparta la TN bajando su tunel, sin borrarla ni tocar TNLCM.
