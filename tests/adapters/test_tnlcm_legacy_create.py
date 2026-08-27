@@ -36,8 +36,15 @@ def _stub_multipart(monkeypatch):
 
     Aqui interesa el flujo de despliegue, no el empaquetado del fichero, que
     tiene sus propias pruebas.
+
+    El doble replica la firma completa: el adaptador llama con `descriptor_path`
+    y un stub que solo aceptara `infra` fallaria con TypeError.
     """
-    monkeypatch.setattr(tnlcm, "_legacy_multipart_from_infra", lambda infra: ({}, {}))
+    monkeypatch.setattr(
+        tnlcm,
+        "_legacy_multipart_from_infra",
+        lambda infra, descriptor_path=None: ({}, {}),
+    )
 
 
 def _create_ok(fake_http):

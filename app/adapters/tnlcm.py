@@ -794,15 +794,10 @@ async def deploy_trial_network(
 
         # Preferred endpoint from project steps
         try:
-            try:
-                form_data, form_files = _legacy_multipart_from_infra(
-                    infra,
-                    descriptor_path=generated_descriptor_path,
-                )
-            except TypeError as exc:
-                if "descriptor_path" not in str(exc):
-                    raise
-                form_data, form_files = _legacy_multipart_from_infra(infra)
+            form_data, form_files = _legacy_multipart_from_infra(
+                infra,
+                descriptor_path=generated_descriptor_path,
+            )
             response = await client.post(
                 f"{settings.tnlcm_url}/api/v1/trial-network/legacy",
                 data=form_data,
