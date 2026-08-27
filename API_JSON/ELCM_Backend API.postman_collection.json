@@ -1,0 +1,954 @@
+{
+  "info": {
+    "_postman_id": "006fdf53-d70e-4c55-a70f-5f6cf1acb490",
+    "name": "ELCM_Backend API",
+    "description": "Collection generada para ELCM API (v1 + endpoints legacy relevantes).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "43611752",
+    "_collection_link": "https://go.postman.co/collection/43611752-006fdf53-d70e-4c55-a70f-5f6cf1acb490?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Experiment",
+      "item": [
+        {
+          "name": "Experiment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"Application\": null,\n  \"Automated\": true,\n  \"ExclusiveExecution\": false,\n  \"ExperimentType\": \"Custom\",\n  \"Extra\": {\n\n  },\n  \"NSs\": [],\n  \"Parameters\": {\n    \"TargetIP\": \"10.7.0.2\",\n    \"DirToList\": \"/opt/opentap\",\n    \"FileToShow\": \"/opt/ELCM_BACKEND/email.yml\"\n  },\n  \"Remote\": null,\n  \"RemoteDescriptor\": null,\n  \"ReservationTime\": null,\n  \"Scenario\": [null],\n  \"Slice\": null,\n  \"TestCases\": [\n    \"INVESTIGACION\"\n  ],\n  \"UEs\": [],\n  \"UserId\": 1,\n  \"Version\": \"2.1.0\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/experiment/run",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "experiment",
+                "run"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Run Experiment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"Version\": \"2.1.0\",\n    \"UserId\": 1,\n    \"ExperimentType\": \"Standard\",\n    \"TestCases\": [\n        \"Test_ping\"\n    ],\n    \"UEs\": [],\n    \"Slice\": null,\n    \"NSs\": [],\n    \"ExclusiveExecution\": false,\n    \"Scenario\": null,\n    \"Automated\": true,\n    \"ReservationTime\": null,\n    \"Application\": \"TestPrueba\",\n    \"Parameters\": {},\n    \"Remote\": null,\n    \"RemoteDescriptor\": null,\n    \"Extra\": {}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/experiment/run",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "experiment",
+                "run"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Execution",
+      "item": [
+        {
+          "name": "Cancel",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/execution/{{executionId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "execution",
+                "{{executionId}}",
+                "cancel"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel Execution API",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/execution/{{executionId}}/cancel_execution_api",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "execution",
+                "{{executionId}}",
+                "cancel_execution_api"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete (Deprecated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/execution/{{executionId}}/delete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "execution",
+                "{{executionId}}",
+                "delete"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/execution/{{executionId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "execution",
+                "{{executionId}}",
+                "status"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Logs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/execution/{{executionId}}/logs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "execution",
+                "{{executionId}}",
+                "logs"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "PeerId",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/execution/{{executionId}}/peerId",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "execution",
+                "{{executionId}}",
+                "peerId"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Results ZIP",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/execution/{{executionId}}/results",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "execution",
+                "{{executionId}}",
+                "results"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Descriptor",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/execution/{{executionId}}/descriptor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "execution",
+                "{{executionId}}",
+                "descriptor"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "KPIs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/execution/{{executionId}}/kpis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "execution",
+                "{{executionId}}",
+                "kpis"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Next Execution Id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/execution/nextExecutionId",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "execution",
+                "nextExecutionId"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Facility",
+      "item": [
+        {
+          "name": "Resource Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/resource_status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "resource_status"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "UEs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/ues?user_id={{user_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "ues"
+              ],
+              "query": [
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "TestCases",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/testcases?user_id={{user_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "testcases"
+              ],
+              "query": [
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Base Slice Descriptors",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/baseSliceDescriptors",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "baseSliceDescriptors"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Scenarios",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/scenarios?user_id={{user_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "scenarios"
+              ],
+              "query": [
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete TestCase/UE/Scenario",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"test_case_name\": \"ELCM_Revision_Contenido\",\n  \"file_type\": \"testcase\",\n  \"user_id\": \"{{user_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/testcases/delete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "testcases",
+                "delete"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Upload TestCase/UE/Scenario",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "test_case",
+                  "type": "file",
+                  "value": null
+                },
+                {
+                  "key": "file_type",
+                  "value": "testcase",
+                  "type": "text"
+                },
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/upload_test_case",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "upload_test_case"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "TestCases Info",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TestCases\": [\"ELCM_Inventory_Email\"],\n  \"UEs\": [],\n  \"Scenarios\": [],\n  \"user_id\": \"{{user_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/testcases/info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "testcases",
+                "info"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Edit TestCase/UE/Scenario",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "test_case",
+                  "type": "file",
+                  "value": ""
+                },
+                {
+                  "key": "file_type",
+                  "value": "testcase",
+                  "type": "text"
+                },
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/edit_test_case",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "edit_test_case"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Execution Info",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ExecutionId\": \"{{executionId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/execution/info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "execution",
+                "info"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Upload TestCase/UE/Scenario",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "test_case",
+                  "type": "file",
+                  "src": "postman-cloud:///1f12389d-434a-4e30-bfdd-38c5841ffda0"
+                },
+                {
+                  "key": "file_type",
+                  "value": "testcase",
+                  "type": "text"
+                },
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/facility/upload_test_case",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "facility",
+                "upload_test_case"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Distributed (East-West)",
+      "item": [
+        {
+          "name": "Run (redirect)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/distributed/run",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "distributed",
+                "run"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Set Peer Details",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"execution_id\": \"remote-123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/distributed/{{executionId}}/peerDetails",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "distributed",
+                "{{executionId}}",
+                "peerDetails"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Distributed Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/distributed/{{executionId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "distributed",
+                "{{executionId}}",
+                "status"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Distributed Values",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/distributed/{{executionId}}/values",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "distributed",
+                "{{executionId}}",
+                "values"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Distributed Value By Name",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/distributed/{{executionId}}/values/{{valueName}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "distributed",
+                "{{executionId}}",
+                "values",
+                "{{valueName}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Distributed Results",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/distributed/{{executionId}}/results",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "distributed",
+                "{{executionId}}",
+                "results"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Distributed Files",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/elcm/api/v1/distributed/{{executionId}}/files",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "elcm",
+                "api",
+                "v1",
+                "distributed",
+                "{{executionId}}",
+                "files"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "UI",
+      "item": [
+        {
+          "name": "Home",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ""
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Log",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/log",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "log"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/history?page=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "history"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reload Config",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reload_config",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reload_config"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reload Facility",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reload_facility",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reload_facility"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5001"
+    },
+    {
+      "key": "executionId",
+      "value": "1"
+    },
+    {
+      "key": "user_id",
+      "value": "1"
+    },
+    {
+      "key": "valueName",
+      "value": "SomeVar"
+    }
+  ]
+}
