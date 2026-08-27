@@ -4,7 +4,7 @@ UE_Variables:
     Config:
       # Las IPs salen del informe de la TN y tienen que ser alcanzables desde el
       # host de ELCM, que vive en la red interna de la TN.
-      PingTarget: "192.168.199.4"           # componente cuyo alcance se comprueba
+      PingTarget: "192.168.199.2"           # componente cuyo alcance se comprueba
       PingCount: "4"                        # paquetes ICMP
       PingDeadline: "30"                    # tope total del ping, en segundos
 
