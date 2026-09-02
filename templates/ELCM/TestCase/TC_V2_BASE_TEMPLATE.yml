@@ -6,21 +6,21 @@ Distributed: False
 
 Sequence:
   # 1) Execution start and basic traceability
-  - Order: 10
+  - Order: 700
     Task: Run.Message
     Config:
       Severity: INFO
       Message: "START | ExecutionId=@{ExecutionId} | TempFolder=@{TempFolder}"
 
   # 2) Reference KPI
-  - Order: 20
+  - Order: 710
     Task: Run.Evaluate
     Config:
       Key: KPI_ExampleScore
       Expression: "(@{ExecutionId}.0 * 0.7) + (@{ExecutionId}.0 * 0.3)"
 
   # 4) Template end (neutral endpoint)
-  - Order: 30
+  - Order: 720
     Task: Run.Dummy
     Config:
       Stage: "END"

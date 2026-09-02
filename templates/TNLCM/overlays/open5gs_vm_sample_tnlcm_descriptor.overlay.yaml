@@ -1,28 +1,33 @@
-#! Overlay para `open5gs_vm_sample_tnlcm_descriptor.yaml`
-#! Component: open5gs
-#! Depends on: vnet
-
 #@ data/values
 ---
 open5gs_vm:
+  n2_first_ip: "10.21.12.1"
+  n2_netmask: 24
+  n2_address_size: 100
+
+  #! --- vnet N3 (opcional) ---
+  #! Vacio = no se despliega la segunda vnet y N2/N3 comparten red.
+  #! Con valor = se declara vnet-n3 y se anade a internal_vnet y a dependencies.
+  n3_first_ip: ""
+  n3_netmask: 24
+  n3_address_size: 254
+
+  #! --- open5gs ---
   external_vnet: "tn_vxlan"
-  internal_vnet:
-    - "vnet-n2"  #! network used for n2 and n3 (when list length=1)
-    #!- "vnet-n3" #! optional network used for n3
   size: "small"
-  #! ue_subnet: "10.45.0.0/16"   #! Default value
-  #! amf_n2_ip: "10.21.12.200"      #! Default value
-  #! upf_n3_ip: "10.21.12.201"      #! Default value
-  #! ue_count: 20                #! Default value
-  #! tac: 200                    #! Default value
-  #! mcc: "001"                  #! Default value
-  #! mnc: "01"                   #! Default value
-  #! msin: "0000000001"          #! Default value
-  #! key: "465B5CE8B199B49FAA5F0A2EE238A6BC"   #! Default value
-  #! opc: "E8ED289DEBA952E4283B54E88E6183CA"   #! Default value
-  #! apn: "internet"             #! Default value
-  #! s_nssai_sst: 1              #! Default value
-  #! s_nssai_sd: "000001"        #! Default value
-  #! use_nightly: false          #! Default value
+  ue_subnet: "10.45.0.0/16"
+  amf_n2_ip: "10.21.12.200"
+  upf_n3_ip: "10.21.12.201"
+  ue_count: 20
+  tac: 200
+  mcc: "001"
+  mnc: "01"
+  msin: "0000000001"
+  key: ""
+  opc: ""
+  apn: "internet"
+  s_nssai_sst: 1
+  s_nssai_sd: "000001"
+  use_nightly: false
   install_webui: true
-  loglevel: info
+  loglevel: "info"

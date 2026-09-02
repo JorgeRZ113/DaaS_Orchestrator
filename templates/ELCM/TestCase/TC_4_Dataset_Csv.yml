@@ -1,0 +1,118 @@
+# =============================================================================
+# 4. DATASET AUTOCONTENIDO: CLI -> InfluxDB -> CSV, sin depender de la TN
+# =============================================================================
+# Genera datos con el propio ELCM, los mete en InfluxDB y los vuelve a sacar en
+# CSV. Recorre el circuito completo del DaaS y deja un dataset real aunque la TN
+# no tenga Open5GS, ni UERANSIM, ni Prometheus configurado.
+#
+# Doble uso: es la PLANTILLA para meter en el dataset la salida de cualquier
+# herramienta externa (iperf3, ping, un script propio) -basta con cambiar el
+# comando del Order 400 por el que genere tu CSV- Tarda segundos, asi que sale a cuenta lanzarlo antes de una campaña.
+#
+# Bloque de Order: 400-499.   UE: UE_4_Dataset_Csv.yml
+# Prerrequisitos: NINGUNO.
+#
+# VALORES QUE PUBLICA: DatasetRowsWritten, DatasetLastExported, DatasetSummary
+#
+# TAREAS QUE ENSEÑA
+#   Run.CsvToInflux   meter un CSV propio en InfluxDB
+#   Run.InfluxToCsv   y volver a sacarlo con una consulta Flux
+#
+# Si el CSV exportado sale vacio pero el log dice que se enviaron datos, revisar
+# @[InfluxBucket]: tiene que ser el mismo bucket que ELCM tiene configurado.
+# Si falla con 404 en /api/v2/query, es la organizacion: ver InfluxOrg y
+#   curl -s http://<influx>:8086/api/v2/orgs -H "Authorization: Token <token>"
+# =============================================================================
+Version: 2
+Name: "TC_4_Dataset_Csv"
+Sequence:
+  # La columna Timestamp es OBLIGATORIA y tiene que ser epoch NUMERICO:
+  # Run.CsvToInflux hace float() sobre ella y aborta si no lo es ("date -Is" no
+  # vale). Las demas columnas se convierten solas a numero cuando pueden.
+  - Order: 400
+    Task: "Run.CliExecute"
+    Config:
+      CWD: "@{TempFolder}"
+      Parameters: "sh -c 'F=dataset_@{ExecutionId}.csv; echo \"Timestamp,sample,load1,mem_avail_mb,disk_used_pct\" > $F; i=1; while [ $i -le @[DatasetSamples:10] ]; do L=$(cut -d\" \" -f1 /proc/loadavg); K=$(grep MemAvailable /proc/meminfo | tr -s \" \" | cut -d\" \" -f2); D=$(df -P / | tail -1 | tr -s \" \" | cut -d\" \" -f5 | tr -d %); echo \"$(date +%s),$i,$L,$((K/1024)),$D\" >> $F; i=$((i+1)); sleep @[DatasetInterval:1]; done; cat $F'"
+
+  # Run.PublishFromFile recorre TODAS las lineas y publica en cada coincidencia,
+  # asi que lo que queda publicado es la ULTIMA: el numero de muestras escritas.
+  - Order: 401
+    Task: "Run.PublishFromFile"
+    Config:
+      Path: "@{TempFolder}/dataset_@{ExecutionId}.csv"
+      Pattern: '^\d{10},(\d+),'
+      Keys:
+        - [1, "DatasetRowsWritten"]
+      VerdictOnMatch: "NotSet"
+      VerdictOnNoMatch: "Fail"
+
+  - Order: 402
+    Task: "Run.CsvToInflux"
+    Config:
+      ExecutionId: "@{ExecutionId}"
+      CSV: "@{TempFolder}/dataset_@{ExecutionId}.csv"
+      Measurement: "DAAS_SELFTEST"
+      Timestamp: "Timestamp"
+
+  # IdCsv propio: la salida es <TempFolder>/csv_query_<IdCsv>.csv, y dos
+  # TestCases con el mismo IdCsv se pisan el fichero entre ellos.
+  - Order: 410
+    Task: "Run.InfluxToCsv"
+    Config:
+      IdCsv: "@{ExecutionId}_dataset"
+      Org: "@[InfluxOrg:]"
+      CustomQuery: 'from(bucket: "@[InfluxBucket:testing]") |> range(start: @[InfluxRangeStart:0]) |> filter(fn: (r) => r["_measurement"] == "DAAS_SELFTEST") |> filter(fn: (r) => r["ExecutionId"] == "@{ExecutionId}") |> pivot(rowKey:["_time"], columnKey:["_field"], valueColumn:"_value") |> group()'
+
+  # ESTA es la comprobacion de dataset no vacio, y es la razon de ser del
+  # TestCase: la cabecera del CSV empieza por "_", asi que solo casan las lineas
+  # de datos, que empiezan por la fecha. Sin ninguna, VerdictOnNoMatch da Fail y
+  # el dataset vacio deja de pasar por bueno en silencio.
+  - Order: 411
+    Task: "Run.PublishFromFile"
+    Config:
+      Path: "@{TempFolder}/csv_query_@{ExecutionId}_dataset.csv"
+      Pattern: '^(\d[^,]*),'
+      Keys:
+        - [1, "DatasetLastExported"]
+      VerdictOnMatch: "Pass"
+      VerdictOnNoMatch: "Fail"
+
+  - Order: 412
+    Task: "Run.Evaluate"
+    Config:
+      Key: "DatasetSummary"
+      Expression: "'{} muestras generadas, ultima marca exportada {}'.format(@[DatasetRowsWritten:0], '@[DatasetLastExported:ninguna]')"
+
+  - Order: 413
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "[Dataset] @[DatasetSummary:sin resumen] | measurement DAAS_SELFTEST | ExecutionId @{ExecutionId}"
+
+  - Order: 414
+    Task: "Run.UpgradeVerdict"
+    Config:
+      Key: "DatasetRowsWritten"
+      Pattern: '^[1-9][0-9]*$'
+      VerdictOnMatch: "Pass"
+      VerdictOnNoMatch: "Fail"
+      VerdictOnMissing: "Inconclusive"
+
+Standard: True
+Distributed: False
+Dashboard: {}
+KPIs:
+  DAAS_SELFTEST:
+    - Name: "load1"
+      Type: "Gauge"
+      Description: "Carga media a 1 minuto del host donde corre ELCM"
+    - Name: "mem_avail_mb"
+      Type: "Gauge"
+      Description: "Memoria disponible en MiB del host donde corre ELCM"
+    - Name: "disk_used_pct"
+      Type: "Gauge"
+      Description: "Porcentaje de uso del sistema de ficheros raiz"
+    - Name: "sample"
+      Type: "Counter"
+      Description: "Numero de muestra dentro de la serie generada"

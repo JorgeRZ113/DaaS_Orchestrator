@@ -1,0 +1,26 @@
+/artifacts/
+/.idea/
+
+# Bytecode: se regenera solo y se colaba en el indice al hacer `git add` masivo
+__pycache__/
+*.py[cod]
+
+# Sesiones de pruebas de mutacion (artefacto de ejecucion)
+.mutation/
+.coverage
+
+# Salida de build (`python -m build`) y logs sueltos de ejecuciones locales
+/dist/
+/logs/
+
+# Secretos y configuracion de herramientas: NUNCA deben viajar al repositorio
+.env
+.claude/
+.agents/
+
+# Estado de las ejecuciones en disco: lo reescribe el servicio en cada despliegue
+/executions.json
+
+# Notas de trabajo y borradores personales
+/Recursos/
+/aux.md

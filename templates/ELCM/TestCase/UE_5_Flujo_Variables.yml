@@ -1,0 +1,13 @@
+UE_Variables:
+  - Order: 0
+    Task: "Run.Publish"
+    Config:
+      # Variables de infraestructura, solo para que el TestCase tenga algo real
+      # que inspeccionar y derivar.
+      MonitoringIp: "192.168.199.2"
+      PrometheusPort: "9090"
+      InfluxBucket: "testing"
+
+      # Gobiernan las dos construcciones condicionales del TestCase.
+      LoopGuard: "continuar"                # condicion del Flow.While (corta MaxIterations)
+      SelectProbe: "on"                     # "on" -> rama de la condicion; otro valor -> rama por defecto

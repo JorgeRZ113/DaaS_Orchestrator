@@ -1,0 +1,24 @@
+# Configuracion de pruebas de mutacion (cosmic-ray).
+#
+# Por que existe: la cobertura de lineas dice que codigo se EJECUTA, no cual
+# esta VERIFICADO. Una suite sin un solo `assert` puede alcanzar el 100 %. Las
+# pruebas de mutacion introducen cambios pequenos en el codigo y miden cuantos
+# detecta la suite, que es la pregunta que la cobertura no responde.
+#
+# Se apunta solo a logica pura con alta cobertura unitaria: mutar codigo que las
+# unitarias no ejercitan produce supervivientes por falta de cobertura, no por
+# falta de aserciones, y eso ensucia la senal.
+#
+# Uso:
+#   cosmic-ray init mutation.toml .mutation/session.sqlite
+#   cosmic-ray exec mutation.toml .mutation/session.sqlite
+#   cr-report .mutation/session.sqlite
+
+[cosmic-ray]
+module-path = "app/core/retry.py"
+timeout = 20.0
+excluded-modules = []
+test-command = "python -m pytest tests/unit -x -q -p no:cacheprovider"
+
+[cosmic-ray.distributor]
+name = "local"

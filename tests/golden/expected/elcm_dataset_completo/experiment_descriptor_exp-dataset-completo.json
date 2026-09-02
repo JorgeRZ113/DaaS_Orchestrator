@@ -1,0 +1,22 @@
+{
+    "Version": "2.1.0",
+    "UserId": 1,
+    "ExperimentType": "Standard",
+    "TestCases": [
+        "TC_3_Prometheus_Capture_Open5GS"
+    ],
+    "UEs": [
+        "UE_Variables"
+    ],
+    "Slice": null,
+    "NSs": [],
+    "ExclusiveExecution": false,
+    "Scenario": [],
+    "Automated": true,
+    "ReservationTime": null,
+    "Application": "exp-dataset-completo",
+    "Parameters": {},
+    "Remote": null,
+    "RemoteDescriptor": null,
+    "Extra": {}
+}

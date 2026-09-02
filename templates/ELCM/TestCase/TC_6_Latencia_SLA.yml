@@ -1,0 +1,144 @@
+# =============================================================================
+# 6. CARACTERIZAR UNA RUTA: latencia repetida, estadistica y veredicto de SLA
+# =============================================================================
+# Da varias repeticiones, su estadistica, un veredicto contra un umbral acordado, y el
+# contexto de la maquina para que el resultado sea reproducible.
+#
+# Bloque de Order: 600-699.   UE: UE_6_Latencia_SLA.yml
+# Duracion: @[PingCount:4] paquetes x 3 repeticiones.
+# Prerrequisitos: ruta hasta @[PingTarget] desde el host de ELCM.
+#
+# VALORES QUE PUBLICA: RttSamples, RttAvgMs, RttMaxMs, SlaVerdict
+#
+# TAREAS QUE ENSEÑA
+#   Flow.Repeat        repetir una medida N veces
+#   Run.Evaluate       derivar KPIs con Python sobre los datos medidos
+#   Run.UpgradeVerdict convertir el KPI en el veredicto del experimento
+#
+# EL PATRON DE LOS KPIs DERIVADOS: el bucle acumula
+# una medida por vuelta en un fichero, una tarea lo convierte en una lista
+# separada por comas, y a partir de esa lista tres Run.Evaluate sacan media,
+# maximo y veredicto. Tres expresiones bastan; encadenar diez no explica mas.
+#
+# POR QUE LOS DEFAULTS SON "@[RttSamples:0]" Y NO VACIO: Run.Evaluate REPROPAGA
+# la excepcion si la expresion falla, y una excepcion en una tarea de primer
+# nivel aborta la fase Run entera. Con el default a 0 la expresion sigue siendo
+# valida aunque el ping no haya medido nada, y el resultado degrada a un Fail
+# limpio en vez de tumbar el experimento.
+#
+# 'Times' de Flow.Repeat va como entero LITERAL: el motor hace range(Times) y con
+# una cadena -que es lo que produce cualquier @[...]- lanza TypeError.
+# =============================================================================
+Version: 2
+Name: "TC_6_Latencia_SLA"
+Sequence:
+  - Order: 600
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "[Latencia] destino=@[PingTarget] | @[PingCount:4] paquetes x 3 repeticiones | SLA=@[SlaLatencyMs:20] ms"
+
+  # Una repeticion por vuelta: de cada ping solo interesa el rtt medio, que es el
+  # campo 5 al partir por '/' la linea "rtt min/avg/max/mdev = a/b/c/d ms".
+  # El '|| true' evita que una vuelta sin respuesta corte el bucle.
+  - Order: 610
+    Task: "Flow.Repeat"
+    Config:
+      Times: 3
+    Children:
+      - Task: "Run.CliExecute"
+        Config:
+          CWD: "@{TempFolder}"
+          Parameters: "sh -c 'ping -c @[PingCount:4] -W 2 -w @[PingDeadline:30] @[PingTarget] 2>/dev/null | grep \"rtt min\" | cut -d/ -f5 >> rtt_@{ExecutionId}.txt || true'"
+
+  # Las medidas acumuladas se convierten en una unica linea separada por comas,
+  # que es la forma que luego consume Run.Evaluate.
+  - Order: 620
+    Task: "Run.CliExecute"
+    Config:
+      CWD: "@{TempFolder}"
+      Parameters: "sh -c 'paste -sd, rtt_@{ExecutionId}.txt > rttlist_@{ExecutionId}.txt 2>/dev/null; cat rttlist_@{ExecutionId}.txt'"
+
+  # Si no hubo ni una medida el fichero queda vacio, no casa y el veredicto ya es
+  # Fail aqui, antes de calcular nada.
+  - Order: 621
+    Task: "Run.PublishFromFile"
+    Config:
+      Path: "@{TempFolder}/rttlist_@{ExecutionId}.txt"
+      Pattern: '^([\d.,]+)$'
+      Keys:
+        - [1, "RttSamples"]
+      VerdictOnMatch: "NotSet"
+      VerdictOnNoMatch: "Fail"
+
+  - Order: 630
+    Task: "Run.Evaluate"
+    Config:
+      Key: "RttAvgMs"
+      Expression: "round(sum([float(x) for x in '@[RttSamples:0]'.split(',')]) / len('@[RttSamples:0]'.split(',')), 3)"
+
+  - Order: 631
+    Task: "Run.Evaluate"
+    Config:
+      Key: "RttMaxMs"
+      Expression: "max([float(x) for x in '@[RttSamples:0]'.split(',')])"
+
+  - Order: 632
+    Task: "Run.Evaluate"
+    Config:
+      Key: "SlaVerdict"
+      Expression: "'PASS' if 0 < @[RttMaxMs:0] <= @[SlaLatencyMs:20] else 'FAIL'"
+
+  - Order: 640
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "[Latencia] muestras=@[RttSamples:ninguna] | media=@[RttAvgMs:0] ms | maximo=@[RttMaxMs:0] ms | SLA @[SlaLatencyMs:20] ms -> @[SlaVerdict:FAIL]"
+
+  - Order: 641
+    Task: "Run.UpgradeVerdict"
+    Config:
+      Key: "SlaVerdict"
+      Pattern: '^PASS$'
+      VerdictOnMatch: "Pass"
+      VerdictOnNoMatch: "Fail"
+      VerdictOnMissing: "Inconclusive"
+
+  # Contexto de reproducibilidad: sobre que maquina y con que recursos se midio.
+  # Sirve para explicar resultados raros ("la CPU estaba al 100%"). Corre en el
+  # host de ELCM: inventariar otra VM exigiria Run.CliSsh, que esta descartado.
+  - Order: 650
+    Task: "Run.CliExecute"
+    Config:
+      CWD: "@{TempFolder}"
+      Parameters: "sh -c 'F=entorno_@{ExecutionId}.txt; { echo \"=== fecha ===\"; date -Is; echo \"=== host ===\"; hostname; uname -a; echo \"=== carga ===\"; uptime; echo \"=== interfaces ===\"; ip -br a; echo \"=== rutas ===\"; ip route; echo \"=== disco ===\"; df -h; echo \"=== memoria ===\"; free -m; echo \"=== cpu ===\"; nproc; } > $F 2>&1; cat $F'"
+
+  # Entrega en ZIP DESACTIVADA por defecto: Run.CompressFiles esta roto en todas
+  # las versiones publicadas de ELCM y su excepcion aborta el experimento entero.
+  # Poner ZipDelivery: "on" en el UE cuando el motor este corregido. Mientras
+  # tanto las medidas y el entorno siguen en el log.
+  # Ver docs/INCIDENCIA_ELCM_VERSION_DESPLEGADA.md
+  - Order: 690
+    Task: "Flow.Select"
+    Config:
+      Conditions:
+        - Key: "ZipDelivery"
+          Pattern: '^on$'
+    Children:
+      - Task: "Flow.Sequence"
+        Children:
+          - Task: "Run.CompressFiles"
+            Config:
+              Files:
+                - "@{TempFolder}/rtt_@{ExecutionId}.txt"
+                - "@{TempFolder}/entorno_@{ExecutionId}.txt"
+              Output: "@{TempFolder}/latencia_@{ExecutionId}.zip"
+      - Task: "Run.Message"
+        Config:
+          Severity: "WARNING"
+          Message: "[Latencia] ZIP omitido (ZipDelivery != on). Las medidas y el inventario del entorno estan en el log de la ejecucion @{ExecutionId}."
+
+Standard: True
+Distributed: False
+Dashboard: {}
+KPIs: {}

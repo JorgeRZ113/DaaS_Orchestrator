@@ -1,0 +1,12 @@
+UE_Variables:
+  - Order: 0
+    Task: "Run.Publish"
+    Config:
+      MonitoringIp: "192.168.199.2"         # VM con Prometheus/InfluxDB/Grafana
+      PrometheusPort: "9090"
+      PrometheusStep: "5s"                  # resolucion de la consulta de rango
+      MonitorTime: "120"                    # ventana de captura, en segundos
+
+      InfluxBucket: "testing"               # tiene que coincidir con el bucket de ELCM
+      InfluxRangeStart: "0"                 # inicio del rango de la query Flux (0 = todo)
+      InfluxOrg: ""                         # vacio = la org configurada en ELCM; rellenar si da 404

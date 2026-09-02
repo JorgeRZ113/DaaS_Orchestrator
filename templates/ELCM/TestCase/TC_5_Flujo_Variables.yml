@@ -1,0 +1,175 @@
+# =============================================================================
+# 5. FLUJO Y VARIABLES: el fichero de referencia para escribir TestCases propios
+# =============================================================================
+# Enseña el lenguaje. Como se orquestan tareas (las cinco
+# construcciones Flow) y como viajan las variables entre el UE, las tareas y el
+# motor. Es el que hay que leer antes de escribir un TestCase nuevo.
+#
+# Bloque de Order: 500-599.   UE: UE_5_Flujo_Variables.yml
+# Prerrequisitos: NINGUNO. Duracion: unos 15 s.
+#
+# LAS DOS SINTAXIS DE EXPANSION
+#   @{Nombre}   valores FIJOS del motor: TempFolder, ExecutionId, SliceId,
+#               DeployedSliceId, Application, ReservationTime,
+#               ReservationTimeSeconds, TapFolder, TapResults, y
+#               Iter0/Iter1/Branch dentro de los Flow.
+#   @[Nombre]   valores publicados con Run.Publish (por el UE o por otra tarea).
+#               Admite grupo explicito (@[Publish.x]) y valor por defecto
+#               (@[x:default]).
+#
+# TRES REGLAS QUE CUESTAN UNA EJECUCION SI SE IGNORAN
+#   1. Un default NO puede contener ':'. El motor parte por ':' sin limite, asi
+#      que un default que sea una URL, una ruta de Windows o una hora, se
+#      lleva por delante la fase Run entera. Para IPs y URLs, usar el nombre a
+#      secas, sin default.
+#   2. Lo expandido llega como TEXTO. Vale para cadenas y para numeros que
+#      la tarea convierta (Run.Delay hace int()), pero NO para booleanos: "False"
+#      es una cadena no vacia, o sea verdadera. Por eso 'Https', 'Insecure',
+#      'Account' y 'Encryption' van escritos a mano en los TestCases.
+#   3. Flow.Repeat.Times TAMPOCO admite @[...]: el motor hace range(Times) y con
+#      una cadena lanza TypeError. Va como entero literal.
+#
+# EL BLOQUE 'Parameters' NO SE USA EN ESTA BIBLIOTECA. ELCM permite declarar
+# parametros por TestCase y leerlos con @[Params.X], pero aqui TODAS las
+# variables pasan por los ficheros UE: un unico mecanismo y un unico sitio donde
+# mirar. El contrato de CI lo comprueba.
+# =============================================================================
+Version: 2
+Name: "TC_5_Flujo_Variables"
+Sequence:
+  # --- Valores fijos del motor: no dependen del UE ---
+  - Order: 500
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "[1/6] Motor -> ExecutionId=@{ExecutionId} | Application=@{Application} | TempFolder=@{TempFolder}"
+
+  # Run.Dummy no tiene parametros fijos: vuelca al log lo que se le pase, asi que
+  # sirve de inspector del estado de las variables en un punto concreto.
+  - Order: 501
+    Task: "Run.Dummy"
+    Config:
+      Etapa: "inspeccion de las variables del UE"
+      MonitoringIp: "@[MonitoringIp]"
+      PrometheusPort: "@[PrometheusPort]"
+      InfluxBucket: "@[InfluxBucket]"
+
+  # --- Derivar variables nuevas a partir de las del UE ---
+  # El ':' va FUERA de los corchetes, por eso es seguro aqui. Un ':' DENTRO de
+  # @[...] se interpretaria como separador del valor por defecto (regla 1).
+  - Order: 502
+    Task: "Run.Publish"
+    Config:
+      PrometheusEndpoint: "@[MonitoringIp]:@[PrometheusPort]"
+      RunLabel: "@{Application}-@{ExecutionId}"
+
+  # Lo derivado ya es visible para cualquier tarea posterior. Ojo: la expansion
+  # es de UN SOLO PASO, un valor publicado que contenga "@[...]" no se reexpande.
+  - Order: 503
+    Task: "Run.Message"
+    Config:
+      Severity: "WARNING"
+      Message: "[2/6] Derivadas -> @[PrometheusEndpoint] | @[RunLabel] || Sin definir -> @[VariableQueNoExiste] | con default -> @[VariableQueNoExiste:valor_por_defecto]"
+
+  # --- Flow.Sequence: hijos en orden, y cinturon de seguridad ---
+  # Es ademas el envoltorio que aisla una tarea que puede lanzar excepcion:
+  # dentro de un Flow se degrada a veredicto en vez de abortar la fase Run.
+  - Order: 510
+    Task: "Flow.Sequence"
+    Children:
+      - Task: "Run.Message"
+        Config:
+          Severity: "INFO"
+          Message: "[3/6] Sequence: paso 1 de 2"
+      - Task: "Run.Delay"
+        Config:
+          Time: 2
+      - Task: "Run.Message"
+        Config:
+          Severity: "INFO"
+          Message: "[3/6] Sequence: paso 2 de 2 (han pasado 2 s)"
+
+  # --- Flow.Parallel: hijos a la vez, cada uno con su @{Branch} ---
+  # OJO (defecto DE-4 del motor): las ramas que terminan ANTES de que el bucle de
+  # join llegue a ellas pierden lo que hayan publicado y su veredicto no cuenta.
+  # No confies en Run.Publish dentro de una rama paralela corta.
+  - Order: 520
+    Task: "Flow.Parallel"
+    Children:
+      - Task: "Run.Message"
+        Config:
+          Severity: "INFO"
+          Message: "[4/6] Parallel rama @{Branch}: la rapida, termina ya"
+      - Task: "Run.Delay"
+        Config:
+          Time: 3
+      - Task: "Run.Message"
+        Config:
+          Severity: "INFO"
+          Message: "[4/6] Parallel rama @{Branch}: arranca a la vez que la anterior"
+
+  # --- Flow.Repeat: N vueltas, con el indice disponible dentro ---
+  # 'Times' entero literal, nunca @[...] (regla 3).
+  - Order: 530
+    Task: "Flow.Repeat"
+    Config:
+      Times: 3
+    Children:
+      - Task: "Run.Message"
+        Config:
+          Severity: "INFO"
+          Message: "[5/6] Repeat: vuelta @{Iter1} de 3 (indice base 0: @{Iter0})"
+
+  # --- Flow.While: repite MIENTRAS se cumpla la condicion ---
+  # La condicion mira una clave publicada. Aqui @[LoopGuard] vale siempre
+  # "continuar", asi que quien corta el bucle es MaxIterations: sin ese tope, un
+  # While cuya condicion nunca deja de cumplirse se cuelga hasta que alguien
+  # cancele la ejecucion. Ponlo SIEMPRE.
+  - Order: 540
+    Task: "Flow.While"
+    Config:
+      Key: "LoopGuard"
+      Pattern: '^continuar$'
+      MaxIterations: 3
+    Children:
+      - Task: "Run.Message"
+        Config:
+          Severity: "INFO"
+          Message: "[6/6] While: iteracion @{Iter1}, se corta en MaxIterations 3"
+
+  # --- Flow.Select: UNA rama, la de la primera condicion que se cumpla ---
+  # Con un hijo MAS que condiciones, el ultimo es la rama por defecto. Con el
+  # mismo numero de hijos que condiciones no hay defecto: si no casa ninguna, no
+  # se ejecuta nada. 'Negate: true' invierte la condicion.
+  # OJO: un Flow.Select mal configurado no se salta, ABORTA la ejecucion.
+  - Order: 550
+    Task: "Flow.Select"
+    Config:
+      Conditions:
+        - Key: "SelectProbe"
+          Pattern: '^on$'
+    Children:
+      - Task: "Run.Publish"
+        Config:
+          SelectResult: "rama_de_la_condicion"
+      - Task: "Run.Publish"
+        Config:
+          SelectResult: "rama_por_defecto"
+
+  # Lo que publica la rama elegida SI llega al diccionario global.
+  - Order: 560
+    Task: "Run.Evaluate"
+    Config:
+      Key: "ResumenFlujo"
+      Expression: "'Select entro por la {} y el label de la ejecucion es {}'.format('@[SelectResult:ninguna]', '@[RunLabel:sin_label]')"
+
+  - Order: 561
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "[Fin] @[ResumenFlujo:sin resumen]"
+
+Standard: True
+Distributed: False
+Dashboard: {}
+KPIs: {}

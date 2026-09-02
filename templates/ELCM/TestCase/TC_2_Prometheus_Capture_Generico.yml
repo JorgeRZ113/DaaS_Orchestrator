@@ -1,0 +1,168 @@
+# =============================================================================
+# 2. CAPTURA DE PROMETHEUS -> DATASET, valida en CUALQUIER Trial Network
+# =============================================================================
+# Captura metricas durante una ventana de medida y las entrega en CSV. Consulta
+# solo metricas que Prometheus publica DE SI MISMO.
+#
+# Bloque de Order: 200-299.   UE: UE_2_Prometheus_Capture_Generico.yml
+# Duracion: @[MonitorTime:60] s de ventana mas la ida y vuelta a InfluxDB.
+# Prerrequisitos: componente de monitorizacion desplegado y MonitoringIp puesta.
+#
+# VALORES QUE PUBLICA: PromRowsExported, PromCaptureOk
+#
+# TAREAS QUE ENSEÑA
+#   Flow.Parallel + Run.Delay + Run.AddMilestone  el patron de ventana de medida
+#   Run.PrometheusToInflux                        capturar hacia InfluxDB
+#   Run.WaitForInflux                             esperar a que la escritura pose
+#   Run.InfluxToCsv                               sacar el dataset en CSV
+#   Run.Evaluate                                  derivar un valor calculado
+#   Run.CompressFiles                             entregar el fichero en /results
+#
+# QUE MIDE: count(up) es el numero de targets que Prometheus
+# tiene configurados y sum(up) los que responden.
+#
+# 'Measurement' NO se parametriza: el orquestador lee este fichero SIN expandir
+# para generar el dashboard de Grafana, asi que un @[...] ahi llegaria literal.
+# 'Account' y 'Encryption' tampoco: la tarea exige booleanos de YAML y @[...]
+# siempre expande a texto, con lo que "False" seria un valor verdadero.
+#
+# EL NOMBRE DE ESTE FICHERO NO ES LIBRE: tiene que contener "_capture". El
+# orquestador identifica asi el TestCase de captura
+# para poder generar el dashboard.
+# =============================================================================
+Version: 2
+Name: "TC_2_Prometheus_Capture_Generico"
+Sequence:
+  # Run.PrometheusToInflux BLOQUEA hasta ver su milestone. Por eso va en paralelo
+  # con la rama que espera la ventana y lo publica al terminar.
+  - Order: 200
+    Task: "Flow.Parallel"
+    Children:
+      - Task: "Run.PrometheusToInflux"
+        Config:
+          ExecutionId: "@{ExecutionId}"
+          Url: "@[MonitoringIp]"
+          Port: "@[PrometheusPort:9090]"
+          QueriesRange:
+            - "count(up)"
+            - "sum(up)"
+            - "max(scrape_duration_seconds)"
+            - "prometheus_tsdb_head_series"
+            - "max(process_resident_memory_bytes)"
+          Measurement: "DAAS_PROMETHEUS"
+          Step: "@[PrometheusStep:5s]"
+          Stop: "stop_capture_generico"
+          Account: False
+          Encryption: False
+      - Task: "Flow.Sequence"
+        Children:
+          - Task: "Run.Delay"
+            Config:
+              Time: "@[MonitorTime:60]"
+          - Task: "Run.AddMilestone"
+            Config:
+              Milestone: "stop_capture_generico"
+
+  # Sincroniza captura y exportacion: sale en cuanto InfluxDB deja de recibir.
+  - Order: 210
+    Task: "Run.WaitForInflux"
+    Config:
+      ExecutionId: "@{ExecutionId}"
+      CheckInterval: 5
+      TimeWindow: 5
+
+  # IdCsv propio: la salida es <TempFolder>/csv_query_<IdCsv>.csv, y dos
+  # TestCases con el mismo IdCsv se pisan el fichero entre ellos.
+  - Order: 220
+    Task: "Run.InfluxToCsv"
+    Config:
+      IdCsv: "@{ExecutionId}_generico"
+      # Vacio = la org que tenga configurada ELCM. Ver la nota del 404.
+      Org: "@[InfluxOrg:]"
+      CustomQuery: 'from(bucket: "@[InfluxBucket:testing]") |> range(start: @[InfluxRangeStart:0]) |> filter(fn: (r) => r["_measurement"] == "DAAS_PROMETHEUS") |> filter(fn: (r) => r["ExecutionId"] == "@{ExecutionId}") |> pivot(rowKey:["_time"], columnKey:["_field"], valueColumn:"_value") |> group()'
+
+  - Order: 230
+    Task: "Run.CliExecute"
+    Config:
+      CWD: "@{TempFolder}"
+      Parameters: "sh -c 'R=$(wc -l < csv_query_@{ExecutionId}_generico.csv 2>/dev/null || echo 0); echo PROM_ROWS=$R'"
+
+  # Ancla en "[CLI]": antes de ejecutar, el motor vuelca al log la configuracion
+  # ya expandida de la tarea, y ahi va el comando entero. Sin el ancla el patron
+  # puede casar con ese volcado en vez de con la salida real.
+  - Order: 231
+    Task: "Run.PublishFromPreviousTaskLog"
+    Config:
+      Pattern: '.*\[CLI\]PROM_ROWS=(\d+).*'
+      Keys:
+        - [1, "PromRowsExported"]
+      VerdictOnMatch: "NotSet"
+      VerdictOnNoMatch: "Fail"
+
+  # Run.PrometheusToInflux NO falla cuando una consulta no devuelve nada: escribe
+  # un WARNING y sigue. Sin esta comprobacion una captura vacia pasa por buena, y
+  # un DaaS no puede entregar un dataset vacio en silencio.
+  - Order: 232
+    Task: "Run.Evaluate"
+    Config:
+      Key: "PromCaptureOk"
+      Expression: "'YES' if @[PromRowsExported:0] > 1 else 'NO'"
+
+  - Order: 233
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "[Captura generica] prometheus=@[MonitoringIp]:@[PrometheusPort:9090] | ventana=@[MonitorTime:60] s | filas=@[PromRowsExported:0] | con datos=@[PromCaptureOk:NO]"
+
+  - Order: 234
+    Task: "Run.UpgradeVerdict"
+    Config:
+      Key: "PromCaptureOk"
+      Pattern: '^YES$'
+      VerdictOnMatch: "Pass"
+      VerdictOnNoMatch: "Fail"
+      VerdictOnMissing: "Inconclusive"
+
+  # Entrega en ZIP DESACTIVADA por defecto.
+  # Poner ZipDelivery: "on" en el UE cuando el motor este corregido. El
+  # Flow.Sequence interior es el cinturon: dentro de un Flow la excepcion se
+  # degrada a veredicto. Ver docs/INCIDENCIA_ELCM_VERSION_DESPLEGADA.md
+  - Order: 290
+    Task: "Flow.Select"
+    Config:
+      Conditions:
+        - Key: "ZipDelivery"
+          Pattern: '^on$'
+    Children:
+      - Task: "Flow.Sequence"
+        Children:
+          - Task: "Run.CompressFiles"
+            Config:
+              Files:
+                - "@{TempFolder}/csv_query_@{ExecutionId}_generico.csv"
+              Output: "@{TempFolder}/dataset_generico_@{ExecutionId}.zip"
+      - Task: "Run.Message"
+        Config:
+          Severity: "WARNING"
+          Message: "[Captura generica] ZIP omitido (ZipDelivery != on). Los datos estan en InfluxDB, measurement DAAS_PROMETHEUS, ExecutionId @{ExecutionId}."
+
+Standard: True
+Distributed: False
+Dashboard: {}
+KPIs:
+  DAAS_PROMETHEUS:
+    - Name: "count_up_"
+      Type: "Gauge"
+      Description: "Targets configurados en Prometheus (consulta 'count(up)')"
+    - Name: "sum_up_"
+      Type: "Gauge"
+      Description: "Targets que responden al scrape. Si es menor que count_up_, hay targets caidos"
+    - Name: "max_scrape_duration_seconds_"
+      Type: "Gauge"
+      Description: "Duracion del scrape mas lento, en segundos"
+    - Name: "prometheus_tsdb_head_series"
+      Type: "Gauge"
+      Description: "Series activas en memoria en la TSDB de Prometheus"
+    - Name: "max_process_resident_memory_bytes_"
+      Type: "Gauge"
+      Description: "Memoria residente del proceso Prometheus, en bytes"

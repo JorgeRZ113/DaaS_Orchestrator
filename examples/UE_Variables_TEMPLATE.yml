@@ -1,0 +1,74 @@
+# =============================================================================
+# PLANTILLA DE VARIABLES GLOBALES (fichero "UE" de ELCM)
+# =============================================================================
+# Que es: un fichero UE NO es un TestCase. Es una lista de acciones estilo V1
+# donde la CLAVE RAIZ es el nombre del UE. Aqui se usa con un unico Run.Publish
+# para definir las variables globales que consumen todos los TestCases del
+# experimento con la sintaxis @[Variable].
+#
+# Como se usa:
+#   1. Copiar este fichero y renombrarlo (p. ej. UE_Variables_mi_experimento.yml).
+#   2. Renombrar la clave raiz (linea "UE_Variables:") si se van a usar varios
+#      ficheros a la vez: ELCM registra los UEs por esa clave y el segundo
+#      fichero con el mismo nombre REDEFINE al primero.
+#   3. Rellenar solo los valores. No hace falta tocar los nombres.
+#   4. Referenciarlo en el body de POST /executions:
+#        "experiment": {
+#          "name": "exp-demo",
+#          "testcase_paths": ["TC_Demo_Variables.yml"],
+#          "ues_paths": ["UE_Variables_TEMPLATE.yml"]
+#        }
+#
+# Reglas del motor ELCM que hay que respetar (verificadas en el codigo):
+#   - NO anadir 'Name:' ni 'Version:'. El endpoint de subida rechaza 'Name' sin
+#     'Version: 2', y un UE es formato V1 (clave raiz = nombre).
+#   - 'Order' es OBLIGATORIO en cada accion de primer nivel.
+#   - 'Order' es GLOBAL a todo el experimento: las acciones de UEs y TestCases se
+#     mezclan en una unica lista ordenada por Order. Por eso las variables van en
+#     Order 0, para que se publiquen antes que nada. Ver el mapa de bandas en el
+#     README.
+#   - Lo publicado aqui es visible desde CUALQUIER TestCase del experimento: hay
+#     un unico espacio de nombres por ejecucion, sin aislamiento por fichero.
+#
+# Como se consume desde un TestCase:
+#   "@[SutIp]"              -> valor publicado, o <<UNDEFINED>> si no existe
+#   "@[Publish.SutIp]"      -> identico, con el grupo explicito
+#   "@[PingCount:5]"        -> con valor por defecto si la clave no existe
+#
+# CUIDADO con los defaults: el motor hace capture.split(':') sin limite, asi que
+# un default que contenga ':' (una URL, una ruta Windows, una hora) lanza
+# ValueError y TUMBA la fase Run entera. Para IPs y URLs usar "@[SutIp]" sin
+# default. Los VALORES publicados si pueden llevar ':' sin problema.
+#
+# Los valores marcados CHANGEME son obligatorios: si no se rellenan, el fallo
+# aparece de forma legible en el log en vez de expandirse a cadena vacia.
+# =============================================================================
+UE_Variables:
+  - Order: 0
+    Task: "Run.Publish"
+    Config:
+      # ---- Infraestructura de monitorizacion (VM "monitoring" de la TN) ----
+      MonitoringIp: "CHANGEME"          # IP de la VM con Prometheus/InfluxDB/Grafana
+      PrometheusPort: "9090"
+      InfluxPort: "8086"
+      InfluxBucket: "testing"
+      GrafanaPort: "3000"
+
+      # ---- Sistema bajo prueba (SUT) ----
+      SutIp: "CHANGEME"                 # IP del componente que se quiere medir
+      SutPort: "80"                     # puerto HTTP del SUT (para Run.RestApi)
+      SutEndpoint: "/"                  # endpoint a consultar en el SUT
+
+      # ---- Acceso SSH al SUT (para Run.CliSsh) ----
+      # ELCM solo soporta clave privada, no contrasena. La ruta del certificado
+      # es una ruta EN EL HOST DONDE CORRE ELCM, no en tu maquina.
+      SshUser: "ubuntu"
+      SshPort: "22"
+      SshCertificate: "CHANGEME"
+
+      # ---- Parametros de la medida ----
+      MonitorTime: "120"                # ventana de captura en segundos
+      DatasetMeasurement: "OPEN5GS_KPIS" # measurement de InfluxDB donde cae la captura
+      PingTarget: "CHANGEME"            # destino de las pruebas de conectividad
+      PingCount: "10"                   # numero de paquetes ICMP
+      SlaLatencyMs: "20"                # umbral de latencia para el veredicto

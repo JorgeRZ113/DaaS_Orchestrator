@@ -1,0 +1,10 @@
+UE_Variables:
+  - Order: 0
+    Task: "Run.Publish"
+    Config:
+      DatasetSamples: "10"                  # muestras a generar
+      DatasetInterval: "1"                  # segundos entre muestras
+
+      InfluxBucket: "testing"               # tiene que coincidir con el bucket de ELCM
+      InfluxRangeStart: "0"                 # inicio del rango de la query Flux (0 = todo)
+      InfluxOrg: ""                         # vacio = la org configurada en ELCM; rellenar si da 404

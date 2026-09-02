@@ -1,0 +1,53 @@
+#! Template YTT: TestCase ELCM "dataset" (Prometheus -> InfluxDB -> CSV -> ZIP)
+#!
+#! Genera un TestCase v2 completo que la herramienta anade al experimento del
+#! usuario para garantizar la entrega de datos, independientemente de lo que
+#! el experimentador haya definido en sus propios TestCases.
+#!
+#! Los Orders van en la banda 800-899 (ENTREGA del dataset), por debajo de la
+#! banda 100-699 de los TestCases funcionales. El Order es GLOBAL a todo el
+#! experimento: si la exportacion fuese antes que los TestCases del usuario,
+#! el CSV saldria vacio. Ver el mapa de bandas en el README.
+
+#@ load("@ytt:data", "data")
+
+#! Query Flux (InfluxDB v2) parametrizada por bucket y measurement. Se construye
+#! por concatenacion para que quede en UNA SOLA LINEA: ELCM no acepta la query
+#! partida en varias. "@{ExecutionId}" es sintaxis del Expander de ELCM, no de
+#! ytt, y se emite literal para que ELCM la sustituya en tiempo de ejecucion.
+#@ def flux_query():
+#@   q = 'from(bucket: "' + data.values.dataset.bucket + '")'
+#@   q += ' |> range(start: 0)'
+#@   q += ' |> filter(fn: (r) => r["_measurement"] == "' + data.values.dataset.measurement + '")'
+#@   q += ' |> filter(fn: (r) => r["ExecutionId"] == "@{ExecutionId}")'
+#@   q += ' |> pivot(rowKey:["_time"], columnKey:["_field"], valueColumn:"_value")'
+#@   q += ' |> group()'
+#@   return q
+#@ end
+---
+Version: 2
+Name: #@ data.values.dataset.name
+Sequence:
+  - Order: 800
+    Task: "Run.InfluxToCsv"
+    Config:
+      IdCsv: "@{ExecutionId}"
+      Host: #@ data.values.dataset.influx.host
+      Port: #@ data.values.dataset.influx.port
+      CustomQuery: #@ flux_query()
+
+  #! OBLIGATORIA: Run.InfluxToCsv escribe el CSV en el TempFolder pero NO lo
+  #! registra en GeneratedFiles. Esta task hace ese registro (append a
+  #! GeneratedFiles), que es lo que ELCM copia a Results/<id>.zip ANTES de
+  #! limpiar el TempFolder. Sin ella, el CSV se pierde y no aparece en
+  #! GET /execution/{id}/results. La compresion es un efecto colateral.
+  - Order: 801
+    Task: "Run.CompressFiles"
+    Config:
+      Output: #@ data.values.dataset.csv.output
+      Files:
+        - Source: #@ data.values.dataset.csv.source
+
+Standard: true
+Distributed: false
+KPIs: {}

@@ -1,0 +1,134 @@
+# ESQUEMA COMPLETO -- todas las claves que admite un Dataset Descriptor.
+#
+# Este fichero es una REFERENCIA, no una receta: combina a proposito cosas que
+# juntas no tienen mucho sentido (varios componentes de red a la vez, todos los
+# formatos de salida) para que se vea de un vistazo todo lo que se puede escribir
+# y donde va cada cosa. Para empezar de verdad, usa 01_minimo_base.yaml.
+#
+# Aun asi es VALIDO: pasa la validacion de esquema y el pre-flight de ELCM, y una
+# prueba lo comprueba. Un ejemplo de referencia que no valida acaba ensenando
+# cosas que no funcionan.
+#
+# Los campos editables de cada componente estan en REFERENCIA_componentes.yaml.
+
+# =============================================================================
+# infrastructure -- QUE DESPLEGAR                                  [OBLIGATORIO]
+# =============================================================================
+infrastructure:
+  # Unico campo verdaderamente obligatorio de todo el descriptor. Identifica la
+  # Trial Network y da nombre a artifacts/<name>/.
+  name: tn_esquema_completo
+
+  # Descriptor TNLCM concreto, si quieres forzar uno en vez de generarlo.
+  # Se resuelve contra EXAMPLES_DIR. Normalmente se omite.
+  descriptor_path: base_tnlcm_descriptor.yaml
+
+  # ---------------------------------------------------------------------------
+  # component -- que componentes de red se despliegan y con que valores.
+  #
+  # El esquema NO es estatico: cada componente declara sus campos editables en su
+  # .overlay.yaml, y se validan en tiempo de ejecucion. Un campo que no exista se
+  # rechaza con 400 diciendo exactamente cual sobra.
+  #
+  # Componentes disponibles hoy: base, mongodb, oneKE, ocf, open5gs_vm,
+  # ueransim_both, ueransim_split, vnet, vm_kvm, int_p4_sw, tn_init.
+  # ---------------------------------------------------------------------------
+  component:
+
+    # -- Formato PLANO: el campo directamente bajo el componente. Es el
+    #    recomendado, y el que se usa en el resto de ejemplos.
+    base:
+      influxdb_user: admin          # [OBLIGATORIO en base]
+      influxdb_password: adminadmin # [OBLIGATORIO en base]
+      grafana_password: adminadmin  # [OBLIGATORIO en base]
+      influxdb_version: "2.7.11"    # entrecomillado: sin comillas seria el numero 2.7
+      influxdb_org: testing
+      influxdb_bucket: testing
+      influxdb_token: default-token-testing
+      grafana_version: "11.6.0"
+      prometheus_version: "2.54.3"
+
+    # -- Formato ANIDADO por seccion: equivalente al plano y necesario en los
+    #    componentes donde un mismo nombre de campo existe en dos secciones
+    #    (int_p4_sw y ocf; ver REFERENCIA_componentes.yaml).
+    vnet:
+      network:
+        name: vnet-demo
+        first_ip: 10.0.0.10
+        netmask: 255.255.255.0
+        address_size: "32"
+        gw: 10.0.0.1
+        dns: 8.8.8.8
+
+    # -- Componente SIN VALORES: se despliega con los defaults de su overlay.
+    #    En YAML basta con nombrarlo y dejarlo vacio; el equivalente en JSON es
+    #    "ueransim_both": {}.
+    ueransim_both:
+
+    # -- Otro mas, tambien con defaults, para que se vea que admite varios.
+    mongodb:
+      user: root                 # [OBLIGATORIO en mongodb]
+      password: rootroot         # [OBLIGATORIO en mongodb]
+      database: testing          # [OBLIGATORIO en mongodb]
+      express_user: admin        # [OBLIGATORIO en mongodb]
+      express_password: adminadmin  # [OBLIGATORIO en mongodb]
+
+  # ---------------------------------------------------------------------------
+  # parameters -- ajustes del despliegue. Estas claves tienen significado propio;
+  # cualquier otra viaja tal cual hacia TNLCM.
+  # ---------------------------------------------------------------------------
+  parameters:
+    library_reference_type: branch   # branch | commit | tag
+    library_reference_value: develop
+
+    # Seleccion explicita de plantilla TNLCM. Se consultan en este orden:
+    # template_tnlcm, template, descriptor, y por ultimo descriptor_path.
+    # template_tnlcm: base_tnlcm_descriptor.yaml
+
+# =============================================================================
+# experiment -- QUE EJECUTAR      [OBLIGATORIO si auto_start_elcm es true]
+# =============================================================================
+experiment:
+  # Unico dentro de la TN: ELCM registra los experimentos por nombre y un
+  # duplicado se rechaza con 409.
+  name: exp-esquema-completo
+
+  # Se ejecutan EN ORDEN. Se resuelven por nombre de fichero contra
+  # templates/ELCM/TestCase/, que es un directorio plano: no admite rutas.
+  testcase_paths:
+    - TC_1_Preflight.yml
+    # Los modos csv/dashboard/raw exigen un TestCase de captura (*_capture*):
+    - TC_3_Prometheus_Capture_Open5GS.yml
+
+  # Ficheros de variables globales (UE). Opcional; puede ir vacio.
+  ues_paths:
+    - UE_Variables_TEMPLATE.yml
+
+# =============================================================================
+# dataset -- QUE DATOS ENTREGAR                        [opcional, default: logs]
+# =============================================================================
+dataset:
+  # Acepta un nombre suelto (output: logs) o una lista. Insensible a mayusculas
+  # y sin duplicados. Valores: logs, csv, dashboard, raw, files.
+  output: [logs, csv, dashboard, raw, files]
+
+  # Cada variable pertenece a unos modos concretos. Declararla sin activar su
+  # modo devuelve 422: casi siempre significa que el modo se olvido en `output`,
+  # y aceptarlo en silencio entregaria algo distinto de lo esperado.
+  measurement: OPEN5GS_KPIS   # modos: csv, dashboard, raw
+  influx_host: 10.11.12.13    # modo:  csv
+  influx_port: 8086           # modo:  csv
+  influx_bucket: testing      # modos: csv, raw
+  panel_interval: 10s         # modo:  dashboard
+
+# =============================================================================
+# Banderas de ciclo de vida                                          [opcionales]
+# =============================================================================
+
+# true (por defecto): lanza el experimento al terminar el despliegue.
+# false: solo levanta la TN, y entonces el bloque `experiment` es opcional.
+auto_start_elcm: true
+
+# true: borra la TN automaticamente tras el primer experimento.
+# Se IGNORA cuando auto_start_elcm es false (la TN queda viva por definicion).
+ephemeral_tn: false

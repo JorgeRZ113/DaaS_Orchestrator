@@ -18,22 +18,58 @@ dependencies = [
     "pyyaml",
     "python-dotenv",
     "httpx",
+    # Ningun modulo la importa directamente: la exige Starlette al llamar a
+    # `request.form()`, que es como `api/body_formats.py` lee el descriptor
+    # subido como fichero. Sin ella la subida multipart revienta con un 500 en
+    # tiempo de peticion, no al arrancar.
+    "python-multipart",
 ]
 
 [project.optional-dependencies]
+# Versiones fijadas del linter/formatter: garantizan que CI y local apliquen
+# EXACTAMENTE las mismas reglas. Sin fijar, el CI instalaba la última ruff
+# (0.16.x amplió el set de reglas por defecto) y rompía el job de lint con
+# código que localmente pasaba. Ver también la versión fijada de ytt en CLAUDE.md §5.
 dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
-    "ruff",
-    "black",
+    "ruff==0.15.20",
+    "black==26.5.1",
+]
+# UI web opcional (Streamlit). No forma parte del runtime del servicio: se
+# instala aparte con `pip install -e ".[ui]"` para no inflar la imagen del core.
+ui = [
+    "streamlit",
+]
+
+# Pruebas de mutacion (ver mutation.toml). Aparte de `dev` porque arrastra
+# bastantes dependencias y solo se ejecuta puntualmente, no en cada commit.
+# Se usa cosmic-ray y no mutmut porque este ultimo no soporta Windows nativo.
+mutation = [
+    "cosmic-ray",
 ]
 
 [project.scripts]
 daas-orchestrator = "app.main:main"
+# Cliente de consola (F6.3). Habla con la API por HTTP reutilizando
+# `app/client.py`, el mismo modulo que usa la UI: no arranca el servicio.
+daas = "app.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Niveles de la piramide de pruebas. Los aplica `tests/conftest.py` a partir del
+# subdirectorio de cada fichero; declararlos aqui permite `--strict-markers`.
+markers = [
+    "unit: sin I/O ni red; el ciclo corto de desarrollo",
+    "integration: varios modulos, disco y binario ytt",
+    "adapters: contrato HTTP con TNLCM, ELCM e InfluxDB",
+    "api: endpoints via TestClient",
+    "contract: biblioteca de TestCases y Experiment Descriptor contra las reglas de ELCM",
+    "system: ciclo de vida completo con dobles solo en los bordes",
+    "golden: descriptores de referencia con la salida congelada byte a byte",
+]
+addopts = "--strict-markers"
 
 [tool.ruff]
 line-length = 100

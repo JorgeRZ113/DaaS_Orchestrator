@@ -1,0 +1,32 @@
+# TN de un solo uso: se despliega, ejecuta el experimento y se borra sola.
+#
+# Es el modo indicado para lotes automatizados y para CI, donde dejar
+# infraestructura viva por olvido cuesta cuota del banco de pruebas.
+
+infrastructure:
+  name: tn_demo_efimera
+
+  component:
+    base:
+      influxdb_user: admin
+      influxdb_password: adminadmin
+      grafana_password: adminadmin
+
+  parameters:
+    library_reference_type: branch
+    library_reference_value: develop
+
+experiment:
+  name: exp-efimero
+  testcase_paths:
+    - TC_1_Preflight.yml
+  ues_paths: []
+
+dataset:
+  output: [logs]
+
+auto_start_elcm: true
+
+# El teardown se dispara solo al acabar el PRIMER experimento. Solo tiene efecto
+# con auto_start_elcm: true; en el flujo manual se ignora.
+ephemeral_tn: true

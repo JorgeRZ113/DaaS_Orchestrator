@@ -1,18 +1,26 @@
 #! Overlay para `oneKE_sample_tnlcm_descriptor.yaml`
 #! Component: oneKE
-#! Depends on: vnet
+#! Depends on: tn_init, vnet
+#!
+#! Todos los campos son OPCIONALES y viajan con su default de 6G-Library.
+#!
+#! `one_oneKE_internal_vnet` NO aparece aqui: es el nombre de la vnet declarada en el
+#! propio template y esta en su lista de `dependencies`, por lo que no puede exponerse
+#! como campo libre sin romper la dependencia.
 
 #@ data/values
 ---
 oneKE:
-  external_vnet: "tn_vxlan"
-  internal_vnet: "vnet-internal"
-  worker_nodes: 3            #! Default value is 1
-  version: "131"
-  #! multus: true             #! Default value
-  #! cni_plugin: "canal"      #! Default value
-  #! metallb: true            #! Default value
-  metallb_range: "10.21.12.200-10.21.12.240"
-  #! longhorn: true           #! Default value
-  #! traefik: false           #! Default value
-  #! nginx_passthough: false  #! Default value
+  vnet_first_ip: "10.21.12.1"                 #! Opcional. Default 6G-Library de la vnet interna
+  vnet_netmask: 24                            #! Opcional. Default 6G-Library
+  vnet_address_size: 100                      #! Opcional. Default 6G-Library
+  external_vnet: "tn_vxlan"                   #! Opcional. Default 6G-Library
+  worker_nodes: 3                             #! Opcional. 6G-Library no fija default
+  version: "131"                              #! Opcional. Default 6G-Library. Choices: 129, 131, 131a
+  multus: true                                #! Opcional. Default 6G-Library
+  cni_plugin: "canal"                         #! Opcional. Default 6G-Library. Choices: cilium, calico, canal
+  metallb: true                               #! Opcional. Default 6G-Library
+  metallb_range: "10.21.12.200-10.21.12.240"  #! Opcional. Debe caer dentro de la subred de la vnet interna
+  longhorn: true                              #! Opcional. Default 6G-Library
+  traefik: false                              #! Opcional. Default 6G-Library
+  nginx_passthough: false                     #! Opcional. Default 6G-Library

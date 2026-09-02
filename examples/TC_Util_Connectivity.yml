@@ -1,0 +1,97 @@
+# =============================================================================
+# UTILIDAD: comprobacion de conectividad con el SUT + veredicto automatico
+# =============================================================================
+# Proposito: verificar que el componente bajo prueba responde ANTES de medir
+# nada, y dejar publicadas la perdida de paquetes y la latencia media para que
+# otros TestCases del experimento las consuman con @[PacketLossPct] /
+# @[RttAvgMs]. Es el patron "asume configurado + comprueba": si el componente no
+# esta listo, el experimento falla aqui con un mensaje claro en vez de producir
+# un dataset vacio mas adelante.
+#
+# Banda de Order: 320-329.
+#
+# PRERREQUISITOS (el TestCase NO los configura, solo los comprueba):
+#   - La Trial Network desplegada y el componente arrancado.
+#   - Ruta desde el host de ELCM hasta @[PingTarget] (misma red o VPN activa).
+#   - Variables del UE rellenas: PingTarget, PingCount. Si PingTarget se queda en
+#     CHANGEME, el ping falla de forma legible en el log.
+#
+# Por que se vuelca el ping a fichero Y se lee del log:
+#   Run.PublishFromPreviousTaskLog solo ve el log de la task de primer nivel
+#   inmediatamente anterior. Encadenar dos seguidas no funciona: la segunda leeria
+#   el log de la primera. Como aqui hacen falta dos datos de dos lineas distintas,
+#   el ping se guarda ademas en un fichero y el segundo dato se saca con
+#   Run.PublishFromFile, que no depende de esa cadena.
+# =============================================================================
+Version: 2
+Name: "TC_Util_Connectivity"
+Sequence:
+  - Order: 320
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "Comprobando conectividad con @[PingTarget] (@[PingCount:5] paquetes). Prerrequisito: TN desplegada y ruta accesible desde el host de ELCM."
+
+  # El ping se guarda en fichero y ademas se vuelca al log con 'cat'.
+  # El '|| true' evita que un ping fallido tina el resto: el veredicto lo decide
+  # Run.UpgradeVerdict mas abajo, a partir del dato medido.
+  - Order: 321
+    Task: "Run.CliExecute"
+    Config:
+      CWD: "@{TempFolder}"
+      Parameters: "sh -c 'F=ping_@{ExecutionId}.txt; ping -c @[PingCount:5] -W 2 @[PingTarget] > $F 2>&1 || true; cat $F'"
+
+  # Dato 1: perdida de paquetes, del log de la task anterior.
+  # Linea tipica: "[CLI]5 packets transmitted, 5 received, 0% packet loss, time 4005ms"
+  - Order: 322
+    Task: "Run.PublishFromPreviousTaskLog"
+    Config:
+      Pattern: '.*?(\d+)% packet loss.*'
+      Keys:
+        - [1, "PacketLossPct"]
+      VerdictOnMatch: "NotSet"
+      VerdictOnNoMatch: "Fail"
+
+  # Dato 2: latencia media, del fichero (no del log, para no romper la cadena).
+  # Linea tipica: "rtt min/avg/max/mdev = 0.045/0.067/0.089/0.015 ms"
+  - Order: 323
+    Task: "Run.PublishFromFile"
+    Config:
+      Path: "@{TempFolder}/ping_@{ExecutionId}.txt"
+      Pattern: '.*rtt min/avg/max/mdev = [\d.]+/([\d.]+)/.*'
+      Keys:
+        - [1, "RttAvgMs"]
+      VerdictOnMatch: "NotSet"
+      VerdictOnNoMatch: "NotSet"
+
+  - Order: 324
+    Task: "Run.Message"
+    Config:
+      Severity: "INFO"
+      Message: "[Conectividad] destino=@[PingTarget] | perdida=@[PacketLossPct:100]% | rtt medio=@[RttAvgMs:n-d] ms"
+
+  # Veredicto: 100% de perdida -> Fail. Run.UpgradeVerdict busca la clave en el
+  # diccionario global de valores publicados (nombre pelado, sin @[...]) y aplica
+  # re.match sobre su valor en texto.
+  - Order: 325
+    Task: "Run.UpgradeVerdict"
+    Config:
+      Key: "PacketLossPct"
+      Pattern: '100$'
+      VerdictOnMatch: "Fail"
+      VerdictOnNoMatch: "Pass"
+      VerdictOnMissing: "Inconclusive"
+
+  # El fichero de ping se entrega como evidencia en /results.
+  - Order: 326
+    Task: "Run.CompressFiles"
+    Config:
+      Files:
+        - "@{TempFolder}/ping_@{ExecutionId}.txt"
+      Output: "@{TempFolder}/connectivity_@{ExecutionId}.zip"
+
+Standard: True
+Distributed: False
+Parameters: {}
+Dashboard: {}
+KPIs: {}

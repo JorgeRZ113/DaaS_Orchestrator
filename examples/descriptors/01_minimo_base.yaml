@@ -1,0 +1,43 @@
+# Descriptor minimo: despliega la plantilla base y ejecuta un ping.
+#
+# Es el punto de partida recomendado para comprobar que el entorno responde de
+# extremo a extremo antes de complicar el escenario.
+#
+#   curl -X POST http://localhost:8000/executions \
+#        -H "x-api-key: $API_KEY" \
+#        -H "Content-Type: application/yaml" \
+#        --data-binary @examples/descriptors/01_minimo_base.yaml
+
+infrastructure:
+  # El nombre identifica la Trial Network y da nombre al directorio de artefactos.
+  name: tn_demo_minima
+
+  component:
+    # `base` despliega el nucleo comun: monitorizacion (InfluxDB + Grafana) y
+    # los servicios que el resto de componentes dan por supuestos.
+    base:
+      influxdb_user: admin
+      influxdb_password: adminadmin
+      grafana_password: adminadmin
+
+  parameters:
+    # Referencia de la 6G-Library que TNLCM usara para resolver los componentes.
+    library_reference_type: branch
+    library_reference_value: develop
+
+experiment:
+  name: exp-demo
+  # Se resuelven por nombre de fichero contra templates/ELCM/TestCase/.
+  testcase_paths:
+    - TC_1_Preflight.yml
+  ues_paths: []
+
+dataset:
+  # 'logs' es la salida mas barata: no necesita InfluxDB ni Grafana.
+  output: [logs]
+
+# Al terminar el despliegue se lanza el experimento sin intervencion manual.
+auto_start_elcm: true
+
+# La TN sobrevive al experimento, para poder lanzar mas por POST /{id}/elcm.
+ephemeral_tn: false
