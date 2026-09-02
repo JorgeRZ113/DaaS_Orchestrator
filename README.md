@@ -23,7 +23,7 @@ El flujo es reproducible, guiado por:
 - **Reintentos automáticos**: Recuperación ante fallos transitorios de TNLCM (ej. `activate` con backoff)
 - **VPN WireGuard automática**: Activación tras TNLCM, desactivación en cleanup ELCM
 - **Telemetría granular**: Métricas por fase (TNLCM create/activate, ELCM total) con `execution_id` para correlación
-- **Resumen legible**: `GET /executions/{id}/summary` y `summary.md`/`summary.json` traducen la telemetría a pasos, duraciones y errores en lenguaje natural para el experimentador ([`docs/TELEMETRY.md`](docs/TELEMETRY.md))
+- **Resumen legible**: `GET /executions/{id}/summary` y `summary.md`/`summary.json` traducen la telemetría a pasos, duraciones y errores en lenguaje natural para el experimentador
 - **Persistencia de artefactos**: `DatasetDescriptor` guardado inmediatamente en `artifacts/<execution_id>/`
 - **Arquitectura por capas y suite verificable**: `app/` separado en `api`/`services`/`adapters`/`rendering`/`storage`/`domain`/`core`, con 365 pruebas clasificadas por nivel, puerta de cobertura en CI y pruebas de mutación sobre la política de reintentos
 
@@ -134,10 +134,6 @@ anadir 7 pruebas; descontados los 52 equivalentes, los supervivientes reales
 pasaron de 23 a 0. Encontro cuatro carencias en codigo que la cobertura daba por
 verificado al 97 %, entre ellas que el catalogo de politicas de reintento
 (codigos reintentables, numero de intentos) no estaba fijado por ninguna prueba.
-
-La estrategia completa, con la clasificacion de los 365 casos y las mediciones,
-esta en [`docs/VERIFICACION_Y_VALIDACION.md`](docs/VERIFICACION_Y_VALIDACION.md)
-(las pruebas de mutacion, en su §6.4).
 
 ## Configuracion `.env`
 
@@ -256,12 +252,12 @@ curl -X POST "http://localhost:8000/executions?wait=false" -H "x-api-key: $API_K
 **JSON** (sin cambios respecto a la colección Postman existente):
 
 ```bash
-curl -X POST "http://localhost:8000/executions?wait=false" -H "x-api-key: $API_KEY" -H "Content-Type: application/json" -d @Recursos/post_executions_minimal_base.json
+curl -X POST "http://localhost:8000/executions?wait=false" -H "x-api-key: $API_KEY" -H "Content-Type: application/json" -d '{"infrastructure": {"name": "tn-demo"}, "experiment": {"name": "exp-001", "testcase_paths": ["TC_1_Preflight.yml"], "ues_paths": []}}'
 ```
 
 YAML es el formato de referencia: el descriptor está pensado para escribirse, comentarse y versionarse, y los comentarios solo existen en YAML. JSON se mantiene por comodidad.
 
-Especificación completa de campos, tipos y errores en [`docs/DATASET_DESCRIPTOR.md`](docs/DATASET_DESCRIPTOR.md). Ejemplos ejecutables en [`examples/descriptors/`](examples/descriptors/).
+Ejemplos ejecutables en [`examples/descriptors/`](examples/descriptors/).
 
 ### `POST /refresh`
 - Recarga sin reinicio solo configuracion mutable en memoria del proceso actual.
@@ -324,7 +320,6 @@ Especificación completa de campos, tipos y errores en [`docs/DATASET_DESCRIPTOR
 - Resumen legible para experimentadores: qué pasó en cada fase, cuánto tardó y dónde han quedado los resultados, sin vocabulario interno.
 - Se construye en vivo, así que puede consultarse mientras la ejecución sigue en curso (los pasos pasan de `pending` a `running` y a `ok`).
 - `?format=markdown` devuelve el mismo contenido como texto (el `summary.md` que se guarda en `artifacts/<execution_id>/`).
-- Detalle completo del formato en [`docs/TELEMETRY.md`](docs/TELEMETRY.md).
 
 ## Payloads: Formato y Validación
 
@@ -345,7 +340,7 @@ El formato canónico es: `component.<template>.<field> = value`
   },
   "experiment": {
     "name": "exp-001",
-    "testcase_paths": ["TC_ping.yml"],
+    "testcase_paths": ["TC_1_Preflight.yml"],
     "ues_paths": []
   }
 }
@@ -378,7 +373,7 @@ El formato canónico es: `component.<template>.<field> = value`
   },
   "experiment": {
     "name": "exp-demo",
-    "testcase_paths": ["TC_ping.yml"],
+    "testcase_paths": ["TC_1_Preflight.yml"],
     "ues_paths": []
   },
   "dataset": {
@@ -388,11 +383,9 @@ El formato canónico es: `component.<template>.<field> = value`
 }
 ```
 
-### Formatos Soportados de `component`
+### Formato del campo `component`
 
-El validador centralizado (`app/domain/component_contract.py`) acepta dos formatos:
-
-#### 1. **Formato Plano (CANÓNICO, Recomendado)**
+El validador centralizado (`app/domain/component_contract.py`) valida el payload en formato plano:
 
 ```json
 "component": {
@@ -405,26 +398,7 @@ El validador centralizado (`app/domain/component_contract.py`) acepta dos format
 ```
 
 - Campos directos mapeados automáticamente a sus secciones en el overlay
-- Más legible, menos anidación
-- **Recomendado para nuevas integraciones**
-
-#### 2. **Formato Anidado (RETROCOMPATIBILIDAD)**
-
-```json
-"component": {
-  "base": {
-    "monitoring": {
-      "influxdb_user": "admin",
-      "influxdb_password": "secret",
-      "grafana_version": "11.6.0"
-    }
-  }
-}
-```
-
-- Agrupa campos por secciones del overlay (ej. `monitoring`, `storage`)
-- Soportado para compatibilidad con payloads antiguos
-- Convertido internamente a formato plano durante extracción
+- Cada campo se valida contra los campos editables del overlay TNLCM de su template
 
 ### Validación de Componentes
 
@@ -598,7 +572,7 @@ Los que tocan infraestructura **asumen el componente ya configurado** (los grand
 
 Trampas del motor que la batería documenta en sus cabeceras:
 
-- **`Run.CompressFiles` está roto en todas las versiones publicadas de ELCM** (`'str' object has no attribute 'get'`) y su excepción **aborta el experimento entero**. Por eso la entrega en ZIP va desactivada tras un `Flow.Select` y solo se activa publicando `ZipDelivery: "on"` en el UE. Detalle y evidencia en `docs/INCIDENCIA_ELCM_VERSION_DESPLEGADA.md`.
+- **`Run.CompressFiles` está roto en todas las versiones publicadas de ELCM** (`'str' object has no attribute 'get'`) y su excepción **aborta el experimento entero**. Por eso la entrega en ZIP va desactivada tras un `Flow.Select` y solo se activa publicando `ZipDelivery: "on"` en el UE.
 - **Una excepción en una tarea de primer nivel se lleva por delante todo lo que venga después**, incluida la banda de entrega. Dentro de un `Flow` la misma excepción se degrada a veredicto: por eso `Run.RestApi` va envuelto en un `Flow.Sequence`, ya que un host inalcanzable lanza desde la capa HTTP aunque no se declare `Responses`.
 - **`Run.InfluxToCsv` y `Run.CliExecute` no registran nada en `GeneratedFiles`.** Sin un `Run.CompressFiles` posterior, el fichero se genera, se ve en el log y se pierde: no llega a `GET /execution/{id}/results`.
 - **En `Run.PublishFromPreviousTaskLog`, el patrón debe anclarse en `[CLI]`.** Antes de ejecutar cada tarea, el motor vuelca al log su configuración ya expandida, y ahí va el comando entero; como la tarea publica en cada coincidencia y gana la última, sin el ancla el valor publicado puede venir del texto del comando en vez de su salida. En el log de ELCM ese volcado aparece como `Params: {...}` — es la configuración de la tarea, no el bloque `Parameters` del TestCase, que esta biblioteca no usa.
@@ -778,54 +752,6 @@ Reglas de interpretación:
 - Coleccion: `API_JSON/DaaS.postman_collection.json`
 - Variables: `baseUrl`, `apiKey`, `executionId`
 
-## Debugging y Tests
-
-Ejecutar suite completa de tests (132 tests):
-
-```bash
-python -m pytest tests/ -v
-```
-
-Ejecutar tests de un módulo específico:
-
-```bash
-python -m pytest tests/test_main_endpoints.py -v
-python -m pytest tests/test_generators.py -v
-```
-
-Los tests validan:
-- Validación de payload con `extract_component_template_values()`
-- Generación de descriptores TNLCM con múltiples componentes
-- Flujos de orquestación TNLCM + ELCM
-- Reintentos y recuperación ante fallos
-
-## Información Sobre Documentación del Proyecto
-
-### Documentación Vigente
-
-- **Este README**: Punto de entrada principal, contrato de API y payloads actualizados
-- **`docs/INFORME_TNLCM.md`**: Guía rápida para ejecutar pruebas TNLCM
-- **`docs/INFORME_ELCM.md`**: Guía rápida para ejecutar pruebas ELCM
-- **`docs/CI_CD_VARIABLES.md`**: Variables de deployment y configuración
-- **`docs/INCIDENCIA_TNLCM_ACTIVATE_500.md`**: Informe del fallo en el que `activate` devuelve 500 mientras el despliegue sigue vivo en Jenkins, y la colisión despliegue/destrucción que deja el `tn_id` inutilizable
-- **`Recursos/300526_Resumen.md`**: Documentación técnica detallada archivo por archivo (SI EXISTE)
-
-### Documentación Legacy (NO Usar)
-
-Los siguientes archivos contienen snapshots históricos de fases anteriores del desarrollo. **NO se recomiendan para nuevas implementaciones**:
-
-- `docs/UNIFIED_EXECUTIONS_API.md` - Documentación de fase de unificación (desalineada con estado actual)
-- `docs/TNLCM_MASKS_SUMMARY.md` - Modelo de máscaras TNLCM obsoleto
-- `docs/TNLCM_MASKS_INTEGRATION.md` - Propuesta de arquitectura superada
-- `docs/CHANGES_UNIFIED_EXECUTIONS_API.md` - Changelog de fase de unificación
-- `docs/RESUMEN_IMPLEMENTACION_API_UNIFICADA.md` - Resumen histórico
-- `docs/TELEMETRY_REFACTOR.md` - Changelog de refactor de telemetría
-- `docs/CHANGELOG_TELEMETRY_REFACTOR.md` - Más changelog histórico
-- `docs/RESUMEN_VISUAL.txt` - Snapshot visual histórico
-- `docs/INDEX_MASKS.md` - Índice vacío
-
-**Recomendación:** Si necesitas historiacomprender las decisiones de diseño, revisá `Recursos/` donde se centraliza la documentación técnica en profundidad.
-
 ## Soporte
 
 Si necesitas validar el flujo completo, usa primero la coleccion Postman y revisa estos dos endpoints para inspeccionar qué ha pasado:
@@ -835,5 +761,5 @@ Si necesitas validar el flujo completo, usa primero la coleccion Postman y revis
 
 Para problemas de validación de componentes, consulta la sección "Validación de Componentes" arriba y revisa los overlays TNLCM en `templates/TNLCM/overlays/`.
 
-Para entender en detalle la arquitectura del extractor de componentes, ver `app/domain/component_contract.py` y sus consumidores en `app/main.py` y `app/rendering/`.
+Para entender en detalle la arquitectura del extractor de componentes, ver `app/domain/component_contract.py` y sus consumidores en `app/api/validation.py` y `app/rendering/`.
 
